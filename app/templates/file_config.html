@@ -1,0 +1,432 @@
+{% extends "base.html" %}
+
+{% block title %}管理文件监控任务{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h2 class="mb-3"><i class="bi bi-folder-fill me-2"></i>文件监控管理</h2>
+
+        <div class="row">
+            <div class="col-lg-12">
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0 small"><i class="bi bi-hdd-network me-2"></i>当前监控任务</h5>
+                        <span class="badge bg-white text-primary">{{ config.file_monitoring_tasks | length }}</span>
+                    </div>
+                    <div class="list-group list-group-flush small">
+                        {% if config.file_monitoring_tasks %}
+                        {% for task in config.file_monitoring_tasks %}
+                        <div class="list-group-item p-2">
+                            <div class="d-flex justify-content-between align-items-start">
+                                <div class="flex-grow-1">
+                                    <div class="d-flex align-items-center mb-1">
+                                        {% set action_label = '复制' if task.action == 'copy' else '移动' if task.action == 'move' else '复制并删除源' if task.action == 'copy_and_delete' else task.action %}
+                                        <span class="badge bg-primary me-2">{{ action_label }}</span>
+                                        <span class="fw-bold"><i class="bi bi-arrow-right-short"></i> {{
+                                            task.destination_dir }}</span>
+                                    </div>
+                                    <div class="text-muted d-flex flex-wrap gap-3">
+                                        <span><i class="bi bi-box-arrow-in-right me-1"></i>源:
+                                            <code>{{ task.source_dir }}</code></span>
+                                        <span><i class="bi bi-clock-history me-1"></i>{{ task.stable_time }}s</span>
+                                        <span><i class="bi bi-files me-1"></i>{{ task.get('handle_duplicate', '跳过')
+                                            }}</span>
+
+                                    </div>
+                                </div>
+                                <div class="ms-2 d-flex gap-1">
+                                    <button type="button" class="btn btn-sm btn-outline-primary px-2 py-0"
+                                        data-task='{{ task | tojson | safe }}'
+                                        onclick='editFileTask(JSON.parse(this.getAttribute("data-task")))'>
+                                        <i class="bi bi-pencil-square"></i>
+                                    </button>
+                                    <form action="{{ url_for('manage_file_config') }}" method="post">
+                                        <input type="hidden" name="action" value="delete">
+                                        <input type="hidden" name="source_dir" value="{{ task.source_dir }}">
+                                        <button type="submit" class="btn btn-sm btn-outline-danger px-2 py-0"><i
+                                                class="bi bi-trash"></i></button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                        {% else %}
+                        <div class="list-group-item text-center text-muted py-3">目前没有配置任何文件监控任务</div>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-lg-6">
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-plus-circle me-2"></i>新增/编辑监控任务</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_file_config') }}" method="get" id="file_task_form"
+                            onsubmit="return handleFileFormSubmit(this)">
+                            <input type="hidden" name="action" value="add">
+                            <input type="hidden" id="old_source_dir" name="old_source_dir">
+                            <div class="col-12 mb-2">
+                                <label for="source_dir" class="form-label small">源目录:</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" id="source_dir" name="source_dir" class="form-control"
+                                        placeholder="监控的目录" required>
+                                    <button class="btn btn-outline-secondary" type="button"
+                                        onclick="openDirBrowser('source_dir')"><i class="bi bi-folder"></i></button>
+                                </div>
+                            </div>
+                            <div class="col-12 mb-2">
+                                <label for="destination_dir" class="form-label small">目标目录:</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" id="destination_dir" name="destination_dir" class="form-control"
+                                        placeholder="转存到哪里" required>
+                                    <button class="btn btn-outline-secondary" type="button"
+                                        onclick="openDirBrowser('destination_dir')"><i
+                                            class="bi bi-folder"></i></button>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <label for="action_type" class="form-label small">操作:</label>
+                                <select id="action_type" name="action_type" class="form-select form-select-sm">
+                                    <option value="copy">复制</option>
+                                    <option value="move">移动</option>
+                                    <option value="copy_and_delete">复制并删除源</option>
+
+                                </select>
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <label for="stable_time" class="form-label small">稳定时间(秒):</label>
+                                <input type="number" id="stable_time" name="stable_time"
+                                    class="form-control form-control-sm" value="10" min="1">
+                            </div>
+                            <div class="col-12 mb-2">
+                                <label for="target_cid" class="form-label small">115 目标目录 CID:</label>
+                                <input type="text" id="target_cid" name="target_cid"
+                                    class="form-control form-control-sm" placeholder="例如 0 或 123456789">
+                                <div class="form-text small">留空表示使用默认目录。</div>
+                            </div>
+                            <div class="col-12 mb-3">
+                                <label for="handle_duplicate" class="form-label small">重复文件处理:</label>
+                                <select id="handle_duplicate" name="handle_duplicate"
+                                    class="form-select form-select-sm">
+                                    <option value="rename" selected>重命名 (filename (1).ext)</option>
+                                    <option value="overwrite">覆盖</option>
+                                    <option value="skip">跳过</option>
+                                </select>
+                            </div>
+                            <div class="col-12 mb-3">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="enable_second_transfer"
+                                        name="enable_second_transfer" checked>
+                                    <label class="form-check-label small" for="enable_second_transfer">
+                                        启用秒传
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="enable_mid_copy_check"
+                                        name="enable_mid_copy_check" checked>
+                                    <label class="form-check-label small" for="enable_mid_copy_check">
+                                        复制过程中再检查秒传
+                                    </label>
+                                </div>
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="delete_source_after_transfer"
+                                        name="delete_source_after_transfer">
+                                    <label class="form-check-label small" for="delete_source_after_transfer">
+                                        <i class="bi bi-trash me-1"></i>秒传成功后删除源文件
+                                    </label>
+                                </div>
+                                <div class="row g-2 mt-2">
+                                    <div class="col-md-6">
+                                        <label for="mid_copy_check_interval" class="form-label small">复制中检测间隔(秒):</label>
+                                        <input type="number" id="mid_copy_check_interval" name="mid_copy_check_interval"
+                                            class="form-control form-control-sm" value="30" min="1">
+                                        <div class="form-text small">复制过程中每隔多少秒检查一次秒传，避免频繁请求。</div>
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label for="mid_copy_chunk_size_mb" class="form-label small">复制块大小(MB):</label>
+                                        <input type="number" id="mid_copy_chunk_size_mb" name="mid_copy_chunk_size_mb"
+                                            class="form-control form-control-sm" value="8" min="1">
+                                        <div class="form-text small">每次读写的块大小，影响复制速度与内存占用。</div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="col-12">
+                                <button type="submit" id="add_file_task_btn"
+                                    class="btn btn-success btn-sm w-100">保存任务</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-6">
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-dark text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-shield-lock me-2"></i>安全设置</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_file_config') }}" method="post" class="row g-2">
+                            <input type="hidden" name="action" value="update_global">
+                            <div class="col-12 mb-2">
+                                <label for="allowed_browse_path" class="form-label small">允许浏览的根目录:</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" id="allowed_browse_path" name="allowed_browse_path"
+                                        class="form-control" value="{{ config.allowed_browse_path }}" required>
+                                    <button class="btn btn-outline-secondary" type="button"
+                                        onclick="openDirBrowser('allowed_browse_path')"><i
+                                            class="bi bi-folder-check"></i></button>
+                                </div>
+                                <div class="form-text small">限制文件浏览器的可选范围。</div>
+                            </div>
+                            <div class="col-12 mb-2">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="debug_mode" name="debug_mode" 
+                                        {% if config.get('debug_mode', False) %}checked{% endif %}>
+                                    <label class="form-check-label small" for="debug_mode">
+                                        <i class="bi bi-bug me-1"></i>DEBUG 模式（输出详细日志）
+                                    </label>
+                                </div>
+                                <div class="form-text small">开启后会输出详细的调试信息，用于排查问题。</div>
+                            </div>
+                            <div class="col-12">
+                                <button type="submit" class="btn btn-dark btn-sm w-100">保存全局设置</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-secondary text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-cloud me-2"></i>115 网盘设置</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_file_config') }}" method="post" class="row g-2">
+                            <input type="hidden" name="action" value="update_115">
+                            <div class="col-12 mb-2">
+                                <label for="cookie_115" class="form-label small">115 Cookie:</label>
+                                <textarea id="cookie_115" name="cookie_115" rows="3"
+                                    class="form-control form-control-sm"
+                                    placeholder="粘贴 115 Cookie">{{ config.get('115_cookie') or config.get('web_115_cookie', '') }}</textarea>
+                                <div class="form-text small">仅保存到本地配置文件，用于秒传鉴权。</div>
+                            </div>
+                            <div class="col-12">
+                                <button type="submit" class="btn btn-secondary btn-sm w-100">保存 115 Cookie</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="text-center mt-2">
+            <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm"><i
+                    class="bi bi-house-door me-1"></i>返回主页</a>
+        </div>
+    </div>
+</div>
+                                <div class="form-text small text-warning ms-4 mb-2">
+                                    <i class="bi bi-exclamation-triangle me-1"></i>注意：开启后，文件秒传成功将自动删除源文件，请确保文件已备份！
+                                </div>
+
+<!-- Directory Browser Modal -->
+<div class="modal fade" id="dirBrowserModal" tabindex="-1" aria-labelledby="dirBrowserModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dirBrowserModalLabel">选择目录</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="dirTree" class="list-group"></div>
+            </div>
+            <div class="modal-footer">
+                <span id="selectedDirDisplay" class="me-auto">当前选择: 无</span>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="selectDirBtn">选择</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentInputId = '';
+    let currentBrowsePath = '';
+    let selectedDirectory = '';
+
+    // Initialize Bootstrap Modal only when DOM is ready
+    let dirBrowserModalInstance;
+    document.addEventListener('DOMContentLoaded', function () {
+        dirBrowserModalInstance = new bootstrap.Modal(document.getElementById('dirBrowserModal'));
+
+        // Handle action_type change to show/hide destination_dir
+        const actionTypeSelect = document.getElementById('action_type');
+        const destDirInput = document.getElementById('destination_dir');
+        const deleteAfterUploadDiv = document.getElementById('delete_after_upload_div');
+        const target115Div = document.getElementById('target_115_folder_div');
+
+        if (actionTypeSelect) {
+            actionTypeSelect.addEventListener('change', function () {
+                destDirInput.setAttribute('required', '');
+                destDirInput.closest('.col-12').style.display = 'block';
+            });
+        }
+    });
+
+    // Ensure these elements are accessed after DOM is ready
+    const dirTree = document.getElementById('dirTree');
+    const selectedDirDisplay = document.getElementById('selectedDirDisplay');
+    const selectDirBtn = document.getElementById('selectDirBtn');
+
+    function openDirBrowser(inputId) {
+        currentInputId = inputId;
+        document.getElementById('dirBrowserModalLabel').textContent = '选择本地目录';
+        // Start browsing from the current value of the input field, or default if empty
+        currentBrowsePath = document.getElementById(inputId).value || {{ config.allowed_browse_path | tojson | safe }};
+        loadDirectory(currentBrowsePath);
+        dirBrowserModalInstance.show();
+    }
+
+
+    async function loadDirectory(path) {
+        currentBrowsePath = path;
+        selectedDirectory = path; // Initially select the path we're browsing
+        selectedDirDisplay.textContent = `当前选择: ${selectedDirectory}`;
+
+        dirTree.innerHTML = '<div class="text-center p-3">加载中...</div>';
+
+        try {
+            const response = await fetch('/api/browse_dir', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: path })
+            });
+            const data = await response.json();
+
+            if (response.ok) {
+                dirTree.innerHTML = '';
+                // Add current path as selectable option
+                const currentPathItem = document.createElement('a');
+                currentPathItem.href = '#';
+                currentPathItem.classList.add('list-group-item', 'list-group-item-action');
+                if (selectedDirectory === path) currentPathItem.classList.add('active'); // Highlight if current
+                currentPathItem.innerHTML = `<i class="bi bi-folder-check me-2"></i>(当前目录) ${path}`; // Use a checkmark for current dir
+                currentPathItem.onclick = (e) => {
+                    e.preventDefault();
+                    selectedDirectory = path;
+                    selectedDirDisplay.textContent = `当前选择: ${selectedDirectory}`;
+                    dirTree.querySelectorAll('.list-group-item').forEach(item => item.classList.remove('active'));
+                    currentPathItem.classList.add('active');
+                };
+                dirTree.appendChild(currentPathItem);
+
+                // Add parent directory (..)
+                const separator = path.includes('/') ? '/' : '\\';
+                const lastSlashIndex = path.lastIndexOf(separator);
+                let parentPath = '';
+
+                if (lastSlashIndex === 0) {
+                    parentPath = separator;
+                } else if (lastSlashIndex > 0) {
+                    parentPath = path.substring(0, lastSlashIndex);
+                }
+
+                if (path !== separator && parentPath) {
+                    const parentPathItem = document.createElement('a');
+                    parentPathItem.href = '#';
+                    parentPathItem.classList.add('list-group-item', 'list-group-item-action');
+                    parentPathItem.innerHTML = `<i class="bi bi-folder-symlink me-2"></i>.. (上级目录)`;
+                    parentPathItem.onclick = (e) => {
+                        e.preventDefault();
+                        loadDirectory(parentPath);
+                    };
+                    dirTree.appendChild(parentPathItem);
+                }
+
+
+                data.items.forEach(item => {
+                    if (item.type === 'dir') {
+                        const listItem = document.createElement('a');
+                        listItem.href = '#';
+                        listItem.classList.add('list-group-item', 'list-group-item-action');
+                        listItem.innerHTML = `<i class="bi bi-folder-fill me-2"></i>${item.name}`;
+                        listItem.onclick = (e) => {
+                            e.preventDefault();
+                            loadDirectory(item.path);
+                        };
+                        listItem.ondblclick = (e) => {
+                            e.preventDefault();
+                            selectedDirectory = item.path;
+                            selectDirBtn.click();
+                        };
+                        dirTree.appendChild(listItem);
+                    }
+                });
+            } else {
+                dirTree.innerHTML = `<div class="alert alert-danger">${data.error || '加载目录失败'}</div>`;
+            }
+        } catch (error) {
+            dirTree.innerHTML = `<div class="alert alert-danger">请求错误: ${error.message}</div>`;
+        }
+    }
+
+    function editFileTask(data) {
+        document.getElementById('old_source_dir').value = data.source_dir || '';
+        document.getElementById('source_dir').value = data.source_dir || '';
+        document.getElementById('destination_dir').value = data.destination_dir || '';
+        document.getElementById('action_type').value = data.action || 'copy';
+        document.getElementById('stable_time').value = data.stable_time || 10;
+        document.getElementById('target_cid').value = data.target_cid || '';
+        document.getElementById('handle_duplicate').value = data.handle_duplicate || 'rename';
+        document.getElementById('handle_duplicate').value = data.handle_duplicate || 'rename';
+        document.getElementById('enable_second_transfer').checked = data.enable_second_transfer !== false;
+        document.getElementById('enable_mid_copy_check').checked = data.enable_mid_copy_check !== false;
+        document.getElementById('delete_source_after_transfer').checked = data.delete_source_after_transfer === true;
+        document.getElementById('mid_copy_check_interval').value = data.mid_copy_check_interval || 30;
+        if (data.mid_copy_chunk_size) {
+            document.getElementById('mid_copy_chunk_size_mb').value = Math.max(1, Math.floor(data.mid_copy_chunk_size / (1024 * 1024)));
+        } else {
+            document.getElementById('mid_copy_chunk_size_mb').value = 8;
+        }
+
+        // Trigger action_type change to show/hide relevant fields
+        document.getElementById('action_type').dispatchEvent(new Event('change'));
+
+        // Update button text
+        const btn = document.getElementById('add_file_task_btn');
+        if (btn) {
+            btn.textContent = '保存编辑任务';
+            btn.classList.replace('btn-success', 'btn-primary');
+        }
+
+        // Scroll to form
+        document.getElementById('source_dir').scrollIntoView({ behavior: 'smooth' });
+        document.getElementById('source_dir').focus();
+    }
+
+    function handleFileFormSubmit(form) {
+        // Change method to post before submit (we used get to easily reset it if needed, but it should be post)
+        form.method = 'post';
+        return true;
+    }
+
+    selectDirBtn.addEventListener('click', () => {
+        if (selectedDirectory) {
+            document.getElementById(currentInputId).value = selectedDirectory;
+            dirBrowserModalInstance.hide();
+        } else {
+            alert('请选择一个目录。');
+        }
+    });
+
+</script>
+{% endblock %}

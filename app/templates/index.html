@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}主页{% endblock %}
+
+{% block content %}
+<div class="row compact-row">
+    <div class="col-md-12">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h2 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>状态概览</h2>
+            <div class="d-flex align-items-center gap-3">
+                <div class="text-muted small">版本: {{ version }}</div>
+                <form action="{{ url_for('toggle_debug') }}" method="post" class="d-flex align-items-center">
+                    <div class="form-check form-switch mb-0 me-2">
+                        <input class="form-check-input" type="checkbox" name="debug_mode" id="debug_mode_switch"
+                               {% if config.get('debug_mode') %}checked{% endif %}
+                               onchange="this.form.submit()">
+                        <label class="form-check-label small" for="debug_mode_switch">DEBUG</label>
+                    </div>
+                    <span class="badge {% if config.get('debug_mode') %}bg-success{% else %}bg-secondary{% endif %}">
+                        {% if config.get('debug_mode') %}开启{% else %}关闭{% endif %}
+                    </span>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm" style="border: none;">
+            <div class="card-header text-white d-flex justify-content-between align-items-center" 
+                 style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; color: white !important;">
+                <span class="mb-0"><i class="bi bi-telegram me-2"></i>Telegram 监控</span>
+                {% if monitor_status == "运行中" %}<span class="badge bg-success">运行中</span>{% else %}<span
+                    class="badge bg-light text-dark">{{ monitor_status }}</span>{% endif %}
+            </div>
+            <div class="card-body">
+                <div class="mb-2 small">
+                    <span class="text-muted">认证:</span>
+                    {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}
+                    <span class="text-danger fw-bold">{{ auth_status }}</span>
+                    {% else %}
+                    <span class="text-success fw-bold">{{ auth_status }}</span>
+                    {% endif %}
+                </div>
+
+                {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}
+                <a href="{{ url_for('login') }}" class="btn btn-sm w-100 mb-2" 
+                   style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; color: white !important; border: none;">前往 Telegram 认证</a>
+                {% else %}
+                <div class="d-grid gap-2">
+                    <form action="{{ url_for('monitor_action') }}" method="post" class="w-100">
+                        {% if monitor_status == "运行中" %}
+                        <button type="submit" name="action" value="stop"
+                            class="btn btn-outline-warning btn-sm w-100">停止监控</button>
+                        {% else %}
+                        <button type="submit" name="action" value="start"
+                            class="btn btn-success btn-sm w-100">启动监控</button>
+                        {% endif %}
+                    </form>
+                    <div class="row g-2">
+                        <div class="col-6"><a href="{{ url_for('manage_config') }}"
+                                class="btn btn-outline-info btn-sm w-100">配置</a></div>
+                        <div class="col-6"><a href="{{ url_for('monitor_log') }}"
+                                class="btn btn-outline-secondary btn-sm w-100">日志</a></div>
+                    </div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm" style="border: none;">
+            <div class="card-header text-white d-flex justify-content-between align-items-center"
+                 style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%) !important; color: white !important;">
+                <span class="mb-0"><i class="bi bi-folder-check me-2"></i>文件监控</span>
+                {% if file_monitor_status == "运行中" %}<span class="badge bg-success">运行中</span>{% else %}<span
+                    class="badge bg-light text-dark">{{ file_monitor_status }}</span>{% endif %}
+            </div>
+            <div class="card-body">
+                <div class="mb-3 small">
+                    <span class="text-muted">任务数:</span>
+                    <span class="fw-bold">{{ config.get('file_monitoring_tasks', []) | length }}</span>
+                </div>
+
+                <div class="d-grid gap-2">
+                    <form action="{{ url_for('file_monitor_action') }}" method="post" class="w-100">
+                        {% if file_monitor_status == "运行中" %}
+                        <button type="submit" name="action" value="stop"
+                            class="btn btn-outline-warning btn-sm w-100">停止监控</button>
+                        {% else %}
+                        <button type="submit" name="action" value="start"
+                            class="btn btn-success btn-sm w-100">启动监控</button>
+                        {% endif %}
+                    </form>
+                    <div class="row g-2">
+                        <div class="col-6"><a href="{{ url_for('manage_file_config') }}"
+                                class="btn btn-outline-info btn-sm w-100">任务管理</a></div>
+                        <div class="col-6"><a href="{{ url_for('file_monitor_log') }}"
+                                class="btn btn-outline-secondary btn-sm w-100">日志</a></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card h-100 shadow-sm" style="border: none;">
+            <div class="card-header text-white d-flex justify-content-between align-items-center"
+                 style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%) !important; color: white !important;">
+                <span class="mb-0"><i class="bi bi-robot me-2"></i>Bot 监控</span>
+                {% if bot_monitor_status == "运行中" %}<span class="badge bg-success">运行中</span>{% else %}<span
+                    class="badge bg-light text-dark">{{ bot_monitor_status }}</span>{% endif %}
+            </div>
+            <div class="card-body">
+                <div class="mb-3 small">
+                    <span class="text-muted">Bot ID:</span>
+                    <span class="fw-bold text-truncate d-inline-block" style="max-width: 150px;">{{ config.get('bot',
+                        {}).get('token', '').split(':')[0] or '未设置' }}</span>
+                </div>
+
+                <div class="d-grid gap-2">
+                    <form action="{{ url_for('bot_monitor_action') }}" method="post" class="w-100">
+                        {% if bot_monitor_status == "运行中" %}
+                        <button type="submit" name="action" value="stop"
+                            class="btn btn-outline-warning btn-sm w-100">停止监控</button>
+                        {% else %}
+                        <button type="submit" name="action" value="start"
+                            class="btn btn-success btn-sm w-100">启动监控</button>
+                        {% endif %}
+                    </form>
+                    <a href="{{ url_for('manage_config') }}" class="btn btn-outline-info btn-sm w-100">更新 Token</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-12 mt-4 text-center">
+        <hr class="my-3 opacity-10">
+        <a href="{{ url_for('logout') }}" class="btn btn-link btn-sm text-danger opacity-75">清除 Telegram 认证并登出</a>
+    </div>
+</div>
+{% endblock %}

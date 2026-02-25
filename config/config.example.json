@@ -1,0 +1,25 @@
+{
+  "telegram": {
+    "api_id": null,
+    "api_hash": "",
+    "session_name": "telegram_monitor"
+  },
+  "web_auth": {
+    "username": "admin",
+    "password_hash": null
+  },
+  "channels_to_forward": [],
+  "restricted_channels": [],
+  "proxy": {},
+  "downloader": {
+    "default_path": "/app/downloads"
+  },
+  "bot": {
+    "token": ""
+  },
+  "group_order": ["默认分组"],
+  "filename_blacklist": [],
+  "debug_mode": false,
+  "hdhive_cookie": "",
+  "hdhive_auto_unlock_points_threshold": 0
+}

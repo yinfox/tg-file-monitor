@@ -1,0 +1,979 @@
+{% extends "base.html" %}
+{% block extra_head %}
+<script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+<style>
+    .sortable-ghost {
+        opacity: 0.4;
+        background-color: #e9ecef !important;
+    }
+
+    .group-drag-handle {
+        cursor: grab;
+        display: inline-flex;
+        align-items: center;
+        color: #6c757d;
+        font-size: 0.9rem;
+        padding: 0.5rem 0.3rem;
+    }
+
+    .group-drag-handle:active {
+        cursor: grabbing;
+    }
+    
+    .group-drag-handle:hover {
+        color: #0d6efd;
+    }
+    
+    .accordion-button {
+        padding: 0.3rem 0.6rem !important;
+        font-size: 0.8rem !important;
+        min-height: auto !important;
+        background-color: #f8f9fa !important;
+    }
+    
+    .accordion-header {
+        background: #fff;
+    }
+    
+    .accordion-button .badge {
+        font-size: 0.65rem !important;
+        padding: 0.15rem 0.3rem !important;
+    }
+    
+    .accordion-body {
+        padding: 0 !important;
+    }
+    
+    .list-group-item {
+        padding: 0.1rem 0.3rem !important;
+        font-size: 0.75rem !important;
+        gap: 0.2rem !important;
+        border-bottom: 1px solid #f0f0f0 !important;
+    }
+
+    .accordion-item {
+        border: 1px solid #dee2e6 !important;
+        border-radius: 0.25rem !important;
+        margin-bottom: 0.2rem !important;
+    }
+
+    .accordion-button:not(.collapsed) {
+        background-color: #e7f1ff !important;
+        box-shadow: none !important;
+    }
+    
+    .list-group-item .badge {
+        font-size: 0.6rem !important;
+        padding: 0.05rem 0.2rem !important;
+        margin-left: 0.15rem !important;
+        margin-right: 0.15rem !important;
+    }
+    
+    .list-group-item small {
+        font-size: 0.65rem !important;
+    }
+    
+    .list-group-item i {
+        font-size: 0.7rem !important;
+        margin-right: 0.1rem !important;
+    }
+    
+    .list-group-item .d-flex.gap-1 {
+        gap: 0.1rem !important;
+    }
+    
+    .list-group-item .btn-sm {
+        padding: 0.05rem 0.2rem !important;
+        font-size: 0.65rem !important;
+    }
+    
+    .form-check {
+        margin-top: 0 !important;
+        margin-bottom: 0 !important;
+        margin-right: 0.2rem !important;
+    }
+    
+    .list-group-item code {
+        font-size: 0.65rem !important;
+        padding: 0.02rem 0.15rem !important;
+    }
+    
+    .list-group-item .ms-2 {
+        margin-left: 0.2rem !important;
+    }
+    
+    .list-group-item .me-1 {
+        margin-right: 0.1rem !important;
+    }
+    
+    .list-group-item .me-2 {
+        margin-right: 0.15rem !important;
+    }
+    
+    .text-muted.small span {
+        margin-right: 0.2rem !important;
+    }
+
+    #bulkActionBar {
+        display: none;
+        z-index: 1050;
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(10px);
+        border: 1px solid #dee2e6;
+        border-radius: 0.3rem;
+        padding: 0.25rem 0.5rem !important;
+    }
+
+    .list-group-item:hover {
+        background-color: rgba(0, 0, 0, 0.02);
+    }
+    
+    .list-group-item .edit-btn, 
+    .list-group-item .btn-outline-danger {
+        opacity: 0.8;
+    }
+
+    @keyframes rotate {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+    .spin {
+        display: inline-block;
+        animation: rotate 1s linear infinite;
+    }
+</style>
+{% endblock %}
+
+{% block title %}管理转发配置{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h3 class="mb-2"><i class="bi bi-gear-fill me-2"></i>监控管理</h3>
+
+        <div class="card mb-2 shadow-sm">
+            <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center py-1 px-3">
+                <h6 class="mb-0 small"><i class="bi bi-list-task me-2"></i>已监控频道列表</h6>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-white text-primary" id="selectedCountBadge" style="display:none; font-size: 0.7rem;">已选 0</span>
+                    <span class="badge bg-white text-primary" style="font-size: 0.7rem;">{{ config.restricted_channels | length }}</span>
+                </div>
+            </div>
+
+            <!-- Bulk Action Bar -->
+            <div id="bulkActionBar" class="p-2 shadow-sm border-bottom">
+                <form id="bulkActionForm" action="{{ url_for('manage_config') }}" method="post"
+                    class="d-flex align-items-center gap-2 flex-wrap">
+                    <input type="hidden" name="action" value="bulk_manage_restricted">
+                    <input type="hidden" name="sub_action" id="bulkSubAction">
+
+                    <div class="small fw-bold text-muted me-2"><i class="bi bi-check2-all me-1"></i>批量操作:</div>
+
+                    <button type="button" class="btn btn-sm btn-outline-danger" onclick="confirmBulkDelete()">
+                        <i class="bi bi-trash me-1"></i>批量删除
+                    </button>
+
+                    <div class="input-group input-group-sm w-auto">
+                        <select name="target_group" class="form-select form-select-sm"
+                            style="width: auto; min-width: 120px;">
+                            <option value="">移动到分组...</option>
+                            {% for g in config.group_order %}
+                            <option value="{{ g }}">{{ g }}</option>
+                            {% endfor %}
+                            <option value="NEW_GROUP">+ 新建分组...</option>
+                        </select>
+                        <button type="button" class="btn btn-sm btn-outline-primary"
+                            onclick="submitBulkMove()">确认移动</button>
+                    </div>
+
+                    <button type="button" class="btn btn-sm btn-link text-secondary"
+                        onclick="clearSelection()">取消选择</button>
+
+                    <!-- Container for hidden inputs of selected IDs -->
+                    <div id="selectedIdsContainer"></div>
+                </form>
+            </div>
+
+            <div class="accordion accordion-flush" id="channelAccordion">
+                {% if config.restricted_channels %}
+                {% for g_name in config.group_order %}
+                {% set g_list = config.restricted_channels | selectattr('group_name', 'equalto', g_name) | list %}
+                {% if g_list %}
+                <div class="accordion-item" data-group="{{ g_name }}">
+                    <h2 class="accordion-header d-flex align-items-center">
+                        <span class="group-drag-handle px-2 py-2" style="cursor: move;">
+                            <i class="bi bi-grip-vertical"></i>
+                        </span>
+                        <button class="accordion-button collapsed flex-grow-1" type="button" data-bs-toggle="collapse" data-bs-target="#collapse-{{ loop.index }}" aria-expanded="false" aria-controls="collapse-{{ loop.index }}">
+                            <i class="bi bi-collection me-2 text-primary"></i>
+                            <span class="fw-bold">{{ g_name }}</span>
+                            <span class="badge bg-primary ms-2">{{ g_list | length }}</span>
+                        </button>
+                    </h2>
+                    <div id="collapse-{{ loop.index }}" class="accordion-collapse collapse"
+                        data-bs-parent="#channelAccordion">
+                        <div class="accordion-body">
+                            <div class="list-group list-group-flush">
+                                {% for entry in g_list %}
+                                <div class="list-group-item d-flex align-items-start border-start-0 border-end-0 border-top-0">
+                                    <div class="form-check" style="flex-shrink: 0; margin-top: 0.05rem; margin-right: 0.3rem;">
+                                        <input class="form-check-input item-checkbox" type="checkbox"
+                                            name="selected_ids" value="{{ entry.channel_id }}" data-group="{{ g_name }}"
+                                            onchange="updateBulkUI()">
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex justify-content-between align-items-start" style="margin-bottom: 0.05rem;">
+                                            <div class="flex-grow-1">
+                                                <div style="margin-bottom: 0.02rem;">
+                                                    <span class="badge bg-warning text-dark">{{ entry.channel_id }}</span>
+                                                    {% if entry.channel_name %}
+                                                    <span class="fw-bold text-primary" style="margin-left: 0.2rem;">{{ entry.channel_name }}</span>
+                                                    {% else %}
+                                                    <button type="button" class="btn btn-link p-0 ms-1 text-decoration-none" 
+                                                        style="font-size: 0.65rem;"
+                                                        onclick="fetchTitle('{{ entry.channel_id }}', this)">
+                                                        <i class="bi bi-arrow-repeat me-1"></i>获取名称
+                                                    </button>
+                                                    {% endif %}
+                                                </div>
+                                                <div class="text-muted small d-flex flex-wrap" style="line-height: 1.0; gap: 0.15rem;">
+                                                    <span><i class="bi bi-folder2-open"></i><code style="background: #f3f4f6; padding: 0.02rem 0.15rem; border-radius: 0.15rem; margin-left: 0.1rem;">{{ entry.download_directory }}</code></span>
+                                                    <span><i class="bi bi-file-earmark-arrow-down me-1"></i>
+                                                        {% if entry.monitor_types %}
+                                                        {{ entry.monitor_types | join(', ') }}
+                                                        {% else %}
+                                                        video
+                                                        {% endif %}
+                                                    </span>
+                                                    {% if entry.blacklist_keywords %}
+                                                    <span class="text-danger"><i class="bi bi-slash-circle me-1"></i>{{ entry.blacklist_keywords | join(', ') }}</span>
+                                                    {% endif %}
+                                                    {% if entry.whitelist_keywords %}
+                                                    <span class="text-success"><i class="bi bi-check-circle me-1"></i>{{ entry.whitelist_keywords | join(', ') }}</span>
+                                                    {% endif %}
+                                                    {% if entry.target_user_ids %}
+                                                    <span class="text-info"><i class="bi bi-send me-1"></i>{{ entry.target_user_ids | length }} 目标</span>
+                                                    {% endif %}
+                                                    {% if entry.keep_video_message %}
+                                                    <span class="text-success"><i class="bi bi-arrow-right-circle me-1"></i>转发开启</span>
+                                                    {% endif %}
+                                                    {% if entry.convert_hdhive %}
+                                                    <span class="text-primary"><i class="bi bi-link-45deg me-1"></i>影巢转换</span>
+                                                    {% endif %}
+                                                </div>
+                                            </div>
+                                            <div class="d-flex" style="flex-shrink: 0; gap: 0.15rem; margin-left: 0.25rem;">
+                                                <button type="button"
+                                                    class="btn btn-sm btn-outline-primary edit-btn"
+                                                    style="padding: 0.1rem 0.3rem;"
+                                                    data-entry='{{ entry | tojson | safe }}' title="编辑">
+                                                    <i class="bi bi-pencil-square"></i>
+                                                </button>
+                                                <form action="{{ url_for('manage_config') }}" method="post" style="display: inline;">
+                                                    <input type="hidden" name="action" value="delete_restricted">
+                                                    <input type="hidden" name="restricted_channel_id"
+                                                        value="{{ entry.channel_id }}">
+                                                    <button type="submit"
+                                                        class="btn btn-sm btn-outline-danger" 
+                                                        style="padding: 0.1rem 0.3rem;"
+                                                        title="删除" onclick="return confirm('确定删除此频道配置吗？')"><i
+                                                            class="bi bi-trash"></i></button>
+                                                </form>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+                {% endfor %}
+                {% else %}
+                <div class="list-group-item text-center text-muted py-3">未配置任何监控频道</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="row">
+            <div class="col-lg-7">
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-success text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-plus-circle me-2"></i>添加监控频道</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_config') }}" method="post" class="row g-2">
+                            <input type="hidden" name="action" value="add_restricted">
+                            <input type="hidden" id="old_restricted_channel_id" name="old_restricted_channel_id">
+                            <div class="col-md-6 mb-2">
+                                <label for="restricted_channel_id" class="form-label small">频道 ID:</label>
+                                <input type="text" id="restricted_channel_id" name="restricted_channel_id"
+                                    class="form-control form-control-sm" placeholder="-100..." required>
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <label for="group_name" class="form-label small">分组名称:</label>
+                                <input type="text" id="group_name" name="group_name"
+                                    class="form-control form-control-sm" placeholder="默认分组" list="group_list"
+                                    onfocus="showAllGroups(this)">
+                                <datalist id="group_list">
+                                    {% for g in config.group_order %}
+                                    <option value="{{ g }}"></option>
+                                    {% endfor %}
+                                </datalist>
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <label for="channel_name" class="form-label small">频道名称:</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" id="channel_name" name="channel_name"
+                                        class="form-control" placeholder="(可选) 如: test2">
+                                    <button class="btn btn-outline-secondary" type="button" 
+                                        onclick="fetchTitle(document.getElementById('restricted_channel_id').value, this, 'channel_name')">
+                                        <i class="bi bi-search"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <label for="download_directory" class="form-label small">下载目录:</label>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" id="download_directory" name="download_directory"
+                                        class="form-control" placeholder="/downloads (可选)">
+                                    <button class="btn btn-outline-secondary" type="button"
+                                        onclick="openDirBrowser('download_directory')"><i
+                                            class="bi bi-folder"></i></button>
+                                </div>
+                            </div>
+                            <div class="col-md-12 mb-2">
+                                <label class="form-label small">下载类型:</label>
+                                <div class="d-flex gap-3 px-2 py-1 border rounded bg-light">
+                                    <div class="form-check form-check-inline mb-0">
+                                        <input class="form-check-input" type="checkbox" id="monitor_video"
+                                            name="monitor_types" value="video" checked>
+                                        <label class="form-check-label small" for="monitor_video">视频</label>
+                                    </div>
+                                    <div class="form-check form-check-inline mb-0">
+                                        <input class="form-check-input" type="checkbox" id="monitor_photo"
+                                            name="monitor_types" value="photo">
+                                        <label class="form-check-label small" for="monitor_photo">图片</label>
+                                    </div>
+                                    <div class="form-check form-check-inline mb-0">
+                                        <input class="form-check-input" type="checkbox" id="monitor_audio"
+                                            name="monitor_types" value="audio">
+                                        <label class="form-check-label small" for="monitor_audio">音频</label>
+                                    </div>
+                                    <div class="form-check form-check-inline mb-0">
+                                        <input class="form-check-input" type="checkbox" id="monitor_text"
+                                            name="monitor_types" value="text">
+                                        <label class="form-check-label small" for="monitor_text">文本</label>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-12 mb-2">
+                                <label for="blacklist_keywords" class="form-label small">黑名单关键词 <span
+                                        class="badge bg-light text-dark fw-normal border"
+                                        style="font-size: 0.65rem;">支持正则</span>:</label>
+                                <input type="text" class="form-control form-control-sm" id="blacklist_keywords"
+                                    name="blacklist_keywords" placeholder="广告,赌场,^AD.* (逗号分隔)">
+                            </div>
+                            <div class="col-md-12 mb-2">
+                                <label for="whitelist_keywords" class="form-label small">白名单关键词 <span
+                                        class="badge bg-light text-dark fw-normal border"
+                                        style="font-size: 0.65rem;">支持正则</span>:</label>
+                                <input type="text" class="form-control form-control-sm" id="whitelist_keywords"
+                                    name="whitelist_keywords" placeholder="太平年,^重要.*$ (逗号分隔)">
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <div class="form-check pt-2">
+                                    <input type="checkbox" class="form-check-input" id="download_video"
+                                        name="download_video">
+                                    <label class="form-check-label small" for="download_video">下载视频</label>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <div class="form-check pt-2">
+                                    <input type="checkbox" class="form-check-input" id="keep_video_message"
+                                        name="keep_video_message">
+                                    <label class="form-check-label small" for="keep_video_message">直接转发消息</label>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <div class="form-check pt-2">
+                                    <input type="checkbox" class="form-check-input" id="convert_hdhive"
+                                        name="convert_hdhive">
+                                    <label class="form-check-label small" for="convert_hdhive">影巢链接转换</label>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="target_user_ids_restricted" class="form-label small">目标 ID:</label>
+                                <input type="text" id="target_user_ids_restricted" name="target_user_ids_restricted"
+                                    class="form-control form-control-sm" placeholder="123, @user (逗号分隔)">
+                            </div>
+                            <div class="col-12 mt-2">
+                                <div class="d-flex gap-2">
+                                    <button type="submit" id="add_restricted_btn"
+                                        class="btn btn-success btn-sm flex-grow-1">确认添加监控</button>
+                                    <button type="button" id="cancel_edit_btn"
+                                        class="btn btn-secondary btn-sm" onclick="cancelEdit()" style="display: none;">取消编辑</button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-lg-5">
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-secondary text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-filter-square me-2"></i>文件名清理规则 (全局)</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_config') }}" method="POST">
+                            <input type="hidden" name="action" value="update_filename_blacklist">
+                            <div class="mb-2">
+                                <textarea class="form-control form-control-sm" id="filename_blacklist_keywords"
+                                    name="filename_blacklist_keywords" rows="3"
+                                    placeholder="剔除词汇 (逗号分隔)">{{ config.get('filename_blacklist', []) | join(', ') }}</textarea>
+                            </div>
+                            <button type="submit" class="btn btn-secondary btn-sm w-100">保存规则</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-primary text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-cookie me-2"></i>HDHive Cookies (影巢链接转换)</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_config') }}" method="POST">
+                            <input type="hidden" name="action" value="update_hdhive_cookie">
+                            <div class="row g-2 mb-2">
+                                <div class="col-12">
+                                    <label for="hdhive_auto_unlock_points_threshold" class="form-label small">自动解锁阈值(积分):</label>
+                                    <input type="number" class="form-control form-control-sm" id="hdhive_auto_unlock_points_threshold"
+                                        name="hdhive_auto_unlock_points_threshold" min="0" step="1"
+                                        value="{{ config.get('hdhive_auto_unlock_points_threshold', 0) }}"
+                                        placeholder="0 = 仅自动解锁 0 积分资源">
+                                    <div class="form-text">当资源需要的解锁积分 ≤ 该阈值时自动解锁；0 表示只自动解锁 0 积分资源。</div>
+                                </div>
+                            </div>
+                            <div class="mb-2">
+                                <textarea class="form-control form-control-sm" id="hdhive_cookie" name="hdhive_cookie"
+                                    rows="3" placeholder="粘贴 Cookie（key=value; key2=value2）。留空=清除"></textarea>
+                                <div class="form-text">
+                                    {% if config.get('hdhive_cookie') %}
+                                    当前状态：<span class="text-success">已设置</span>（出于安全考虑不回显内容）
+                                    {% else %}
+                                    当前状态：<span class="text-muted">未设置</span>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            <button type="submit" class="btn btn-primary btn-sm w-100">保存 HDHive Cookie</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-dark text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-robot me-2"></i>Bot Token 配置</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_config') }}" method="POST">
+                            <input type="hidden" name="action" value="update_bot">
+                            <div class="mb-2">
+                                <input type="password" class="form-control form-control-sm" id="bot_token"
+                                    name="bot_token" value="{{ config.get('bot', {}).get('token', '') }}"
+                                    placeholder="Bot Token">
+                            </div>
+                            <button type="submit" class="btn btn-dark btn-sm w-100">保存 Token</button>
+                        </form>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <div class="text-center mt-2">
+            <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm"><i
+                    class="bi bi-house-door me-1"></i>返回主页</a>
+        </div>
+    </div>
+</div>
+
+<!-- Directory Browser Modal -->
+<div class="modal fade" id="dirBrowserModal" tabindex="-1" aria-labelledby="dirBrowserModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="dirBrowserModalLabel">选择目录</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div id="dirTree" class="list-group"></div>
+            </div>
+            <div class="modal-footer">
+                <span id="selectedDirDisplay" class="me-auto">当前选择: 无</span>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">取消</button>
+                <button type="button" class="btn btn-primary" id="selectDirBtn">选择</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    let currentInputId = '';
+    let currentBrowsePath = '';
+    let selectedDirectory = '';
+
+    // Initialize Bootstrap Modal only when DOM is ready
+    let dirBrowserModalInstance;
+    document.addEventListener('DOMContentLoaded', function () {
+        var dirBrowserModalEl = document.getElementById('dirBrowserModal');
+        if (dirBrowserModalEl) {
+            dirBrowserModalInstance = new bootstrap.Modal(dirBrowserModalEl);
+        }
+    });
+
+    // Ensure these elements are accessed after DOM is ready
+    const dirTree = document.getElementById('dirTree');
+    const selectedDirDisplay = document.getElementById('selectedDirDisplay');
+    const selectDirBtn = document.getElementById('selectDirBtn');
+
+    function openDirBrowser(inputId) {
+        currentInputId = inputId;
+        // Start browsing from the current value of the input field, or default if empty
+        currentBrowsePath = document.getElementById(inputId).value || {{ config.allowed_browse_path | tojson | safe }};
+        loadDirectory(currentBrowsePath);
+        if (dirBrowserModalInstance) dirBrowserModalInstance.show();
+    }
+
+    async function loadDirectory(path) {
+        currentBrowsePath = path;
+        selectedDirectory = path; // Initially select the path we're browsing
+        if (selectedDirDisplay) selectedDirDisplay.textContent = `当前选择: ${selectedDirectory}`;
+
+        if (dirTree) dirTree.innerHTML = '<div class="text-center p-3">加载中...</div>';
+
+        try {
+            const response = await fetch('/api/browse_dir', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ path: path })
+            });
+            const data = await response.json();
+
+            if (response.ok) {
+                if (dirTree) {
+                    dirTree.innerHTML = '';
+                    // Add current path as selectable option
+                    const currentPathItem = document.createElement('a');
+                    currentPathItem.href = '#';
+                    currentPathItem.classList.add('list-group-item', 'list-group-item-action');
+                    if (selectedDirectory === path) currentPathItem.classList.add('active'); // Highlight if current
+                    currentPathItem.innerHTML = `<i class="bi bi-folder-check me-2"></i>(当前目录) ${path}`; // Use a checkmark for current dir
+                    currentPathItem.onclick = (e) => {
+                        e.preventDefault();
+                        selectedDirectory = path;
+                        selectedDirDisplay.textContent = `当前选择: ${selectedDirectory}`;
+                        dirTree.querySelectorAll('.list-group-item').forEach(item => item.classList.remove('active'));
+                        currentPathItem.classList.add('active');
+                    };
+                    dirTree.appendChild(currentPathItem);
+
+                    // Add parent directory (..)
+                    // Use a proper path manipulation for parent directory for cross-OS compatibility
+                    const separator = path.includes('/') ? '/' : '\\';
+                    const lastSlashIndex = path.lastIndexOf(separator);
+                    let parentPath = '';
+
+                    if (lastSlashIndex === 0) {
+                        parentPath = separator; // Parent of /app is /
+                    } else if (lastSlashIndex > 0) {
+                        parentPath = path.substring(0, lastSlashIndex);
+                    }
+
+                    // Only show parent link if we are not at the root and parentPath is valid
+                    // Note: path !== separator check assumes root is '/' or '\'
+                    if (path !== separator && parentPath) {
+                        const parentPathItem = document.createElement('a');
+                        parentPathItem.href = '#';
+                        parentPathItem.classList.add('list-group-item', 'list-group-item-action');
+                        parentPathItem.innerHTML = `<i class="bi bi-folder-symlink me-2"></i>.. (上级目录)`;
+                        parentPathItem.onclick = (e) => {
+                            e.preventDefault();
+                            loadDirectory(parentPath);
+                        };
+                        dirTree.appendChild(parentPathItem);
+                    }
+
+
+                    data.items.forEach(item => {
+                        if (item.type === 'dir') { // Only show directories for selection
+                            const listItem = document.createElement('a');
+                            listItem.href = '#';
+                            listItem.classList.add('list-group-item', 'list-group-item-action');
+                            listItem.innerHTML = `<i class="bi bi-folder-fill me-2"></i>${item.name}`;
+                            listItem.onclick = (e) => {
+                                e.preventDefault();
+                                loadDirectory(item.path); // Browse deeper
+                            };
+                            listItem.ondblclick = (e) => { // Double click to select
+                                e.preventDefault();
+                                selectedDirectory = item.path;
+                                if (selectDirBtn) selectDirBtn.click(); // Programmatically click select button
+                            };
+                            dirTree.appendChild(listItem);
+                        }
+                    });
+                }
+            } else {
+                if (dirTree) dirTree.innerHTML = `<div class="alert alert-danger">${data.error || '加载目录失败'}</div>`;
+            }
+        } catch (error) {
+            if (dirTree) dirTree.innerHTML = `<div class="alert alert-danger">请求错误: ${error.message}</div>`;
+        }
+    }
+
+    function editRestricted(data) {
+        // 安全的设置表单值函数
+        const safeSetValue = (id, value) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.value = value || '';
+            }
+        };
+
+        const safeSetChecked = (id, checked) => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.checked = checked || false;
+            }
+        };
+
+        // 填充所有表单字段
+        safeSetValue('old_restricted_channel_id', data.channel_id);
+        safeSetValue('restricted_channel_id', data.channel_id);
+        safeSetValue('group_name', data.group_name || '默认分组');
+        safeSetValue('channel_name', data.channel_name);
+        safeSetValue('download_directory', data.download_directory);
+        safeSetValue('blacklist_keywords', (data.blacklist_keywords || []).join(', '));
+        safeSetValue('whitelist_keywords', (data.whitelist_keywords || []).join(', '));
+        safeSetValue('target_user_ids_restricted', (data.target_user_ids || []).join(', '));
+
+        safeSetChecked('download_video', data.download_video);
+        safeSetChecked('keep_video_message', data.keep_video_message);
+        safeSetChecked('convert_hdhive', data.convert_hdhive);
+
+        // 处理下载类型复选框
+        const types = data.monitor_types || [];
+        safeSetChecked('monitor_video', types.includes('video'));
+        safeSetChecked('monitor_photo', types.includes('photo'));
+        safeSetChecked('monitor_audio', types.includes('audio'));
+        safeSetChecked('monitor_text', types.includes('text'));
+
+        // 更新按钮状态
+        const submitBtn = document.getElementById('add_restricted_btn');
+        const cancelBtn = document.getElementById('cancel_edit_btn');
+        
+        if (submitBtn) {
+            submitBtn.textContent = '保存修改';
+            submitBtn.classList.remove('btn-success');
+            submitBtn.classList.add('btn-primary');
+        }
+        
+        if (cancelBtn) {
+            cancelBtn.style.display = 'inline-block';
+        }
+
+        // 滚动到表单并聚焦
+        const channelIdInput = document.getElementById('restricted_channel_id');
+        if (channelIdInput) {
+            channelIdInput.scrollIntoView({ behavior: 'smooth' });
+            setTimeout(() => {
+                channelIdInput.focus();
+            }, 300);
+        }
+    }
+
+    function cancelEdit() {
+        // 安全的重置函数
+        const safeReset = (id) => {
+            const el = document.getElementById(id);
+            if (el) {
+                if (el.type === 'checkbox') {
+                    el.checked = false;
+                } else {
+                    el.value = '';
+                }
+            }
+        };
+
+        // 重置所有表单字段
+        safeReset('old_restricted_channel_id');
+        safeReset('restricted_channel_id');
+        safeReset('download_directory');
+        safeReset('channel_name');
+        safeReset('blacklist_keywords');
+        safeReset('whitelist_keywords');
+        safeReset('target_user_ids_restricted');
+        safeReset('download_video');
+        safeReset('keep_video_message');
+        safeReset('convert_hdhive');
+
+        // 重置分组名称为默认值
+        const groupEl = document.getElementById('group_name');
+        if (groupEl) {
+            groupEl.value = '默认分组';
+        }
+
+        // 重置下载类型复选框
+        safeReset('monitor_video');
+        safeReset('monitor_photo');
+        safeReset('monitor_audio');
+        safeReset('monitor_text');
+        
+        // 默认选中视频
+        const videoEl = document.getElementById('monitor_video');
+        if (videoEl) {
+            videoEl.checked = true;
+        }
+
+        // 重置按钮状态
+        const submitBtn = document.getElementById('add_restricted_btn');
+        const cancelBtn = document.getElementById('cancel_edit_btn');
+        
+        if (submitBtn) {
+            submitBtn.textContent = '确认添加监控';
+            submitBtn.classList.remove('btn-primary');
+            submitBtn.classList.add('btn-success');
+        }
+        
+        if (cancelBtn) {
+            cancelBtn.style.display = 'none';
+        }
+    }
+
+    // Initialize Sortable for group drag-and-drop
+    document.addEventListener('DOMContentLoaded', function () {
+        const groupContainer = document.getElementById('channelAccordion');
+        if (groupContainer) {
+            new Sortable(groupContainer, {
+                animation: 150,
+                handle: '.group-drag-handle',
+                ghostClass: 'sortable-ghost',
+                onEnd: function (evt) {
+                    // Get new order of groups
+                    const groups = [];
+                    document.querySelectorAll('#channelAccordion .accordion-item').forEach(item => {
+                        const groupName = item.getAttribute('data-group');
+                        if (groupName) groups.push(groupName);
+                    });
+                    
+                    // Send to server
+                    fetch('/config', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+                        body: `action=reorder_groups&group_order=${encodeURIComponent(JSON.stringify(groups))}`
+                    }).then(response => {
+                        if (response.ok) {
+                            console.log('分组顺序已更新');
+                        }
+                    }).catch(err => console.error('更新失败:', err));
+                }
+            });
+            console.log('Sortable initialized on channelAccordion');
+        } else {
+            console.error('channelAccordion container not found');
+        }
+        console.log('Sortable and Accordion initialized');
+    });
+
+    if (selectDirBtn) {
+        selectDirBtn.addEventListener('click', () => {
+            if (selectedDirectory) {
+                const inputEl = document.getElementById(currentInputId);
+                if (inputEl) inputEl.value = selectedDirectory;
+                if (dirBrowserModalInstance) dirBrowserModalInstance.hide();
+            } else {
+                alert('请选择一个目录。');
+            }
+        });
+    }
+
+    // --- Bulk Action Logic ---
+    function toggleGroup(checkbox, event) {
+        // Temporarily disabled - group checkboxes hidden for testing
+        const groupName = checkbox.getAttribute('data-group');
+        const items = document.querySelectorAll(`.item-checkbox[data-group="${groupName}"]`);
+        items.forEach(item => item.checked = checkbox.checked);
+        updateBulkUI();
+    }
+
+    function updateBulkUI() {
+        const selected = document.querySelectorAll('.item-checkbox:checked');
+        const bulkBar = document.getElementById('bulkActionBar');
+        const countBadge = document.getElementById('selectedCountBadge');
+
+        if (selected.length > 0) {
+            bulkBar.style.display = 'block';
+            countBadge.style.display = 'inline-block';
+            countBadge.textContent = `已选 ${selected.length}`;
+        } else {
+            bulkBar.style.display = 'none';
+            countBadge.style.display = 'none';
+        }
+
+        // Sync group checkboxes
+        document.querySelectorAll('.group-checkbox').forEach(groupCb => {
+            const groupName = groupCb.getAttribute('data-group');
+            const groupItems = document.querySelectorAll(`.item-checkbox[data-group="${groupName}"]`);
+            const checkedItems = document.querySelectorAll(`.item-checkbox[data-group="${groupName}"]:checked`);
+            groupCb.checked = (groupItems.length > 0 && groupItems.length === checkedItems.length);
+            groupCb.indeterminate = (checkedItems.length > 0 && checkedItems.length < groupItems.length);
+        });
+    }
+
+    function confirmBulkDelete() {
+        const selected = document.querySelectorAll('.item-checkbox:checked');
+        if (confirm(`确定要彻底删除选中的 ${selected.length} 个监控任务吗？此操作不可撤销。`)) {
+            submitBulkAction('delete');
+        }
+    }
+
+    function submitBulkMove() {
+        const selectEl = document.querySelector('select[name="target_group"]');
+        let target = selectEl.value;
+        if (!target) {
+            alert('请选择目标分组。');
+            return;
+        }
+        if (target === 'NEW_GROUP') {
+            target = prompt('请输入新分组名称:');
+            if (!target || !target.trim()) return;
+            target = target.trim();
+        }
+
+        // Temporary set target value if it was NEW_GROUP or prompt
+        if (selectEl.value === 'NEW_GROUP') {
+            const opt = document.createElement('option');
+            opt.value = target;
+            opt.text = target;
+            opt.selected = true;
+            selectEl.add(opt);
+        }
+
+        submitBulkAction('move');
+    }
+
+    function submitBulkAction(subAction) {
+        document.getElementById('bulkSubAction').value = subAction;
+        const container = document.getElementById('selectedIdsContainer');
+        container.innerHTML = '';
+
+        document.querySelectorAll('.item-checkbox:checked').forEach(cb => {
+            const hiddenInput = document.createElement('input');
+            hiddenInput.type = 'hidden';
+            hiddenInput.name = 'selected_ids';
+            hiddenInput.value = cb.value;
+            container.appendChild(hiddenInput);
+        });
+
+        document.getElementById('bulkActionForm').submit();
+    }
+
+    function clearSelection() {
+        document.querySelectorAll('.item-checkbox, .group-checkbox').forEach(cb => {
+            cb.checked = false;
+            cb.indeterminate = false;
+        });
+        updateBulkUI();
+    }
+
+    async function fetchTitle(channelId, btnEl, targetInputId = null) {
+        if (!channelId) {
+            alert('请先输入频道 ID');
+            return;
+        }
+
+        const icon = btnEl.querySelector('i');
+        const originalClass = icon.className;
+        icon.className = 'bi bi-arrow-repeat spin'; // Add spin class if you have it or just change icon
+        btnEl.disabled = true;
+
+        try {
+            const response = await fetch('/api/get_channel_info', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ channel_id: channelId })
+            });
+            
+            // 检查响应类型
+            const contentType = response.headers.get("content-type");
+            if (!contentType || !contentType.includes("application/json")) {
+                const text = await response.text();
+                console.error('非 JSON 响应:', text);
+                throw new Error('服务器返回了非 JSON 格式的内容 (可能是登录过期或服务器错误)');
+            }
+
+            const data = await response.json();
+
+            if (data.success) {
+                if (targetInputId) {
+                    const input = document.getElementById(targetInputId);
+                    if (input) input.value = data.title;
+                    alert('获取成功: ' + data.title);
+                } else {
+                    // It was a list item click, we need to save it to config to make it permanent
+                    // But for now, just tell the user they can edit it
+                    alert('频道名称是: ' + data.title + '\n点击“编辑”按钮并保存即可更新到列表。');
+                }
+            } else {
+                alert('获取失败: ' + (data.error || '未知错误'));
+            }
+        } catch (err) {
+            alert('请求错误: ' + err.message);
+        } finally {
+            icon.className = originalClass;
+            btnEl.disabled = false;
+        }
+    }
+
+    // --- Autocomplete Improvement ---
+    function showAllGroups(input) {
+        input.setAttribute('autocomplete', 'off');
+        // Flash a space to trigger the datalist dropdown in some browsers
+        if (input.value === '') {
+            input.value = ' ';
+            setTimeout(() => { if (input.value === ' ') input.value = ''; }, 1);
+        }
+    }
+
+    // Initialize listeners
+    document.addEventListener('DOMContentLoaded', function () {
+        // Edit buttons - use event delegation to handle dynamically added content
+        document.addEventListener('click', function(e) {
+            if (e.target.closest('.edit-btn')) {
+                const btn = e.target.closest('.edit-btn');
+                try {
+                    const data = JSON.parse(btn.getAttribute('data-entry'));
+                    console.log('编辑数据:', data);
+                    editRestricted(data);
+                } catch (error) {
+                    console.error('编辑失败:', error);
+                    alert('编辑失败，请检查浏览器控制台');
+                }
+            }
+        });
+
+        updateBulkUI();
+        console.log('页面初始化完成');
+    });
+
+</script>
+{% endblock %}

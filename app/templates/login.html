@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+
+{% block title %}Telegram 登录/认证{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <h2 class="mb-4 text-center">Telegram 登录/认证</h2>
+        <div class="card p-4 shadow-sm">
+            <form method="post">
+                <div class="mb-3">
+                    <label for="api_id" class="form-label">API ID:</label>
+                    <input type="number" id="api_id" name="api_id" class="form-control" value="{{ config.telegram.api_id or '' }}" {% if api_id_env %}readonly{% endif %} required>
+                </div>
+                <div class="mb-3">
+                    <label for="api_hash" class="form-label">API Hash:</label>
+                    <input type="text" id="api_hash" name="api_hash" class="form-control" value="{{ config.telegram.api_hash or '' }}" {% if api_hash_env %}readonly{% endif %} required>
+                </div>
+                <div class="mb-3">
+                    <label for="phone" class="form-label">电话号码 (带国际区号，例如 +861234567890):</label>
+                    <input type="text" id="phone" name="phone" class="form-control" placeholder="+86..." required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">发送验证码</button>
+            </form>
+            <p class="mt-3 text-center">如果您已经认证过，可以直接 <a href="{{ url_for('index') }}">返回主页</a>。</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

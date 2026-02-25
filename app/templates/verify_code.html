@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}验证 Telegram 登录{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <h2 class="mb-4 text-center">验证 Telegram 登录</h2>
+        <div class="card p-4 shadow-sm">
+            <form method="post">
+                <div class="mb-3">
+                    <label for="code" class="form-label">验证码 (已发送到您的 Telegram 应用):</label>
+                    <input type="text" id="code" name="code" class="form-control" required>
+                </div>
+                {% if show_password_input %}
+                    <div class="mb-3">
+                        <label for="password" class="form-label">两步验证密码:</label>
+                        <input type="password" id="password" name="password" class="form-control">
+                    </div>
+                {% endif %}
+                <button type="submit" class="btn btn-primary w-100">验证</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

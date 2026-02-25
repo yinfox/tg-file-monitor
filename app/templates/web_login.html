@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+
+{% block title %}Web 登录{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <h2 class="mb-4 text-center">Web 管理登录</h2>
+        <div class="card p-4 shadow-sm">
+            <form method="post">
+                <div class="mb-3">
+                    <label for="username" class="form-label">用户名:</label>
+                    <input type="text" id="username" name="username" class="form-control" value="{{ username }}" required>
+                </div>
+                <div class="mb-3">
+                    <label for="password" class="form-label">密码:</label>
+                    <input type="password" id="password" name="password" class="form-control" required>
+                </div>
+                <button type="submit" class="btn btn-primary w-100">登录</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

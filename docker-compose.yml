@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  telegram_file_monitor:
+    image: tg-file-monitor:local
+    build: .
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./config:/app/config
+      - ./downloads:/app/downloads # Mount downloads directory so files are visible on VPS
+    # Be cautious with telegram_monitor.session as it contains sensitive data.
+    restart: unless-stopped

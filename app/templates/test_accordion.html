@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}测试 Accordion{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-12">
+        <h2 class="mb-3"><i class="bi bi-wrench me-2"></i>Bootstrap Accordion 功能测试</h2>
+        
+        <div class="card mb-3 shadow-sm">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi bi-list-task me-2"></i>测试列表</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">点击下方分组标题来测试展开/折叠功能。如果功能正常，所有分组应该可以点击展开和折叠。</p>
+                
+                <div class="accordion accordion-flush" id="testAccordion">
+                    <!-- 简单测试 -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="heading1">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse1" aria-expanded="false" aria-controls="collapse1">
+                                <i class="bi bi-collection me-2 text-primary"></i>
+                                <span class="fw-bold">简单测试分组</span>
+                                <span class="badge bg-primary ms-2">3</span>
+                            </button>
+                        </h2>
+                        <div id="collapse1" class="accordion-collapse collapse" data-bs-parent="#testAccordion">
+                            <div class="accordion-body p-0">
+                                <div class="list-group list-group-flush small">
+                                    <div class="list-group-item p-2">项目 1 - 简单列表项</div>
+                                    <div class="list-group-item p-2">项目 2 - 简单列表项</div>
+                                    <div class="list-group-item p-2">项目 3 - 简单列表项</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 带拖拽和复选框的测试 -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="heading2">
+                            <div style="display: flex; align-items: center; gap: 0;">
+                                <div class="px-2 group-drag-handle" style="cursor: grab; flex-shrink: 0;">
+                                    <i class="bi bi-grip-vertical text-muted"></i>
+                                </div>
+                                <div class="form-check mb-0" style="flex-shrink: 0; padding: 0.75rem 0.5rem 0.75rem 0;">
+                                    <input class="form-check-input" type="checkbox" id="test-check-1">
+                                </div>
+                                <button class="accordion-button collapsed flex-grow-1" type="button" data-bs-toggle="collapse" data-bs-target="#collapse2" aria-expanded="false" aria-controls="collapse2">
+                                    <i class="bi bi-collection me-2 text-primary"></i>
+                                    <span class="fw-bold">带拖拽和复选框的分组</span>
+                                    <span class="badge bg-primary ms-2">2</span>
+                                </button>
+                            </div>
+                        </h2>
+                        <div id="collapse2" class="accordion-collapse collapse" data-bs-parent="#testAccordion">
+                            <div class="accordion-body p-0">
+                                <div class="list-group list-group-flush small">
+                                    <div class="list-group-item p-2 d-flex align-items-start gap-2">
+                                        <div class="form-check mt-1">
+                                            <input class="form-check-input" type="checkbox" id="test-check-2">
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div>项目 A - 有复选框</div>
+                                            <div class="text-muted small">是否允许嵌套交互元素？</div>
+                                        </div>
+                                    </div>
+                                    <div class="list-group-item p-2 d-flex align-items-start gap-2">
+                                        <div class="form-check mt-1">
+                                            <input class="form-check-input" type="checkbox" id="test-check-3">
+                                        </div>
+                                        <div class="flex-grow-1">
+                                            <div>项目 B - 有复选框</div>
+                                            <div class="text-muted small">点击复选框时它应该被选中，而不是折叠分组</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 只有按钮的标准测试 -->
+                    <div class="accordion-item">
+                        <h2 class="accordion-header" id="heading3">
+                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#collapse3" aria-expanded="false" aria-controls="collapse3">
+                                <i class="bi bi-collection me-2 text-primary"></i>
+                                <span class="fw-bold">标准 Bootstrap 结构</span>
+                                <span class="badge bg-primary ms-2">1</span>
+                            </button>
+                        </h2>
+                        <div id="collapse3" class="accordion-collapse collapse" data-bs-parent="#testAccordion">
+                            <div class="accordion-body">
+                                <p>这是标准的 Bootstrap 5 Accordion 结构，没有任何额外的交互元素。</p>
+                                <p class="text-muted mb-0">如果按钮点击有效果，说明 Bootstrap Collapse 插件正常工作。</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card shadow-sm">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="bi bi-info-circle me-2"></i>调试信息</h5>
+            </div>
+            <div class="card-body">
+                <div class="alert alert-info">
+                    <p><strong>期望行为:</strong></p>
+                    <ul>
+                        <li>点击任何分组标题应该展开/折叠该分组</li>
+                        <li>同时只有一个分组可以展开（因为设置了 data-bs-parent）</li>
+                        <li>拖拽把手应该可以拖动分组</li>
+                        <li>复选框应该可以单独选中，不会触发折叠</li>
+                    </ul>
+                </div>
+
+                <div id="debugInfo" class="alert alert-secondary">
+                    <p><strong>浏览器控制台信息:</strong></p>
+                    <pre id="debugOutput">等待初始化...</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const output = document.getElementById('debugOutput');
+    const info = [];
+    
+    // 检查 Bootstrap 是否加载
+    if (typeof bootstrap !== 'undefined') {
+        info.push('✓ Bootstrap 已加载');
+        if (typeof bootstrap.Collapse !== 'undefined') {
+            info.push('✓ Bootstrap Collapse 插件可用');
+        } else {
+            info.push('✗ Bootstrap Collapse 插件不可用');
+        }
+    } else {
+        info.push('✗ Bootstrap 未加载');
+    }
+    
+    // 检查 DOM 元素
+    const accordion = document.getElementById('testAccordion');
+    if (accordion) {
+        info.push(`✓ Accordion 容器找到 (#testAccordion)`);
+        const items = accordion.querySelectorAll('.accordion-item');
+        info.push(`✓ 找到 ${items.length} 个 accordion-item`);
+        const buttons = accordion.querySelectorAll('.accordion-button');
+        info.push(`✓ 找到 ${buttons.length} 个 accordion-button`);
+    }
+    
+    // 检查 Sortable.js
+    if (typeof Sortable !== 'undefined') {
+        info.push('✓ Sortable.js 已加载');
+    }
+    
+    output.textContent = info.join('\n');
+    
+    // 为按钮添加点击事件监听器
+    document.querySelectorAll('.accordion-button').forEach((btn, idx) => {
+        btn.addEventListener('click', function(e) {
+            console.log(`Accordion button ${idx} clicked`);
+        });
+    });
+});
+</script>
+{% endblock %}

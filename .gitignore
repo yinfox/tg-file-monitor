@@ -1,0 +1,88 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Telegram Session Files
+*.session
+*.session-journal
+config/bot_session.session*
+config/telegram_monitor.session*
+
+# Configuration & Sensitive Data
+config/config.json
+config/config.local.json
+config/*.local.json
+config/cookies.txt
+config/.env
+.env
+config/session_backup_*/
+session_archive_*.txt
+
+# Logs
+*.log
+logs/
+
+# Temporary Files
+*.tmp
+*.temp
+*.db
+config/message_queue.json
+
+# Downloads
+app/download/
+app/downloads/
+downloads/
+
+# Cookies
+app/temp_cookies/
+cookies/
+
+# Test Files (保留test相关文件，但忽略输出)
+test_output/
+
+# Debug & Development Files
+*debug*.png
+*debug*.jpg
+*debug*.json
+*hdhive*.png
+*hdhive*.json
+*hdhive*.js
+*encrypt*.json
+*decrypt*.js
+*crypto*.js
+*capture*.json
+*intercept*.js
+*.pyc
