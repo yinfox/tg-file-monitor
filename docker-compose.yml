@@ -2,12 +2,12 @@ version: '3.8'
 
 services:
   telegram_file_monitor:
-    image: tg-file-monitor:local
-    build: .
+    image: y1nf0x/tg-file-monitor:0.4.6
     ports:
       - "5001:5001"
     volumes:
       - ./config:/app/config
       - ./downloads:/app/downloads # Mount downloads directory so files are visible on VPS
+      - /CloudNAS:/CloudNAS # Mount VPS CloudNAS path into container for local move/copy targets
     # Be cautious with telegram_monitor.session as it contains sensitive data.
     restart: unless-stopped

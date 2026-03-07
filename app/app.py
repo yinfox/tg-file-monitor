@@ -11,7 +11,7 @@ import logging
 import uuid
 import time
 import re
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
+from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -24,14 +24,15 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from downloader_module import downloader
 
 app = Flask(__name__)
-# Stable secret key for v0.3.5
-app.secret_key = "tg-file-monitor-v0.3.8-rapid-upload-key"
+# Stable secret key for v0.4.6
+app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.3.8"
+VERSION = "0.4.6"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
+LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
 
 # Load environment variables from config/.env
 try:
@@ -146,6 +147,35 @@ class ProcessManager:
         self.process = None
         self.log_buffer = []
         self.log_buffer_size = log_buffer_size
+        self.log_file_path = os.path.join(LOG_DIR, f"{self.name.replace(' ', '_')}.log")
+        self._log_file_lock = threading.Lock()
+
+    def _append_to_log_file(self, entry):
+        try:
+            os.makedirs(LOG_DIR, exist_ok=True)
+            with self._log_file_lock:
+                with open(self.log_file_path, 'a', encoding='utf-8') as f:
+                    f.write(entry + "\n")
+        except Exception:
+            pass
+
+    def get_full_log_lines(self):
+        try:
+            if os.path.exists(self.log_file_path):
+                with open(self.log_file_path, 'r', encoding='utf-8') as f:
+                    return [line.rstrip('\n') for line in f.readlines()]
+        except Exception:
+            pass
+        return list(self.log_buffer)
+
+    def clear_logs(self):
+        self.log_buffer.clear()
+        try:
+            if os.path.exists(self.log_file_path):
+                with open(self.log_file_path, 'w', encoding='utf-8') as f:
+                    f.write('')
+        except Exception:
+            pass
 
     def start(self):
         if self.process and self.process.poll() is None:
@@ -192,6 +222,7 @@ class ProcessManager:
                     from downloader_module import downloader
                     downloader.log(line.strip())
                 self.log_buffer.append(entry)
+                self._append_to_log_file(entry)
                 if len(self.log_buffer) > self.log_buffer_size:
                     self.log_buffer.pop(0)
         pipe.close()
@@ -734,9 +765,8 @@ def monitor_action():
 @app.route('/monitor_log')
 @login_required
 def monitor_log():
-    global monitor_log_buffer
-    # Process each log line for colorization
-    colored_log_lines = [colorize_log_line(line) for line in monitor_log_buffer]
+    log_lines = tg_monitor_mgr.get_full_log_lines()
+    colored_log_lines = [colorize_log_line(line) for line in log_lines]
     log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无日志。"
     return render_template('log.html', log_output=log_output)
 
@@ -890,26 +920,50 @@ def file_monitor_action():
 @app.route('/file_monitor_log')
 @login_required
 def file_monitor_log():
-    global file_monitor_log_buffer
-    colored_log_lines = [colorize_log_line(line) for line in file_monitor_log_buffer]
+    log_lines = file_monitor_mgr.get_full_log_lines()
+    colored_log_lines = [colorize_log_line(line) for line in log_lines]
     log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无日志。"
     return render_template('file_monitor_log.html', log_output=log_output)
 
 @app.route('/clear_monitor_log', methods=['POST'])
 @login_required
 def clear_monitor_log():
-    global monitor_log_buffer
-    monitor_log_buffer.clear()
+    tg_monitor_mgr.clear_logs()
     flash("Telegram 监控日志已清除。", "info")
     return redirect(url_for('monitor_log'))
 
 @app.route('/clear_file_monitor_log', methods=['POST'])
 @login_required
 def clear_file_monitor_log():
-    global file_monitor_log_buffer
-    file_monitor_log_buffer.clear()
+    file_monitor_mgr.clear_logs()
     flash("文件监控日志已清除。", "info")
     return redirect(url_for('file_monitor_log'))
+
+@app.route('/download_monitor_log')
+@login_required
+def download_monitor_log():
+    if not os.path.exists(tg_monitor_mgr.log_file_path):
+        flash("暂无 Telegram 监控日志可下载。", "warning")
+        return redirect(url_for('monitor_log'))
+    return send_file(
+        tg_monitor_mgr.log_file_path,
+        as_attachment=True,
+        download_name=f"telegram_monitor_{time.strftime('%Y%m%d_%H%M%S')}.log",
+        mimetype='text/plain'
+    )
+
+@app.route('/download_file_monitor_log')
+@login_required
+def download_file_monitor_log():
+    if not os.path.exists(file_monitor_mgr.log_file_path):
+        flash("暂无文件监控日志可下载。", "warning")
+        return redirect(url_for('file_monitor_log'))
+    return send_file(
+        file_monitor_mgr.log_file_path,
+        as_attachment=True,
+        download_name=f"file_monitor_{time.strftime('%Y%m%d_%H%M%S')}.log",
+        mimetype='text/plain'
+    )
 
 @app.route('/bot_monitor_action', methods=['POST'])
 @login_required

@@ -188,6 +188,7 @@ _HDHIVE_NEXT_ROUTER_STATE_TREE_JSON = "[]"
 _hdhive_resolve_cache: Dict[str, Tuple[float, Optional[str]]] = {}
 _HDHIVE_CACHE_TTL_SECONDS = 6 * 60 * 60
 _HDHIVE_NEGATIVE_CACHE_TTL_SECONDS = 5 * 60
+_album_folder_cache: Dict[int, str] = {}
 
 
 def _get_hdhive_cookie_header() -> str:
@@ -897,6 +898,99 @@ async def reliable_action(action_name, coro_func, *args, **kwargs):
         log_message(f"[{action_name}] 超过最大重试次数，放弃操作。")
         return None
 
+def extract_keywords(text, limit=30):
+    """
+    极简提取关键词 - 去除停用词和描述词，只保留核心内容。
+    常见停用词：的、和、是、了、在、有、也、被、以、为、与、并、或、等
+    """
+    import re
+    import emoji
+    
+    if not text:
+        return ""
+    
+    # 1. Remove URLs
+    text = re.sub(r'http[s]?://\S+', '', text)
+    text = re.sub(r'www\.\S+', '', text)
+    text = re.sub(r't\.me/\S+', '', text)
+
+    # 2. Remove User Mentions (@username)
+    text = re.sub(r'@\w+', '', text)
+
+    # 3. Remove Emojis
+    try:
+        text = emoji.replace_emoji(text, replace='')
+    except:
+        pass
+
+    # 4. Remove illegal chars
+    text = re.sub(r'[\\/*?:"<>|]', '', text)
+    
+    # 5. Remove blacklist keywords
+    filename_blacklist = current_config.get('filename_blacklist', [])
+    for keyword in filename_blacklist:
+        try:
+            if keyword:
+                text = re.sub(re.escape(keyword), '', text, flags=re.IGNORECASE)
+        except:
+            pass
+    
+    # 6. Normalize separators and tokenize
+    # 目标：尽量保持语义词组，避免“硬截断”导致断句断词
+    text = re.sub(r'[\r\n\t]+', ' ', text)
+    text = re.sub(r'[，。！？、；：,!.?;:【】\[\]()（）“”"\'<>《》·•…—\-]+', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    stopwords = {
+        '的', '和', '是', '了', '在', '有', '也', '被', '以', '为', '与', '并', '或', '等',
+        '这', '那', '就', '还', '把', '给', '向', '一个', '一些', '我们', '你们', '他们'
+    }
+
+    # 词元提取：英文/数字串 + 连续中文串(>=2)
+    tokens = re.findall(r'[A-Za-z0-9]+|[\u4e00-\u9fff]{2,}', text)
+    if not tokens:
+        # 兜底：若无法分词，至少返回清洗后的整句（不再硬截词）
+        return text[:limit].strip() if len(text) <= limit else text[:limit].rstrip()
+
+    filtered_tokens = []
+    seen = set()
+    for token in tokens:
+        token = token.strip()
+        if not token:
+            continue
+        if token in stopwords:
+            continue
+        if len(token) == 1 and re.match(r'[\u4e00-\u9fff]', token):
+            continue
+        if token.lower() in {'tg', 'telegram', '频道', '视频', '图片'}:
+            # 通用噪声词降权（可根据需要保留）
+            continue
+        key = token.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        filtered_tokens.append(token)
+
+    if not filtered_tokens:
+        filtered_tokens = tokens[:]
+
+    # 7. 按词元拼接到 limit，避免中间截断
+    result_tokens = []
+    current_len = 0
+    for token in filtered_tokens:
+        add_len = len(token) if not result_tokens else len(token) + 1  # +1 for underscore
+        if current_len + add_len > limit:
+            break
+        result_tokens.append(token)
+        current_len += add_len
+
+    if not result_tokens:
+        # 极端情况下取首词前缀
+        token = filtered_tokens[0]
+        return token[:limit].strip()
+
+    return '_'.join(result_tokens).strip('_ ').strip()
+
 def sanitize_filename(text, limit=60):
     """
     Sanitizes a string to be safe for filenames.
@@ -1124,22 +1218,44 @@ async def new_message_handler(event):
                                     album_caption = m.message
                                     break
                             
-                            folder_name = str(msg.grouped_id)
-                            if album_caption:
-                                sanitized_caption = sanitize_filename(album_caption, limit=60)
-                                if sanitized_caption:
-                                    folder_name = sanitized_caption
+                            grouped_id_key = int(msg.grouped_id)
+                            folder_name = _album_folder_cache.get(grouped_id_key, "")
+                            if not folder_name:
+                                folder_name = str(msg.grouped_id)
+                                if album_caption:
+                                    # 极简风格：只保留关键词，去除停用词
+                                    keywords = extract_keywords(album_caption, limit=30)
+                                    if keywords:
+                                        folder_name = keywords
+                                _album_folder_cache[grouped_id_key] = folder_name
                             
                             final_folder_path = os.path.join(download_directory, folder_name)
                             os.makedirs(final_folder_path, exist_ok=True)
 
                             try:
-                                index = [m.id for m in album_msgs].index(msg.id) + 1
+                                # 按文件类型分别计数：图片单独编号，视频单独编号
+                                type_sequence = []
+                                for m in album_msgs:
+                                    m_ext = ".jpg"  # Default for photo
+                                    if m.video:
+                                        m_ext = ".mp4"  # Default for video
+                                    elif m.document:
+                                        if hasattr(m.document, 'mime_type') and m.document.mime_type:
+                                            m_ext = "." + m.document.mime_type.split('/')[-1]
+                                    # 只有相同扩展名的才计入同一序列
+                                    if m_ext == original_ext:
+                                        type_sequence.append(m.id)
+                                
+                                if msg.id in type_sequence:
+                                    index = type_sequence.index(msg.id) + 1
+                                else:
+                                    index = len(type_sequence) + 1
                             except ValueError:
                                 index = msg.id
                             
-                            final_filename = f"{index}{original_ext}"
-                            log_message(f"检测到相册消息 (Group: {msg.grouped_id})。归档至: '{folder_name}/{final_filename}'")
+                            # File inherits folder name for better organization
+                            final_filename = f"{folder_name}_{index}{original_ext}"
+                            log_message(f"检测到相册消息 (Group: {msg.grouped_id})。按类型编号 - {media_type_detected}: {index}。归档至: '{folder_name}/{final_filename}'")
                         except Exception as e:
                             log_message(f"处理相册逻辑失败: {e}。")
                     
@@ -1234,10 +1350,20 @@ async def new_message_handler(event):
 async def monitor_config_changes():
     global current_config, DEBUG_MODE
     last_config_mtime = 0
+    initialized = False  # 用于记录是否已显示初始化日志
+    last_heartbeat_ts = 0.0
+    
     while True:
         try:
-            # Heartbeat log
-            log_message(f"监控运行中... 当前关注 {len(current_config.get('restricted_channels', []))} 个频道。")
+            # Heartbeat log - DEBUG模式下每60秒显示一次，非DEBUG模式下只显示一次
+            if DEBUG_MODE:
+                now_ts = time.time()
+                if now_ts - last_heartbeat_ts >= 60:
+                    debug_log(f"监控运行中... 当前关注 {len(current_config.get('restricted_channels', []))} 个频道。")
+                    last_heartbeat_ts = now_ts
+            elif not initialized:
+                log_message(f"监控运行中... 当前关注 {len(current_config.get('restricted_channels', []))} 个频道。")
+                initialized = True
             
             # Check for config changes
             if os.path.exists(CONFIG_FILE):
@@ -1250,6 +1376,7 @@ async def monitor_config_changes():
                             current_config = new_config
                             # Update Debug Mode
                             DEBUG_MODE = current_config.get('debug_mode', False)
+                            initialized = False  # 重置标志，便于在模式切换时重新显示初始化日志
                             
                             last_config_mtime = mtime
                             log_message("config.json 已更新，重新加载配置。" )

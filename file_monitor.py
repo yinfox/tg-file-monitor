@@ -77,8 +77,34 @@ def compute_sha1(file_path, chunk_size=8 * 1024 * 1024):
     except Exception:
         return None
 
+def verify_file_integrity(source_path, target_path):
+    """校验文件完整性：先比大小，再比 SHA1。"""
+    if not os.path.exists(target_path):
+        return False, f"目标文件不存在: {target_path}"
+
+    if not os.path.isfile(source_path) or not os.path.isfile(target_path):
+        return False, "仅支持文件完整性校验（目录跳过）"
+
+    try:
+        source_size = os.path.getsize(source_path)
+        target_size = os.path.getsize(target_path)
+    except Exception as e:
+        return False, f"读取文件大小失败: {e}"
+
+    if source_size != target_size:
+        return False, f"文件大小不一致，源: {source_size}，目标: {target_size}"
+
+    source_sha1 = compute_sha1(source_path)
+    target_sha1 = compute_sha1(target_path)
+    if not source_sha1 or not target_sha1:
+        return False, "SHA1 计算失败"
+
+    if source_sha1 != target_sha1:
+        return False, f"SHA1 不一致，源: {source_sha1}，目标: {target_sha1}"
+
+    return True, f"校验通过，大小: {source_size}，SHA1: {source_sha1}"
+
 def resolve_destination_path(destination_dir, filename, handle_duplicate="rename"):
-    os.makedirs(destination_dir, exist_ok=True)
     base, ext = os.path.splitext(filename)
     candidate = os.path.join(destination_dir, filename)
     if not os.path.exists(candidate):
@@ -139,6 +165,13 @@ def perform_local_action(filepath, filename, destination_dir, action_type, handl
     if not destination_dir:
         log_message(f"⚠️  未配置本地目标目录，跳过 {action_type} 操作: {filename}")
         return False
+    if not os.path.isdir(destination_dir):
+        log_message(
+            f"❌ 目标目录不存在或不可访问，已取消{action_type}并保留源文件: {destination_dir}\n"
+            f"提示：若在 Docker 中运行，请确认已将该路径正确挂载到容器。",
+            level="ERROR"
+        )
+        return False
     try:
         use_mid_check = (
             enable_mid_copy_check
@@ -176,17 +209,40 @@ def perform_local_action(filepath, filename, destination_dir, action_type, handl
             target_path = result.get("target_path")
         else:
             target_path = resolve_destination_path(destination_dir, filename, handle_duplicate)
+            
             if action_type == "move":
-                shutil.move(filepath, target_path)
+                if os.path.isdir(filepath):
+                    shutil.move(filepath, target_path)
+                    if not os.path.exists(target_path):
+                        raise Exception(f"移动完成但目标目录不存在: {target_path}")
+                    if os.path.exists(filepath):
+                        raise Exception(f"源目录仍然存在，移动可能未完成: {filepath}")
+                else:
+                    shutil.copy2(filepath, target_path)
+                    verified, detail = verify_file_integrity(filepath, target_path)
+                    if not verified:
+                        raise Exception(f"移动前校验失败，已取消删除源文件: {detail}")
+                    log_message(f"✅ 移动前校验通过（大小+SHA1）: {filename} | {detail}")
+                    os.remove(filepath)
+                    if os.path.exists(filepath):
+                        raise Exception(f"源文件删除失败: {filepath}")
             else:
                 if os.path.isdir(filepath):
                     shutil.copytree(filepath, target_path)
                 else:
                     shutil.copy2(filepath, target_path)
+                # 验证复制是否成功
+                if not os.path.exists(target_path):
+                    raise Exception(f"复制完成但目标文件不存在: {target_path}")
 
         # 核心逻辑：如果是 'copy_and_delete' 或者是 'copy' 且配置了“删除源文件”，则执行删除
         should_delete = (action_type == "copy_and_delete") or (action_type == "copy" and delete_source_after_transfer)
         if should_delete and os.path.exists(filepath):
+            if os.path.isfile(filepath):
+                verified, detail = verify_file_integrity(filepath, target_path)
+                if not verified:
+                    raise Exception(f"删除源文件前校验失败，已取消删除: {detail}")
+                log_message(f"✅ 删除前校验通过（大小+SHA1）: {filename} | {detail}")
             is_dir_now = os.path.isdir(filepath)
             if is_dir_now:
                 shutil.rmtree(filepath)
@@ -197,13 +253,31 @@ def perform_local_action(filepath, filename, destination_dir, action_type, handl
         log_message(f"✅ 本地{('移动' if action_type == 'move' else '复制')}成功: {filename} -> {target_path}")
         return True
     except Exception as e:
-        log_message(f"❌ 本地{action_type}失败: {filename}\n原因: {e}", level="ERROR")
+        log_message(f"❌ 本地{action_type}失败: {filename}\n原因: {e}\n源路径: {filepath}\n目标路径: {target_path if 'target_path' in locals() else '未定义'}", level="ERROR")
         return False
+
+def get_directory_last_modified(directory_path):
+    """递归获取目录内所有文件的最近修改时间"""
+    try:
+        max_mtime = os.path.getmtime(directory_path)
+        for root, dirs, files in os.walk(directory_path):
+            for file in files:
+                file_path = os.path.join(root, file)
+                try:
+                    mtime = os.path.getmtime(file_path)
+                    if mtime > max_mtime:
+                        max_mtime = mtime
+                except Exception:
+                    pass
+        return max_mtime
+    except Exception:
+        return time.time()
 
 def monitor_files():
     log_message("文件监控程序已启动。")
     log_message(f"DEBUG 模式: {'[开启]' if DEBUG_MODE else '[关闭]'}")
     monitored_file_states = {}
+    last_heartbeat_ts = 0.0
     
     # 115 客户端（如果配置中提供 cookie 会初始化）
     client_115 = None
@@ -211,7 +285,11 @@ def monitor_files():
     while True:
         config = load_config()
         tasks = config.get("file_monitoring_tasks", [])
-        debug_log(f"当前监控任务数: {len(tasks)}")
+        if DEBUG_MODE:
+            now_ts = time.time()
+            if now_ts - last_heartbeat_ts >= 60:
+                debug_log(f"当前监控任务数: {len(tasks)}")
+                last_heartbeat_ts = now_ts
         # 尝试从配置读取115 cookie
         cookie_115 = config.get('115_cookie') or config.get('web_115_cookie')
         if cookie_115 and Client115:
@@ -239,8 +317,15 @@ def monitor_files():
                 is_dir = os.path.isdir(filepath)
                 if not is_file and not is_dir: continue # 跳过管道等特殊文件
                 
-                # 对于文件使用大小检测稳定性，对于文件夹使用修改时间作为近似稳定性检测
-                current_state = os.path.getsize(filepath) if is_file else os.path.getmtime(filepath)
+                # 对于文件使用大小和修改时间，对于文件夹递归检查内部文件修改时间
+                if is_file:
+                    file_size = os.path.getsize(filepath)
+                    file_mtime = os.path.getmtime(filepath)
+                    current_state = {"size": file_size, "mtime": file_mtime}
+                else:
+                    # 对于目录，获取内部所有文件的最新mtime
+                    dir_mtime = get_directory_last_modified(filepath)
+                    current_state = {"mtime": dir_mtime}
 
                 if filepath not in monitored_file_states:
                     monitored_file_states[filepath] = {
@@ -250,7 +335,7 @@ def monitor_files():
                         "last_check": 0, 
                         "last_success": 0
                     }
-                    debug_log(f"新{'目录' if is_dir else '文件'}进入监控: {filename} ({'mtime' if is_dir else 'size'}: {current_state})")
+                    debug_log(f"新{'目录' if is_dir else '文件'}进入监控: {filename} (state: {current_state})")
                     continue
                 
                 # 跳过已完成的文件
@@ -258,7 +343,10 @@ def monitor_files():
                     continue
                 
                 prev = monitored_file_states[filepath]
-                if current_state == prev['state'] and (time.time() - prev['time']) >= task.get('stable_time', 10):
+                state_unchanged = current_state == prev['state']
+                time_stable = (time.time() - prev['time']) >= task.get('stable_time', 10)
+                
+                if state_unchanged and time_stable:
                     debug_log(f"检测到稳定{'目录' if is_dir else '文件'}: {filename}")
                     debug_log(f"信息: state={current_state}, stable_time={time.time() - prev['time']:.1f}s")
 
@@ -278,7 +366,7 @@ def monitor_files():
                             enable_mid_copy_check=enable_mid_copy_check if not is_dir else False,
                             client_115=client_115,
                             file_sha1=None,
-                            file_size=current_state if is_file else 0,
+                            file_size=current_state['size'] if is_file else 0,
                             target=None,
                             check_interval=mid_copy_check_interval,
                             chunk_size=mid_copy_chunk_size,
@@ -301,10 +389,11 @@ def monitor_files():
                         debug_log(f"🔍 检查秒传: {filename}")
                         debug_log(f"计算 SHA1: {filename}")
                         sha1 = compute_sha1(filepath)
-                        debug_log(f"SHA1: {sha1}, 文件大小: {current_state} bytes, 目标: {target}")
+                        file_size = current_state.get('size', 0) if is_file else 0
+                        debug_log(f"SHA1: {sha1}, 文件大小: {file_size} bytes, 目标: {target}")
                         check = client_115.check_file_exists(
                             sha1, 
-                            current_state, 
+                            file_size, 
                             filename, 
                             target=target,
                             file_path=filepath  # 传入文件路径用于秒传上传
@@ -378,7 +467,7 @@ def monitor_files():
                                 enable_mid_copy_check=enable_mid_copy_check,
                                 client_115=client_115,
                                 file_sha1=sha1,
-                                file_size=current_state,
+                                file_size=file_size,
                                 target=target,
                                 check_interval=mid_copy_check_interval,
                                 chunk_size=mid_copy_chunk_size,
@@ -391,7 +480,7 @@ def monitor_files():
                     # 更新状态，如果状态没变则保持 initial time
                     monitored_file_states[filepath] = {
                         "state": current_state, 
-                        "time": prev['time'] if current_state == prev['state'] else time.time(),
+                        "time": prev['time'] if state_unchanged else time.time(),
                         "is_dir": is_dir,
                         "last_check": prev.get('last_check', 0),
                         "last_success": prev.get('last_success', 0)
