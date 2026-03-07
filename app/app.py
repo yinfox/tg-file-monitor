@@ -27,7 +27,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.6"
+VERSION = "0.4.8"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
@@ -701,6 +701,13 @@ def manage_config():
             config['filename_blacklist'] = blacklist
             save_config(config)
             flash("文件名清理频率配置已更新！", "success")
+
+        elif action == 'update_global_blacklist':
+            global_blacklist_str = request.form.get('global_blacklist_keywords', '')
+            global_blacklist = [k.strip() for k in global_blacklist_str.split(',') if k.strip()]
+            config['global_blacklist_keywords'] = global_blacklist
+            save_config(config)
+            flash("全局黑名单关键词已更新！", "success")
 
         elif action == 'bulk_manage_restricted':
             sub_action = request.form.get('sub_action')

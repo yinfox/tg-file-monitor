@@ -443,6 +443,25 @@
                 </div>
 
                 <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-danger text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-ban me-2"></i>全局黑名单关键词</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_config') }}" method="POST">
+                            <input type="hidden" name="action" value="update_global_blacklist">
+                            <div class="mb-2">
+                                <label class="form-label small">黑名单关键词 <span class="badge bg-light text-dark fw-normal border" style="font-size: 0.65rem;">支持正则</span>:</label>
+                                <textarea class="form-control form-control-sm" id="global_blacklist_keywords"
+                                    name="global_blacklist_keywords" rows="3"
+                                    placeholder="广告,赌场,^垃圾内容.* (逗号分隔)">{{ config.get('global_blacklist_keywords', []) | join(', ') }}</textarea>
+                                <div class="form-text">匹配到的消息将被全局过滤，不会下载或转发</div>
+                            </div>
+                            <button type="submit" class="btn btn-danger btn-sm w-100">保存黑名单</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mb-3 shadow-sm">
                     <div class="card-header bg-primary text-white">
                         <h5 class="mb-0 small"><i class="bi bi-cookie me-2"></i>HDHive Cookies (影巢链接转换)</h5>
                     </div>

@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   telegram_file_monitor:
-    image: y1nf0x/tg-file-monitor:0.4.6
+    image: y1nf0x/tg-file-monitor:0.4.8
     ports:
       - "5001:5001"
     volumes:

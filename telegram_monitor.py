@@ -1128,6 +1128,19 @@ async def new_message_handler(event):
     except Exception as e:
         debug_log(f" 解析消息来源时报错: {e}")
 
+    msg = event.message
+    if not msg:
+        debug_log(" 消息内容为空，忽略")
+        return
+
+    # --- 全局黑名单检查 ---
+    global_blacklist = current_config.get('global_blacklist_keywords', [])
+    if global_blacklist and msg.message:
+        for keyword in global_blacklist:
+            if match_keyword(keyword, msg.message):
+                debug_log(f" 触发全局黑名单关键词 '{keyword}'，跳过消息 {msg.id}")
+                return
+
     # Check for restricted channels first
     debug_log(f" 当前配置中有 {len(current_config.get('restricted_channels', []))} 个关注频道")
     for restricted_entry in current_config.get('restricted_channels', []):
