@@ -50,6 +50,58 @@ def debug_log(message: str):
     log_message(message, level="DEBUG")
 
 
+def get_extension_from_mime(mime_type: str) -> str:
+    """根据MIME类型返回正确的文件扩展名"""
+    mime_map = {
+        'video/mp4': '.mp4',
+        'video/webm': '.webm',
+        'video/x-matroska': '.mkv',
+        'video/quicktime': '.mov',
+        'video/x-msvideo': '.avi',
+        'video/x-flv': '.flv',
+        'video/mpeg': '.mpeg',
+        'audio/mpeg': '.mp3',
+        'audio/ogg': '.ogg',
+        'audio/wav': '.wav',
+        'audio/x-m4a': '.m4a',
+        'image/jpeg': '.jpg',
+        'image/png': '.png',
+        'image/gif': '.gif',
+        'image/webp': '.webp',
+    }
+    
+    if mime_type in mime_map:
+        return mime_map[mime_type]
+    
+    # 降级方案：从MIME类型中提取扩展名
+    if '/' in mime_type:
+        ext = mime_type.split('/')[-1]
+        # 处理特殊格式
+        if ext.startswith('x-'):
+            ext = ext[2:]
+        return f'.{ext}'
+    
+    return ''
+
+
+def create_progress_callback(file_path: str, media_type: str):
+    """创建下载进度回调函数，用于大文件下载"""
+    last_log_time = [0]  # 使用列表避免nonlocal
+    
+    def progress_callback(current, total):
+        # 每5秒或每25%进度记录一次日志
+        current_time = time.time()
+        percent = (current / total * 100) if total > 0 else 0
+        
+        if current_time - last_log_time[0] >= 5 or percent >= 100:
+            size_mb = current / (1024 * 1024)
+            total_mb = total / (1024 * 1024)
+            log_message(f"下载进度 [{media_type}]: {size_mb:.1f}MB / {total_mb:.1f}MB ({percent:.1f}%)")
+            last_log_time[0] = current_time
+    
+    return progress_callback
+
+
 def load_config() -> dict:
     default_config = {
         "telegram": {
@@ -1184,15 +1236,36 @@ async def new_message_handler(event):
                     # Smart filename generation
                     base_name = str(event.message.id)
                     original_ext = ".mp4" # Default fallback
+                    original_filename = None  # 保存原始文件名
+                    expected_size = 0  # 预期文件大小
+                    
                     if media_type_detected == 'photo':
                         original_ext = ".jpg"
                     elif media_type_detected == 'audio':
                         original_ext = ".mp3"
                     
-                    if msg.video and hasattr(msg.video, 'mime_type') and msg.video.mime_type:
-                        original_ext = "." + msg.video.mime_type.split('/')[-1]
-                    elif isinstance(msg.media, MessageMediaDocument) and hasattr(msg.media.document, 'mime_type') and msg.media.document.mime_type:
-                        original_ext = "." + msg.media.document.mime_type.split('/')[-1]
+                    # 优先从document属性中获取原始文件名和扩展名
+                    if msg.document:
+                        expected_size = msg.document.size if hasattr(msg.document, 'size') else 0
+                        for attr in msg.document.attributes:
+                            if hasattr(attr, 'file_name') and attr.file_name:
+                                original_filename = attr.file_name
+                                # 从原始文件名提取扩展名
+                                if '.' in original_filename:
+                                    original_ext = os.path.splitext(original_filename)[1].lower()
+                                break
+                    
+                    # 使用MIME类型识别扩展名（仅在没有原始文件名时）
+                    if not original_filename:
+                        if msg.video and hasattr(msg.video, 'mime_type') and msg.video.mime_type:
+                            ext = get_extension_from_mime(msg.video.mime_type)
+                            if ext:
+                                original_ext = ext
+                            expected_size = msg.video.size if hasattr(msg.video, 'size') else 0
+                        elif isinstance(msg.media, MessageMediaDocument) and hasattr(msg.media.document, 'mime_type') and msg.media.document.mime_type:
+                            ext = get_extension_from_mime(msg.media.document.mime_type)
+                            if ext:
+                                original_ext = ext
 
                     final_filename = ""
                     final_folder_path = download_directory
@@ -1261,40 +1334,59 @@ async def new_message_handler(event):
                     
                     if not final_filename:
                         try:
-                            potential_name = msg.message or "" 
-                            if not potential_name and msg.document:
-                                for attr in msg.document.attributes:
-                                    if hasattr(attr, 'file_name') and attr.file_name:
-                                        potential_name = attr.file_name
-                                        break
-                            
-                            if potential_name:
-                                clean_name = sanitize_filename(potential_name, limit=60)
-                                if clean_name: 
+                            # 如果有原始文件名，优先使用（保持原始扩展名）
+                            if original_filename:
+                                clean_name = sanitize_filename(os.path.splitext(original_filename)[0], limit=60)
+                                if clean_name:
                                     final_filename = f"{clean_name}{original_ext}"
                                 else:
                                     final_filename = f"{base_name}{original_ext}"
                             else:
-                                final_filename = f"{base_name}{original_ext}"
+                                potential_name = msg.message or ""
+                                if potential_name:
+                                    clean_name = sanitize_filename(potential_name, limit=60)
+                                    if clean_name: 
+                                        final_filename = f"{clean_name}{original_ext}"
+                                    else:
+                                        final_filename = f"{base_name}{original_ext}"
+                                else:
+                                    final_filename = f"{base_name}{original_ext}"
                         except Exception as e:
                             final_filename = f"{base_name}{original_ext}"
 
                     file_path = os.path.join(final_folder_path, final_filename)
-                    log_message(f"开始下载 {media_type_detected} 到 {file_path}...")
+                    size_info = f" (预计 {expected_size / (1024*1024):.1f}MB)" if expected_size > 0 else ""
+                    log_message(f"开始下载 {media_type_detected}{size_info} 到 {file_path}...")
                     
                     try:
+                        # 为大文件（>50MB）添加进度回调
+                        progress_cb = None
+                        if expected_size > 50 * 1024 * 1024:  # 50MB
+                            progress_cb = create_progress_callback(file_path, media_type_detected)
+                        
                         downloaded_file = await reliable_action(
                             f"下载 {media_type_detected} {msg.id}",
                             client.download_media,
                             msg,
-                            file=file_path
+                            file=file_path,
+                            progress_callback=progress_cb
                         )
+                        
                         if downloaded_file:
-                            log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。")
+                            # 验证文件完整性
+                            actual_size = os.path.getsize(downloaded_file) if os.path.exists(downloaded_file) else 0
+                            if expected_size > 0 and actual_size > 0:
+                                size_diff_percent = abs(actual_size - expected_size) / expected_size * 100
+                                if size_diff_percent > 5:  # 大小差异超过5%
+                                    log_message(f"警告: 下载文件大小异常 - 预期{expected_size/(1024*1024):.1f}MB，实际{actual_size/(1024*1024):.1f}MB (差异{size_diff_percent:.1f}%)")
+                                else:
+                                    log_message(f"{media_type_detected} 已成功下载到 {downloaded_file} ({actual_size/(1024*1024):.1f}MB)。")
+                            else:
+                                log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。")
                         else:
                             log_message(f"{media_type_detected} 下载失败。")
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        log_message(f"{media_type_detected} 下载异常: {e}")
                 else:
                     log_message(f"跳过下载 {media_type_detected}，因为未配置下载目录。")
 
