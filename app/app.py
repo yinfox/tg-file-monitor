@@ -27,12 +27,13 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.8"
+VERSION = "0.4.18"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
+DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 
 # Load environment variables from config/.env
 try:
@@ -65,7 +66,15 @@ def load_config():
         "proxy": {},
         "115_cookie": "",
         "bot": {"token": ""},
-        "debug_mode": False
+        "debug_mode": False,
+        "trace_media_detection": False,
+        "download_risk_control": {
+            "enabled": True,
+            "per_channel_max_downloads_per_minute": 6,
+            "duplicate_cooldown_seconds": 300,
+            "max_single_file_size_mb": 4096,
+            "min_free_space_gb": 5
+        }
     }
     if not os.path.exists(CONFIG_FILE):
         config = default_config
@@ -79,6 +88,14 @@ def load_config():
                     config["restricted_channels"] = []
                 if "proxy" not in config:
                     config["proxy"] = {}
+                if "trace_media_detection" not in config:
+                    config["trace_media_detection"] = False
+                if "download_risk_control" not in config or not isinstance(config.get("download_risk_control"), dict):
+                    config["download_risk_control"] = default_config["download_risk_control"]
+                else:
+                    merged_risk = default_config["download_risk_control"].copy()
+                    merged_risk.update(config.get("download_risk_control") or {})
+                    config["download_risk_control"] = merged_risk
         except json.JSONDecodeError:
             flash(f"错误: 无法解析 {CONFIG_FILE}。请检查文件格式。", "error")
             config = default_config
@@ -114,6 +131,45 @@ def save_config(config):
     """Saves configuration to config.json."""
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
+
+
+def load_download_risk_stats():
+    default_stats = {
+        "blocked_total": 0,
+        "reasons": {},
+        "last_blocked_reason": "",
+        "last_blocked_at": ""
+    }
+    try:
+        if not os.path.exists(DOWNLOAD_RISK_STATS_FILE):
+            return default_stats
+        with open(DOWNLOAD_RISK_STATS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return default_stats
+        merged = default_stats.copy()
+        merged.update(data)
+        if not isinstance(merged.get('reasons'), dict):
+            merged['reasons'] = {}
+        return merged
+    except Exception:
+        return default_stats
+
+
+def clear_download_risk_stats():
+    try:
+        data = {
+            "blocked_total": 0,
+            "reasons": {},
+            "last_blocked_reason": "",
+            "last_blocked_at": ""
+        }
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(DOWNLOAD_RISK_STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
 
 # Global Telethon client instance for authentication process in Flask
 # This will be short-lived for auth and not the long-running monitor
@@ -160,13 +216,26 @@ class ProcessManager:
             pass
 
     def get_full_log_lines(self):
+        """读取日志，进度行只保留最新一条"""
+        lines = []
         try:
             if os.path.exists(self.log_file_path):
                 with open(self.log_file_path, 'r', encoding='utf-8') as f:
-                    return [line.rstrip('\n') for line in f.readlines()]
+                    lines = [line.rstrip('\n') for line in f.readlines()]
         except Exception:
             pass
-        return list(self.log_buffer)
+        if not lines:
+            lines = list(self.log_buffer)
+        
+        # 合并连续的进度日志，只保留最新一条
+        result = []
+        for line in lines:
+            is_progress = '下载进度' in line
+            if is_progress and result and '下载进度' in result[-1]:
+                result[-1] = line  # 替换上一条进度
+            else:
+                result.append(line)
+        return result
 
     def clear_logs(self):
         self.log_buffer.clear()
@@ -221,8 +290,26 @@ class ProcessManager:
                 if self.script_path == 'app/bot_monitor.py':
                     from downloader_module import downloader
                     downloader.log(line.strip())
-                self.log_buffer.append(entry)
+                
+                # 检测是否为进度日志（单行更新）
+                is_progress_log = '下载进度' in entry or '下载完成' in entry
+                
+                if is_progress_log and len(self.log_buffer) > 0:
+                    # 检查最后一条是否也是进度日志
+                    last_entry = self.log_buffer[-1]
+                    if '下载进度' in last_entry:
+                        # 替换最后一条进度日志
+                        self.log_buffer[-1] = entry
+                    else:
+                        # 最后一条不是进度，正常追加
+                        self.log_buffer.append(entry)
+                else:
+                    # 非进度日志或 buffer 为空，正常追加
+                    self.log_buffer.append(entry)
+                
+                # 写入文件时始终追加（保留完整历史）
                 self._append_to_log_file(entry)
+                
                 if len(self.log_buffer) > self.log_buffer_size:
                     self.log_buffer.pop(0)
         pipe.close()
@@ -261,11 +348,35 @@ def stop_bot_monitor_process():
 def get_bot_monitor_status(): return bot_monitor_mgr.status()
 
 def colorize_log_line(line):
-    """Applies CSS classes to log line based on keywords for colorization."""
-    # Escape HTML characters first to prevent XSS
-    line = html.escape(line) 
+    """Applies CSS classes to log line based on keywords for colorization, supports ANSI color codes."""
+    import uuid
+    
+    # ANSI color code mapping to HTML colors
+    ansi_to_html = {
+        '\033[0m': '</span>',       # Reset
+        '\033[90m': '<span style="color: #888;">',   # Gray (DEBUG)
+        '\033[91m': '<span style="color: #dc3545;">',  # Red (ERROR)
+        '\033[92m': '<span style="color: #28a745;">',  # Green (Success)
+        '\033[93m': '<span style="color: #ffc107;">',  # Yellow (Warning)
+        '\033[96m': '<span style="color: #17a2b8;">',  # Cyan (Progress/秒传)
+    }
+    
+    # Step 1: Replace ANSI codes with unique markers before HTML escaping
+    markers = {}
+    for ansi_code, html_tag in ansi_to_html.items():
+        if ansi_code in line:
+            marker = f"___ANSI_{uuid.uuid4().hex}___"
+            markers[marker] = html_tag
+            line = line.replace(ansi_code, marker)
+    
+    # Step 2: Escape HTML to prevent XSS
+    line = html.escape(line)
+    
+    # Step 3: Restore markers with HTML tags
+    for marker, html_tag in markers.items():
+        line = line.replace(marker, html_tag)
 
-    # Highlight URLs to make real links stand out
+    # Step 4: Highlight URLs
     try:
         line = re.sub(
             r'(https?://[^\s<]+)',
@@ -276,15 +387,18 @@ def colorize_log_line(line):
     except Exception:
         pass
     
-    # Apply colorization based on keywords (case-insensitive search)
-    if "ERROR:" in line or "失败:" in line or "失败。" in line:
-        return f'<span class="text-danger fw-bold">{line}</span>'
-    elif "成功" in line or "已启动" in line:
-        return f'<span class="text-success fw-bold">{line}</span>'
-    elif "警告" in line or "warning" in line:
-        return f'<span class="text-warning fw-bold">{line}</span>'
-    elif "INFO:" in line or "info" in line or "正在连接" in line or "已更新" in line:
-        return f'<span class="text-info fw-bold">{line}</span>'
+    # Step 5: Apply additional colorization based on keywords (only if no ANSI color detected)
+    has_ansi_color = any(marker in line for marker in markers.keys()) or '<span style="color:' in line
+    if not has_ansi_color:
+        if "ERROR:" in line or "失败:" in line or "失败。" in line:
+            return f'<span class="text-danger fw-bold">{line}</span>'
+        elif "成功" in line or "已启动" in line:
+            return f'<span class="text-success fw-bold">{line}</span>'
+        elif "警告" in line or "warning" in line:
+            return f'<span class="text-warning fw-bold">{line}</span>'
+        elif "INFO:" in line or "info" in line or "正在连接" in line or "已更新" in line:
+            return f'<span class="text-info fw-bold">{line}</span>'
+    
     return line
 
 
@@ -293,6 +407,7 @@ def colorize_log_line(line):
 @login_required
 async def index():
     config = load_config()
+    download_risk_stats = load_download_risk_stats()
     api_id = config['telegram'].get('api_id')
     api_hash = config['telegram'].get('api_hash')
     bot_token = config.get('bot', {}).get('token')
@@ -323,7 +438,8 @@ async def index():
                                   auth_status=auth_status,
                                   monitor_status=get_monitor_status(),
                                   file_monitor_status=get_file_monitor_status(),
-                                  bot_monitor_status=get_bot_monitor_status())
+                                  bot_monitor_status=get_bot_monitor_status(),
+                                  download_risk_stats=download_risk_stats)
 
 @app.route('/toggle_debug', methods=['POST'])
 @login_required
@@ -781,6 +897,7 @@ def monitor_log():
 @login_required
 def manage_file_config():
     config = load_config()
+    download_risk_stats = load_download_risk_stats()
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'add':
@@ -788,6 +905,7 @@ def manage_file_config():
             destination_dir = os.path.abspath(request.form['destination_dir'])
             action_type = request.form['action_type']
             stable_time = request.form.get('stable_time', 10)
+            dir_stable_time = request.form.get('dir_stable_time', 30)
             enable_second_transfer = request.form.get('enable_second_transfer') == 'on'
             enable_mid_copy_check = request.form.get('enable_mid_copy_check') == 'on'
             mid_copy_check_interval = request.form.get('mid_copy_check_interval', 30)
@@ -800,8 +918,11 @@ def manage_file_config():
 
             try:
                 stable_time = int(stable_time)
+                dir_stable_time = int(dir_stable_time)
                 mid_copy_check_interval = int(mid_copy_check_interval)
                 mid_copy_chunk_size_mb = int(mid_copy_chunk_size_mb)
+                if dir_stable_time < 1:
+                    raise ValueError("dir_stable_time must be >= 1")
                 if mid_copy_check_interval < 1:
                     raise ValueError("mid_copy_check_interval must be >= 1")
                 if mid_copy_chunk_size_mb < 1:
@@ -824,6 +945,7 @@ def manage_file_config():
                                     "destination_dir": destination_dir,
                                     "action": action_type,
                                     "stable_time": stable_time,
+                                    "dir_stable_time": dir_stable_time,
                                     "handle_duplicate": request.form['handle_duplicate'],
                                     "enable_second_transfer": enable_second_transfer,
                                     "enable_mid_copy_check": enable_mid_copy_check,
@@ -844,6 +966,7 @@ def manage_file_config():
                                 "destination_dir": destination_dir,
                                 "action": action_type,
                                 "stable_time": stable_time,
+                                "dir_stable_time": dir_stable_time,
                                 "handle_duplicate": request.form['handle_duplicate'],
                                 "enable_second_transfer": enable_second_transfer,
                                 "enable_mid_copy_check": enable_mid_copy_check,
@@ -864,6 +987,7 @@ def manage_file_config():
                             "destination_dir": destination_dir,
                             "action": action_type,
                             "stable_time": stable_time,
+                            "dir_stable_time": dir_stable_time,
                             "handle_duplicate": request.form['handle_duplicate'],
                             "enable_second_transfer": enable_second_transfer,
                             "enable_mid_copy_check": enable_mid_copy_check,
@@ -875,7 +999,7 @@ def manage_file_config():
                         save_config(config)
                         flash("文件监控任务添加成功！", "success")
             except ValueError:
-                    flash("稳定时间、检测间隔和块大小必须是整数，且大于等于 1。", "error")
+                    flash("稳定时间、目录稳定时间、检测间隔和块大小必须是整数，且大于等于 1。", "error")
             
         elif action == 'delete':
             source_dir_to_delete = request.form['source_dir']
@@ -889,11 +1013,17 @@ def manage_file_config():
         elif action == 'update_global':
             allowed_browse_path = request.form.get('allowed_browse_path')
             debug_mode = request.form.get('debug_mode') == 'on'
+            trace_media_detection = request.form.get('trace_media_detection') == 'on'
             config['debug_mode'] = debug_mode
+            config['trace_media_detection'] = trace_media_detection
             if os.path.isdir(allowed_browse_path):
                 config['allowed_browse_path'] = os.path.abspath(allowed_browse_path)
                 save_config(config)
-                flash(f"全局设置已更新！DEBUG 模式: {'[开启]' if debug_mode else '[关闭]'}", "success")
+                flash(
+                    f"全局设置已更新！DEBUG 模式: {'[开启]' if debug_mode else '[关闭]'}，"
+                    f"媒体追踪日志: {'[开启]' if trace_media_detection else '[关闭]'}",
+                    "success"
+                )
             else:
                 flash("无效的目录路径。", "error")
 
@@ -904,6 +1034,29 @@ def manage_file_config():
             save_config(config)
             flash("115 Cookie 已更新！", "success")
 
+        elif action == 'update_download_risk_control':
+            try:
+                enabled = request.form.get('risk_enabled') == 'on'
+                per_channel_max = int(request.form.get('per_channel_max_downloads_per_minute', 6))
+                duplicate_cooldown_seconds = int(request.form.get('duplicate_cooldown_seconds', 300))
+                max_single_file_size_mb = int(request.form.get('max_single_file_size_mb', 4096))
+                min_free_space_gb = float(request.form.get('min_free_space_gb', 5))
+
+                if per_channel_max < 0 or duplicate_cooldown_seconds < 0 or max_single_file_size_mb < 0 or min_free_space_gb < 0:
+                    raise ValueError
+
+                config['download_risk_control'] = {
+                    'enabled': enabled,
+                    'per_channel_max_downloads_per_minute': per_channel_max,
+                    'duplicate_cooldown_seconds': duplicate_cooldown_seconds,
+                    'max_single_file_size_mb': max_single_file_size_mb,
+                    'min_free_space_gb': min_free_space_gb,
+                }
+                save_config(config)
+                flash("下载风控设置已更新！", "success")
+            except ValueError:
+                flash("下载风控参数必须是大于等于 0 的数字。", "error")
+
         # After config changes, restart monitor if it was running
         if get_file_monitor_status() == "运行中":
             stop_file_monitor_process()
@@ -911,7 +1064,7 @@ def manage_file_config():
 
         return redirect(url_for('manage_file_config'))
 
-    return render_template('file_config.html', config=config)
+    return render_template('file_config.html', config=config, download_risk_stats=download_risk_stats)
 
 @app.route('/file_monitor_action', methods=['POST'])
 @login_required
@@ -945,6 +1098,16 @@ def clear_file_monitor_log():
     file_monitor_mgr.clear_logs()
     flash("文件监控日志已清除。", "info")
     return redirect(url_for('file_monitor_log'))
+
+
+@app.route('/clear_download_risk_stats', methods=['POST'])
+@login_required
+def clear_download_risk_stats_route():
+    if clear_download_risk_stats():
+        flash("下载风控统计已清零。", "success")
+    else:
+        flash("下载风控统计清零失败。", "error")
+    return redirect(url_for('index'))
 
 @app.route('/download_monitor_log')
 @login_required

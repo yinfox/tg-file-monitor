@@ -20,6 +20,14 @@
   "group_order": ["默认分组"],
   "filename_blacklist": [],
   "debug_mode": false,
+  "trace_media_detection": false,
+  "download_risk_control": {
+    "enabled": true,
+    "per_channel_max_downloads_per_minute": 6,
+    "duplicate_cooldown_seconds": 300,
+    "max_single_file_size_mb": 4096,
+    "min_free_space_gb": 5
+  },
   "hdhive_cookie": "",
   "hdhive_auto_unlock_points_threshold": 0
 }

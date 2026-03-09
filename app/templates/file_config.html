@@ -29,7 +29,8 @@
                                     <div class="text-muted d-flex flex-wrap gap-3">
                                         <span><i class="bi bi-box-arrow-in-right me-1"></i>源:
                                             <code>{{ task.source_dir }}</code></span>
-                                        <span><i class="bi bi-clock-history me-1"></i>{{ task.stable_time }}s</span>
+                                        <span><i class="bi bi-file-earmark-text me-1"></i>文件稳定: {{ task.stable_time }}s</span>
+                                        <span><i class="bi bi-folder2-open me-1"></i>目录稳定: {{ task.get('dir_stable_time', 30) }}s</span>
                                         <span><i class="bi bi-files me-1"></i>{{ task.get('handle_duplicate', '跳过')
                                             }}</span>
 
@@ -102,6 +103,11 @@
                                 <label for="stable_time" class="form-label small">稳定时间(秒):</label>
                                 <input type="number" id="stable_time" name="stable_time"
                                     class="form-control form-control-sm" value="10" min="1">
+                            </div>
+                            <div class="col-md-6 mb-2">
+                                <label for="dir_stable_time" class="form-label small">目录稳定时间(秒):</label>
+                                <input type="number" id="dir_stable_time" name="dir_stable_time"
+                                    class="form-control form-control-sm" value="30" min="1">
                             </div>
                             <div class="col-12 mb-2">
                                 <label for="target_cid" class="form-label small">115 目标目录 CID:</label>
@@ -194,6 +200,16 @@
                                 </div>
                                 <div class="form-text small">开启后会输出详细的调试信息，用于排查问题。</div>
                             </div>
+                            <div class="col-12 mb-2">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="trace_media_detection" name="trace_media_detection"
+                                        {% if config.get('trace_media_detection', False) %}checked{% endif %}>
+                                    <label class="form-check-label small" for="trace_media_detection">
+                                        <i class="bi bi-broadcast me-1"></i>媒体精确追踪日志（TRACE_*）
+                                    </label>
+                                </div>
+                                <div class="form-text small">仅用于排查“有视频但未命中”问题，建议临时开启。</div>
+                            </div>
                             <div class="col-12">
                                 <button type="submit" class="btn btn-dark btn-sm w-100">保存全局设置</button>
                             </div>
@@ -218,6 +234,66 @@
                             <div class="col-12">
                                 <button type="submit" class="btn btn-secondary btn-sm w-100">保存 115 Cookie</button>
                             </div>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-warning text-dark">
+                        <h5 class="mb-0 small"><i class="bi bi-shield-check me-2"></i>下载风控设置</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        {% set risk = config.get('download_risk_control', {}) %}
+                        {% set risk_stats = download_risk_stats or {} %}
+                        <form action="{{ url_for('manage_file_config') }}" method="post" class="row g-2">
+                            <input type="hidden" name="action" value="update_download_risk_control">
+                            <div class="col-12 mb-2">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="risk_enabled" name="risk_enabled"
+                                        {% if risk.get('enabled', True) %}checked{% endif %}>
+                                    <label class="form-check-label small" for="risk_enabled">
+                                        启用下载风控
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="per_channel_max_downloads_per_minute" class="form-label small">每频道每分钟下载上限:</label>
+                                <input type="number" id="per_channel_max_downloads_per_minute" name="per_channel_max_downloads_per_minute"
+                                    class="form-control form-control-sm" min="0" value="{{ risk.get('per_channel_max_downloads_per_minute', 6) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="duplicate_cooldown_seconds" class="form-label small">重复下载冷却(秒):</label>
+                                <input type="number" id="duplicate_cooldown_seconds" name="duplicate_cooldown_seconds"
+                                    class="form-control form-control-sm" min="0" value="{{ risk.get('duplicate_cooldown_seconds', 300) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="max_single_file_size_mb" class="form-label small">单文件大小上限(MB):</label>
+                                <input type="number" id="max_single_file_size_mb" name="max_single_file_size_mb"
+                                    class="form-control form-control-sm" min="0" value="{{ risk.get('max_single_file_size_mb', 4096) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="min_free_space_gb" class="form-label small">最小剩余空间(GB):</label>
+                                <input type="number" id="min_free_space_gb" name="min_free_space_gb"
+                                    class="form-control form-control-sm" min="0" step="0.1" value="{{ risk.get('min_free_space_gb', 5) }}">
+                            </div>
+
+                            <div class="col-12">
+                                <button type="submit" class="btn btn-warning btn-sm w-100">保存下载风控设置</button>
+                            </div>
+                        </form>
+                        <div class="small text-muted mt-2">
+                            <div>累计拦截: <span class="fw-bold text-danger">{{ risk_stats.get('blocked_total', 0) }}</span></div>
+                            {% if risk_stats.get('last_blocked_reason') %}
+                            <div>最近拦截: <span class="fw-bold">{{ risk_stats.get('last_blocked_reason') }}</span></div>
+                            <div>拦截时间: <span class="fw-bold">{{ risk_stats.get('last_blocked_at', '-') }}</span></div>
+                            {% endif %}
+                        </div>
+                        <form action="{{ url_for('clear_download_risk_stats_route') }}" method="post" class="mt-2">
+                            <button type="submit" class="btn btn-outline-danger btn-sm w-100">清零风控计数</button>
                         </form>
                     </div>
                 </div>
@@ -385,6 +461,7 @@
         document.getElementById('destination_dir').value = data.destination_dir || '';
         document.getElementById('action_type').value = data.action || 'copy';
         document.getElementById('stable_time').value = data.stable_time || 10;
+        document.getElementById('dir_stable_time').value = data.dir_stable_time || 30;
         document.getElementById('target_cid').value = data.target_cid || '';
         document.getElementById('handle_duplicate').value = data.handle_duplicate || 'rename';
         document.getElementById('handle_duplicate').value = data.handle_duplicate || 'rename';

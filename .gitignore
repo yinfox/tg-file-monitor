@@ -60,6 +60,7 @@ logs/
 *.temp
 *.db
 config/message_queue.json
+config/download_risk_stats.json
 
 # Downloads
 app/download/

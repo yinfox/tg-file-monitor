@@ -52,11 +52,38 @@ def load_config():
     except: return {"file_monitoring_tasks": [], "debug_mode": False}
 
 def log_message(message, level="INFO"):
-    """输出日志，level 可以是 INFO, DEBUG, ERROR"""
+    """输出日志，level 可以是 INFO, DEBUG, ERROR，支持 ANSI 颜色"""
     timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
     if level == "DEBUG" and not DEBUG_MODE:
         return  # DEBUG 模式关闭时不输出 DEBUG 日志
-    print(f"[{timestamp}] [{level}] {message}")
+    
+    # ANSI 颜色代码
+    color_reset = '\033[0m'
+    color_map = {
+        'DEBUG': '\033[90m',    # 灰色
+        'ERROR': '\033[91m',    # 红色
+        'INFO': ''              # 默认颜色
+    }
+    
+    # 根据消息内容添加颜色
+    msg_color = ''
+    if '✅' in message or '成功' in message:
+        msg_color = '\033[92m'  # 绿色
+    elif '⚡' in message or '秒传' in message:
+        msg_color = '\033[96m'  # 青色
+    elif '🗑️' in message or '删除' in message:
+        msg_color = '\033[93m'  # 黄色
+    elif '❌' in message or '失败' in message:
+        msg_color = '\033[91m'  # 红色
+    elif '⚠️' in message or '警告' in message:
+        msg_color = '\033[93m'  # 黄色
+    
+    level_color = color_map.get(level, '')
+    
+    if msg_color or level_color:
+        print(f"{msg_color or level_color}[{timestamp}] [{level}] {message}{color_reset}")
+    else:
+        print(f"[{timestamp}] [{level}] {message}")
 
 def debug_log(message):
     """便捷的 DEBUG 日志函数"""
@@ -256,28 +283,42 @@ def perform_local_action(filepath, filename, destination_dir, action_type, handl
         log_message(f"❌ 本地{action_type}失败: {filename}\n原因: {e}\n源路径: {filepath}\n目标路径: {target_path if 'target_path' in locals() else '未定义'}", level="ERROR")
         return False
 
-def get_directory_last_modified(directory_path):
-    """递归获取目录内所有文件的最近修改时间"""
+def get_directory_state(directory_path):
+    """递归获取目录状态（最近修改时间、文件数、总大小）用于稳定性判断。"""
     try:
-        max_mtime = os.path.getmtime(directory_path)
+        latest_mtime = os.path.getmtime(directory_path)
+        file_count = 0
+        total_size = 0
+
         for root, dirs, files in os.walk(directory_path):
             for file in files:
                 file_path = os.path.join(root, file)
                 try:
-                    mtime = os.path.getmtime(file_path)
-                    if mtime > max_mtime:
-                        max_mtime = mtime
+                    stat = os.stat(file_path)
+                    file_count += 1
+                    total_size += stat.st_size
+                    if stat.st_mtime > latest_mtime:
+                        latest_mtime = stat.st_mtime
                 except Exception:
                     pass
-        return max_mtime
+
+        return {
+            "mtime": latest_mtime,
+            "file_count": file_count,
+            "total_size": total_size
+        }
     except Exception:
-        return time.time()
+        return {
+            "mtime": time.time(),
+            "file_count": 0,
+            "total_size": 0
+        }
 
 def monitor_files():
     log_message("文件监控程序已启动。")
     log_message(f"DEBUG 模式: {'[开启]' if DEBUG_MODE else '[关闭]'}")
     monitored_file_states = {}
-    last_heartbeat_ts = 0.0
+    last_reported_task_count = None
     
     # 115 客户端（如果配置中提供 cookie 会初始化）
     client_115 = None
@@ -286,10 +327,10 @@ def monitor_files():
         config = load_config()
         tasks = config.get("file_monitoring_tasks", [])
         if DEBUG_MODE:
-            now_ts = time.time()
-            if now_ts - last_heartbeat_ts >= 60:
-                debug_log(f"当前监控任务数: {len(tasks)}")
-                last_heartbeat_ts = now_ts
+            current_task_count = len(tasks)
+            if last_reported_task_count is None or current_task_count != last_reported_task_count:
+                debug_log(f"当前监控任务数: {current_task_count}")
+                last_reported_task_count = current_task_count
         # 尝试从配置读取115 cookie
         cookie_115 = config.get('115_cookie') or config.get('web_115_cookie')
         if cookie_115 and Client115:
@@ -323,9 +364,8 @@ def monitor_files():
                     file_mtime = os.path.getmtime(filepath)
                     current_state = {"size": file_size, "mtime": file_mtime}
                 else:
-                    # 对于目录，获取内部所有文件的最新mtime
-                    dir_mtime = get_directory_last_modified(filepath)
-                    current_state = {"mtime": dir_mtime}
+                    # 对于目录，综合最近修改时间 + 文件数 + 总大小判断是否稳定
+                    current_state = get_directory_state(filepath)
 
                 if filepath not in monitored_file_states:
                     monitored_file_states[filepath] = {
@@ -344,11 +384,17 @@ def monitor_files():
                 
                 prev = monitored_file_states[filepath]
                 state_unchanged = current_state == prev['state']
-                time_stable = (time.time() - prev['time']) >= task.get('stable_time', 10)
+                file_stable_time = task.get('stable_time', 10)
+                dir_stable_time = task.get('dir_stable_time', max(file_stable_time, 30))
+                effective_stable_time = dir_stable_time if is_dir else file_stable_time
+                time_stable = (time.time() - prev['time']) >= effective_stable_time
                 
                 if state_unchanged and time_stable:
                     debug_log(f"检测到稳定{'目录' if is_dir else '文件'}: {filename}")
-                    debug_log(f"信息: state={current_state}, stable_time={time.time() - prev['time']:.1f}s")
+                    debug_log(
+                        f"信息: state={current_state}, stable_time={time.time() - prev['time']:.1f}s"
+                        f" / 阈值={effective_stable_time}s"
+                    )
 
                     enable_second_transfer = task.get('enable_second_transfer', True)
                     target_cid = (task.get('target_cid') or '').strip()

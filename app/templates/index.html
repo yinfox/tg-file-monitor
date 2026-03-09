@@ -82,6 +82,30 @@
                     <span class="fw-bold">{{ config.get('file_monitoring_tasks', []) | length }}</span>
                 </div>
 
+                {% set risk = config.get('download_risk_control', {}) %}
+                <div class="mb-3 small">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="text-muted">下载风控:</span>
+                        {% if risk.get('enabled', True) %}
+                        <span class="badge bg-success">开启</span>
+                        {% else %}
+                        <span class="badge bg-secondary">关闭</span>
+                        {% endif %}
+                    </div>
+                    <div class="text-muted">每频道/分钟: <span class="fw-bold">{{ risk.get('per_channel_max_downloads_per_minute', 6) }}</span></div>
+                    <div class="text-muted">重复冷却: <span class="fw-bold">{{ risk.get('duplicate_cooldown_seconds', 300) }}s</span></div>
+                    <div class="text-muted">单文件上限: <span class="fw-bold">{{ risk.get('max_single_file_size_mb', 4096) }}MB</span></div>
+                    <div class="text-muted">最小剩余: <span class="fw-bold">{{ risk.get('min_free_space_gb', 5) }}GB</span></div>
+                    <div class="text-muted mt-1">累计拦截: <span class="fw-bold text-danger">{{ (download_risk_stats or {}).get('blocked_total', 0) }}</span></div>
+                    {% if (download_risk_stats or {}).get('last_blocked_reason') %}
+                    <div class="text-muted">最近拦截: <span class="fw-bold">{{ (download_risk_stats or {}).get('last_blocked_reason') }}</span></div>
+                    <div class="text-muted">拦截时间: <span class="fw-bold">{{ (download_risk_stats or {}).get('last_blocked_at', '-') }}</span></div>
+                    {% endif %}
+                    <form action="{{ url_for('clear_download_risk_stats_route') }}" method="post" class="mt-2">
+                        <button type="submit" class="btn btn-outline-danger btn-sm w-100">清零风控计数</button>
+                    </form>
+                </div>
+
                 <div class="d-grid gap-2">
                     <form action="{{ url_for('file_monitor_action') }}" method="post" class="w-100">
                         {% if file_monitor_status == "运行中" %}

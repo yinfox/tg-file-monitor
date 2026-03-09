@@ -6,6 +6,8 @@ import traceback
 import sys
 import sqlite3
 import re
+import shutil
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 import html
@@ -14,7 +16,7 @@ from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 import requests
 from telethon.sync import TelegramClient
 from telethon import events
-from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument
+from telethon.tl.types import MessageMediaPhoto, MessageMediaDocument, MessageMediaWebPage
 from telethon.errors import FloodWaitError
 from dotenv import load_dotenv
 
@@ -28,6 +30,7 @@ if not os.path.exists(CONFIG_DIR):
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
+DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 
 # Load environment variables (optional)
 try:
@@ -48,6 +51,16 @@ def log_message(message: str, level: str = "INFO"):
 
 def debug_log(message: str):
     log_message(message, level="DEBUG")
+
+
+def trace_log(message: str):
+    enabled = False
+    try:
+        enabled = bool(current_config.get('trace_media_detection', False))
+    except Exception:
+        enabled = False
+    if enabled:
+        log_message(message, level="INFO")
 
 
 def get_extension_from_mime(mime_type: str) -> str:
@@ -85,19 +98,37 @@ def get_extension_from_mime(mime_type: str) -> str:
 
 
 def create_progress_callback(file_path: str, media_type: str):
-    """创建下载进度回调函数，用于大文件下载"""
-    last_log_time = [0]  # 使用列表避免nonlocal
+    """创建下载进度回调函数，用于大文件下载 - 单行更新进度"""
+    last_log_time = [0]
+    last_log_percent = [0]
     
     def progress_callback(current, total):
-        # 每5秒或每25%进度记录一次日志
+        # 每1秒或每5%更新一次进度（Web UI 会自动替换同一行）
         current_time = time.time()
         percent = (current / total * 100) if total > 0 else 0
         
-        if current_time - last_log_time[0] >= 5 or percent >= 100:
+        time_threshold = current_time - last_log_time[0] >= 1
+        percent_threshold = percent - last_log_percent[0] >= 5
+        is_complete = percent >= 100
+        
+        if time_threshold or percent_threshold or is_complete:
             size_mb = current / (1024 * 1024)
             total_mb = total / (1024 * 1024)
-            log_message(f"下载进度 [{media_type}]: {size_mb:.1f}MB / {total_mb:.1f}MB ({percent:.1f}%)")
+            
+            # ANSI 颜色代码：青色醒目进度
+            cyan = "\033[96m"
+            green = "\033[92m"
+            reset = "\033[0m"
+            
+            if is_complete:
+                # 完成时用绿色
+                log_message(f"{green}下载完成 [{media_type}]: {size_mb:.1f}MB / {total_mb:.1f}MB (100%){reset}")
+            else:
+                # 进行中用青色
+                log_message(f"{cyan}下载进度 [{media_type}]: {size_mb:.1f}MB / {total_mb:.1f}MB ({percent:.1f}%){reset}")
+            
             last_log_time[0] = current_time
+            last_log_percent[0] = percent
     
     return progress_callback
 
@@ -112,8 +143,16 @@ def load_config() -> dict:
         "restricted_channels": [],
         "proxy": {},
         "debug_mode": False,
+        "trace_media_detection": False,
         "hdhive_cookie": "",
         "hdhive_auto_unlock_points_threshold": 0,
+        "download_risk_control": {
+            "enabled": True,
+            "per_channel_max_downloads_per_minute": 6,
+            "duplicate_cooldown_seconds": 300,
+            "max_single_file_size_mb": 4096,
+            "min_free_space_gb": 5,
+        },
     }
 
     if not os.path.exists(CONFIG_FILE):
@@ -129,12 +168,20 @@ def load_config() -> dict:
             config['restricted_channels'] = []
         if 'proxy' not in config:
             config['proxy'] = {}
+        if 'trace_media_detection' not in config:
+            config['trace_media_detection'] = False
         if 'debug_mode' not in config:
             config['debug_mode'] = False
         if 'hdhive_cookie' not in config:
             config['hdhive_cookie'] = ''
         if 'hdhive_auto_unlock_points_threshold' not in config:
             config['hdhive_auto_unlock_points_threshold'] = 0
+        if 'download_risk_control' not in config or not isinstance(config.get('download_risk_control'), dict):
+            config['download_risk_control'] = default_config['download_risk_control']
+        else:
+            merged_risk = default_config['download_risk_control'].copy()
+            merged_risk.update(config.get('download_risk_control') or {})
+            config['download_risk_control'] = merged_risk
         return config
     except Exception:
         return default_config
@@ -241,6 +288,256 @@ _hdhive_resolve_cache: Dict[str, Tuple[float, Optional[str]]] = {}
 _HDHIVE_CACHE_TTL_SECONDS = 6 * 60 * 60
 _HDHIVE_NEGATIVE_CACHE_TTL_SECONDS = 5 * 60
 _album_folder_cache: Dict[int, str] = {}
+
+_download_attempt_timestamps: Dict[int, deque] = {}
+_download_dedup_cache: Dict[str, float] = {}
+_download_risk_stats = {
+    'blocked_total': 0,
+    'reasons': {},
+    'last_blocked_reason': '',
+    'last_blocked_at': '',
+}
+
+
+def _persist_download_risk_stats():
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(DOWNLOAD_RISK_STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_download_risk_stats, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _record_download_risk_block(reason: str):
+    reason_key = (reason or 'unknown').strip()
+    _download_risk_stats['blocked_total'] = int(_download_risk_stats.get('blocked_total', 0)) + 1
+    reasons = _download_risk_stats.setdefault('reasons', {})
+    reasons[reason_key] = int(reasons.get(reason_key, 0)) + 1
+    _download_risk_stats['last_blocked_reason'] = reason_key
+    _download_risk_stats['last_blocked_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    _persist_download_risk_stats()
+
+
+def _get_download_risk_control_config() -> Dict[str, float]:
+    risk_cfg = (current_config or {}).get('download_risk_control', {}) if isinstance(current_config, dict) else {}
+    if not isinstance(risk_cfg, dict):
+        risk_cfg = {}
+
+    enabled = bool(risk_cfg.get('enabled', True))
+    per_channel_max = int(risk_cfg.get('per_channel_max_downloads_per_minute', 6) or 0)
+    duplicate_cooldown = int(risk_cfg.get('duplicate_cooldown_seconds', 300) or 0)
+    max_single_file_size_mb = int(risk_cfg.get('max_single_file_size_mb', 4096) or 0)
+    min_free_space_gb = float(risk_cfg.get('min_free_space_gb', 5) or 0)
+
+    return {
+        'enabled': enabled,
+        'per_channel_max_downloads_per_minute': max(0, per_channel_max),
+        'duplicate_cooldown_seconds': max(0, duplicate_cooldown),
+        'max_single_file_size_mb': max(0, max_single_file_size_mb),
+        'min_free_space_gb': max(0.0, min_free_space_gb),
+    }
+
+
+def _build_download_fingerprint(msg, restricted_channel_id: int) -> str:
+    document = getattr(msg, 'document', None)
+    if document and getattr(document, 'id', None):
+        return f"ch:{restricted_channel_id}:doc:{document.id}:{getattr(document, 'size', 0)}"
+
+    video = getattr(msg, 'video', None)
+    if video and getattr(video, 'id', None):
+        return f"ch:{restricted_channel_id}:video:{video.id}:{getattr(video, 'size', 0)}"
+
+    photo = getattr(msg, 'photo', None)
+    if photo and getattr(photo, 'id', None):
+        return f"ch:{restricted_channel_id}:photo:{photo.id}"
+
+    grouped_id = getattr(msg, 'grouped_id', None)
+    if grouped_id:
+        return f"ch:{restricted_channel_id}:group:{grouped_id}:msg:{msg.id}"
+
+    return f"ch:{restricted_channel_id}:msg:{msg.id}"
+
+
+def _cleanup_download_risk_state(now_ts: float, window_seconds: int, dedup_cooldown_seconds: int):
+    for channel_id in list(_download_attempt_timestamps.keys()):
+        ts_queue = _download_attempt_timestamps.get(channel_id)
+        if not ts_queue:
+            _download_attempt_timestamps.pop(channel_id, None)
+            continue
+        while ts_queue and (now_ts - ts_queue[0]) > window_seconds:
+            ts_queue.popleft()
+        if not ts_queue:
+            _download_attempt_timestamps.pop(channel_id, None)
+
+    if dedup_cooldown_seconds <= 0:
+        return
+    expire_before = now_ts - dedup_cooldown_seconds
+    for fp in list(_download_dedup_cache.keys()):
+        if _download_dedup_cache.get(fp, 0) < expire_before:
+            _download_dedup_cache.pop(fp, None)
+
+
+def _check_download_risk_controls(*, restricted_channel_id: int, download_directory: str, msg, expected_size: int) -> Tuple[bool, str, int]:
+    cfg = _get_download_risk_control_config()
+    if not cfg.get('enabled'):
+        return True, '', 0
+
+    now_ts = time.time()
+    window_seconds = 60
+    per_channel_max = int(cfg.get('per_channel_max_downloads_per_minute', 0) or 0)
+    dedup_cooldown_seconds = int(cfg.get('duplicate_cooldown_seconds', 0) or 0)
+    max_single_file_size_mb = int(cfg.get('max_single_file_size_mb', 0) or 0)
+    min_free_space_gb = float(cfg.get('min_free_space_gb', 0) or 0)
+
+    _cleanup_download_risk_state(now_ts, window_seconds, dedup_cooldown_seconds)
+
+    def blocked(reason: str, retry_after: int = 0) -> Tuple[bool, str, int]:
+        _record_download_risk_block(reason)
+        return False, reason, max(0, int(retry_after or 0))
+
+    if max_single_file_size_mb > 0 and expected_size > 0:
+        max_size_bytes = max_single_file_size_mb * 1024 * 1024
+        if expected_size > max_size_bytes:
+            return blocked(f"文件体积超限: {expected_size / (1024 * 1024):.1f}MB > {max_single_file_size_mb}MB")
+
+    if min_free_space_gb > 0 and download_directory:
+        try:
+            _, _, free_bytes = shutil.disk_usage(download_directory)
+            min_free_bytes = int(min_free_space_gb * 1024 * 1024 * 1024)
+            if free_bytes < min_free_bytes:
+                return blocked(
+                    f"磁盘剩余空间不足: {free_bytes / (1024 ** 3):.2f}GB < {min_free_space_gb:.2f}GB"
+                )
+        except Exception as e:
+            log_message(f"下载风控: 磁盘空间检查失败，继续下载。原因: {e}", level="DEBUG")
+
+    if per_channel_max > 0:
+        channel_queue = _download_attempt_timestamps.setdefault(restricted_channel_id, deque())
+        while channel_queue and (now_ts - channel_queue[0]) > window_seconds:
+            channel_queue.popleft()
+        if len(channel_queue) >= per_channel_max:
+            oldest_ts = channel_queue[0] if channel_queue else now_ts
+            retry_after = max(1, int(window_seconds - (now_ts - oldest_ts)) + 1)
+            return blocked(f"频道每分钟下载上限触发: {len(channel_queue)}/{per_channel_max}", retry_after=retry_after)
+
+    if dedup_cooldown_seconds > 0:
+        fingerprint = _build_download_fingerprint(msg, restricted_channel_id)
+        last_ts = _download_dedup_cache.get(fingerprint)
+        if last_ts and (now_ts - last_ts) < dedup_cooldown_seconds:
+            remaining = max(1, int(dedup_cooldown_seconds - (now_ts - last_ts)) + 1)
+            return blocked(f"重复下载冷却中，剩余 {remaining}s", retry_after=remaining)
+        _download_dedup_cache[fingerprint] = now_ts
+
+    if per_channel_max > 0:
+        _download_attempt_timestamps[restricted_channel_id].append(now_ts)
+
+    return True, '', 0
+
+
+def _resolve_non_conflicting_path(file_path: str, msg_id: int) -> str:
+    """避免同名覆盖：若目标文件已存在，附加消息ID和序号。"""
+    if not os.path.exists(file_path):
+        return file_path
+
+    directory, filename = os.path.split(file_path)
+    base, ext = os.path.splitext(filename)
+
+    candidate = os.path.join(directory, f"{base}_msg{msg_id}{ext}")
+    if not os.path.exists(candidate):
+        return candidate
+
+    index = 1
+    while True:
+        candidate = os.path.join(directory, f"{base}_msg{msg_id}_{index}{ext}")
+        if not os.path.exists(candidate):
+            return candidate
+        index += 1
+
+
+def _extract_document_filename(msg) -> str:
+    document = _get_primary_document(msg)
+    if not document:
+        return ''
+    try:
+        for attr in getattr(document, 'attributes', []) or []:
+            file_name = getattr(attr, 'file_name', None)
+            if file_name:
+                return str(file_name)
+    except Exception:
+        pass
+    return ''
+
+
+def _get_primary_document(msg):
+    document = getattr(msg, 'document', None)
+    if document:
+        return document
+
+    media = getattr(msg, 'media', None)
+    if isinstance(media, MessageMediaDocument):
+        return getattr(media, 'document', None)
+
+    if isinstance(media, MessageMediaWebPage):
+        webpage = getattr(media, 'webpage', None)
+        return getattr(webpage, 'document', None)
+
+    return None
+
+
+def _is_video_like_message(msg) -> bool:
+    if getattr(msg, 'video', None) or getattr(msg, 'video_note', None) or getattr(msg, 'gif', None):
+        return True
+
+    document = _get_primary_document(msg)
+
+    if not document:
+        return False
+
+    mime_type = (getattr(document, 'mime_type', '') or '').lower()
+    if mime_type.startswith('video/'):
+        return True
+
+    try:
+        for attr in getattr(document, 'attributes', []) or []:
+            if attr.__class__.__name__ == 'DocumentAttributeVideo':
+                return True
+            if attr.__class__.__name__ == 'DocumentAttributeAnimated':
+                return True
+    except Exception:
+        pass
+
+    filename = _extract_document_filename(msg).lower()
+    if filename:
+        video_exts = ('.mp4', '.mkv', '.mov', '.webm', '.avi', '.flv', '.mpeg', '.mpg', '.m4v', '.3gp', '.gif')
+        if filename.endswith(video_exts):
+            return True
+
+    if mime_type in ('image/gif', 'application/x-mpegurl'):
+        return True
+
+    return False
+
+
+def _build_media_trace(msg) -> str:
+    """构建可读的媒体追踪信息，便于定位漏检。"""
+    try:
+        media = getattr(msg, 'media', None)
+        media_cls = media.__class__.__name__ if media else 'None'
+        document = _get_primary_document(msg)
+        mime_type = (getattr(document, 'mime_type', '') or '') if document else ''
+        attributes = []
+        if document and getattr(document, 'attributes', None):
+            attributes = [a.__class__.__name__ for a in document.attributes]
+        file_name = _extract_document_filename(msg)
+
+        return (
+            f"media={media_cls}, mime={mime_type or '-'}, attrs={attributes or []}, "
+            f"file={file_name or '-'}, flags=(video={bool(getattr(msg, 'video', None))},"
+            f" video_note={bool(getattr(msg, 'video_note', None))}, gif={bool(getattr(msg, 'gif', None))},"
+            f" photo={bool(getattr(msg, 'photo', None))}, audio={bool(getattr(msg, 'audio', None) or getattr(msg, 'voice', None))})"
+        )
+    except Exception as e:
+        return f"trace_build_failed={e}"
 
 
 def _get_hdhive_cookie_header() -> str:
@@ -1171,11 +1468,34 @@ async def new_message_handler(event):
                 debug_log(" 消息内容为空，忽略")
                 return
 
+            media_trace = _build_media_trace(msg)
+
+            message_text_for_filter = msg.message or ""
+            if not message_text_for_filter and msg.grouped_id:
+                try:
+                    nearby_msgs = await client.get_messages(
+                        event.chat_id,
+                        limit=50,
+                        min_id=max(msg.id - 20, 0),
+                        max_id=msg.id + 20
+                    )
+                    nearby_msgs = list(nearby_msgs) if nearby_msgs else []
+                    for m in nearby_msgs:
+                        if m.grouped_id == msg.grouped_id and m.message:
+                            message_text_for_filter = m.message
+                            break
+                except Exception:
+                    pass
+
             # --- Blacklist Check ---
             blacklist = restricted_entry.get('blacklist_keywords', [])
-            if blacklist and msg.message:
+            if blacklist and message_text_for_filter:
                 for keyword in blacklist:
-                    if match_keyword(keyword, msg.message):
+                    if match_keyword(keyword, message_text_for_filter):
+                        if getattr(msg, 'media', None):
+                            trace_log(
+                                f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=blacklist keyword='{keyword}' | {media_trace}",
+                            )
                         debug_log(f"在频道 {restricted_channel_id} 中检测到黑名单关键词或正则 '{keyword}'，跳过。")
                         return
 
@@ -1183,20 +1503,24 @@ async def new_message_handler(event):
             whitelist = restricted_entry.get('whitelist_keywords', [])
             if whitelist:
                 found_whitelist = False
-                if msg.message:
+                if message_text_for_filter:
                     for keyword in whitelist:
-                        if match_keyword(keyword, msg.message):
+                        if match_keyword(keyword, message_text_for_filter):
                             found_whitelist = True
                             break
                 if not found_whitelist:
+                    if getattr(msg, 'media', None):
+                        trace_log(
+                            f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=whitelist_miss | {media_trace}",
+                        )
                     debug_log(f"在频道 {restricted_channel_id} 中未检测到白名单关键词或正则，跳过消息 {msg.id}。")
                     return
 
             # --- Detect Message Type ---
             media_type_detected = 'text'
-            if msg.video:
-                media_type_detected = 'video'
-            elif isinstance(msg.media, MessageMediaDocument) and msg.media.document.mime_type.startswith('video/'):
+            debug_log(f" 原始媒体: {media_trace}")
+
+            if _is_video_like_message(msg):
                 media_type_detected = 'video'
             elif msg.photo:
                 media_type_detected = 'photo'
@@ -1208,9 +1532,23 @@ async def new_message_handler(event):
             debug_log(f" 消息类型: {media_type_detected}")
             
             # --- Check Monitor Type ---
-            monitor_type = restricted_entry.get('monitor_type', 'all')
-            if monitor_type != 'all' and monitor_type != media_type_detected:
-                debug_log(f" 频道监控类型为 '{monitor_type}'，与消息类型 '{media_type_detected}' 不匹配，跳过。")
+            monitor_types = restricted_entry.get('monitor_types')
+            if isinstance(monitor_types, list) and monitor_types:
+                normalized_types = [str(t).strip().lower() for t in monitor_types if str(t).strip()]
+            else:
+                single_type = str(restricted_entry.get('monitor_type', 'all')).strip().lower()
+                normalized_types = [single_type] if single_type else ['all']
+
+            if 'all' not in normalized_types and media_type_detected not in normalized_types:
+                if getattr(msg, 'media', None):
+                    trace_log(
+                        f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=monitor_type_mismatch "
+                        f"configured={normalized_types} detected={media_type_detected} | {media_trace}"
+                    )
+                debug_log(
+                    f" 频道监控类型为 '{','.join(normalized_types)}'，"
+                    f"与消息类型 '{media_type_detected}' 不匹配，跳过。"
+                )
                 return
 
             # --- Enable Forward/Download Flags ---
@@ -1230,12 +1568,22 @@ async def new_message_handler(event):
             
             debug_log(f" 配置读取 - 转发开关(keep_video_message): {should_forward}, 下载目录: '{download_directory}'")
             debug_log(f" 最终判定 - 下载: {should_download}, 转发: {should_forward}")
+            if getattr(msg, 'media', None):
+                trace_log(
+                    f"[TRACE_DETECT] ch={restricted_channel_id} msg={msg.id} detected={media_type_detected} "
+                    f"download={should_download} forward={should_forward} | {media_trace}"
+                )
             
             # --- Decision Logic ---
             # Use the flags we already determined based on monitor_type
             is_monitored = True # We already filtered by monitor_type above
 
             if not should_download and not should_forward:
+                 if getattr(msg, 'media', None):
+                     trace_log(
+                         f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=no_action "
+                         f"detected={media_type_detected} | {media_trace}"
+                     )
                  debug_log(f" 消息 {msg.id} 既不需要下载也不需要转发，跳过")
                  return
 
@@ -1248,6 +1596,10 @@ async def new_message_handler(event):
                     os.makedirs(download_directory, exist_ok=True)
                     # Smart filename generation
                     base_name = str(event.message.id)
+                    download_target = msg
+                    primary_document = _get_primary_document(msg)
+                    if isinstance(getattr(msg, 'media', None), MessageMediaWebPage) and primary_document:
+                        download_target = primary_document
                     original_ext = ".mp4" # Default fallback
                     original_filename = None  # 保存原始文件名
                     expected_size = 0  # 预期文件大小
@@ -1258,9 +1610,9 @@ async def new_message_handler(event):
                         original_ext = ".mp3"
                     
                     # 优先从document属性中获取原始文件名和扩展名
-                    if msg.document:
-                        expected_size = msg.document.size if hasattr(msg.document, 'size') else 0
-                        for attr in msg.document.attributes:
+                    if primary_document:
+                        expected_size = primary_document.size if hasattr(primary_document, 'size') else 0
+                        for attr in getattr(primary_document, 'attributes', []) or []:
                             if hasattr(attr, 'file_name') and attr.file_name:
                                 original_filename = attr.file_name
                                 # 从原始文件名提取扩展名
@@ -1275,8 +1627,8 @@ async def new_message_handler(event):
                             if ext:
                                 original_ext = ext
                             expected_size = msg.video.size if hasattr(msg.video, 'size') else 0
-                        elif isinstance(msg.media, MessageMediaDocument) and hasattr(msg.media.document, 'mime_type') and msg.media.document.mime_type:
-                            ext = get_extension_from_mime(msg.media.document.mime_type)
+                        elif primary_document and hasattr(primary_document, 'mime_type') and primary_document.mime_type:
+                            ext = get_extension_from_mime(primary_document.mime_type)
                             if ext:
                                 original_ext = ext
 
@@ -1290,9 +1642,14 @@ async def new_message_handler(event):
                             search_max_id = msg.id + 10
                             nearby_msgs = await client.get_messages(
                                 event.chat_id, 
+                                limit=50,
                                 min_id=search_min_id if search_min_id > 0 else 0, 
                                 max_id=search_max_id
                             )
+                            if nearby_msgs is None:
+                                nearby_msgs = []
+                            else:
+                                nearby_msgs = list(nearby_msgs)
                             album_msgs = [m for m in nearby_msgs if m.grouped_id == msg.grouped_id]
                             if not any(m.id == msg.id for m in album_msgs):
                                 album_msgs.append(msg)
@@ -1347,59 +1704,85 @@ async def new_message_handler(event):
                     
                     if not final_filename:
                         try:
-                            # 如果有原始文件名，优先使用（保持原始扩展名）
-                            if original_filename:
+                            # 优先级调整：消息文本 > 原始文件名 > fallback
+                            potential_name = msg.message or ""
+                            if potential_name:
+                                # 优先使用消息文本作为文件名
+                                clean_name = sanitize_filename(potential_name, limit=60)
+                                if clean_name:
+                                    final_filename = f"{clean_name}{original_ext}"
+                                else:
+                                    final_filename = f"{base_name}{original_ext}"
+                            elif original_filename:
+                                # 其次使用原始文件名（保持原始扩展名）
                                 clean_name = sanitize_filename(os.path.splitext(original_filename)[0], limit=60)
                                 if clean_name:
                                     final_filename = f"{clean_name}{original_ext}"
                                 else:
                                     final_filename = f"{base_name}{original_ext}"
                             else:
-                                potential_name = msg.message or ""
-                                if potential_name:
-                                    clean_name = sanitize_filename(potential_name, limit=60)
-                                    if clean_name: 
-                                        final_filename = f"{clean_name}{original_ext}"
-                                    else:
-                                        final_filename = f"{base_name}{original_ext}"
-                                else:
-                                    final_filename = f"{base_name}{original_ext}"
+                                # 最后使用默认名称
+                                final_filename = f"{base_name}{original_ext}"
                         except Exception as e:
                             final_filename = f"{base_name}{original_ext}"
 
                     file_path = os.path.join(final_folder_path, final_filename)
+                    safe_file_path = _resolve_non_conflicting_path(file_path, msg.id)
+                    if safe_file_path != file_path:
+                        log_message(f"检测到同名文件，改用防覆盖路径: {os.path.basename(safe_file_path)}")
+                    file_path = safe_file_path
                     size_info = f" (预计 {expected_size / (1024*1024):.1f}MB)" if expected_size > 0 else ""
                     log_message(f"开始下载 {media_type_detected}{size_info} 到 {file_path}...")
-                    
-                    try:
-                        # 为大文件（>50MB）添加进度回调
-                        progress_cb = None
-                        if expected_size > 50 * 1024 * 1024:  # 50MB
-                            progress_cb = create_progress_callback(file_path, media_type_detected)
-                        
-                        downloaded_file = await reliable_action(
-                            f"下载 {media_type_detected} {msg.id}",
-                            client.download_media,
-                            msg,
-                            file=file_path,
-                            progress_callback=progress_cb
+
+                    while True:
+                        can_download, risk_reason, retry_after = _check_download_risk_controls(
+                            restricted_channel_id=restricted_channel_id,
+                            download_directory=final_folder_path,
+                            msg=msg,
+                            expected_size=expected_size,
                         )
-                        
-                        if downloaded_file:
-                            # 验证文件完整性
-                            actual_size = os.path.getsize(downloaded_file) if os.path.exists(downloaded_file) else 0
-                            if expected_size > 0 and actual_size > 0:
-                                size_diff_percent = abs(actual_size - expected_size) / expected_size * 100
-                                if size_diff_percent > 5:  # 大小差异超过5%
-                                    log_message(f"警告: 下载文件大小异常 - 预期{expected_size/(1024*1024):.1f}MB，实际{actual_size/(1024*1024):.1f}MB (差异{size_diff_percent:.1f}%)")
+                        if can_download:
+                            break
+
+                        if retry_after > 0:
+                            log_message(f"触发下载风控，已进入队列等待 {retry_after}s 后重试: {risk_reason}")
+                            await asyncio.sleep(retry_after)
+                            continue
+
+                        log_message(f"触发下载风控，已跳过下载: {risk_reason}")
+                        downloaded_file = None
+                        break
+
+                    if can_download:
+                        try:
+                            # 为大文件（>50MB）添加进度回调
+                            progress_cb = None
+                            if expected_size > 50 * 1024 * 1024:  # 50MB
+                                progress_cb = create_progress_callback(file_path, media_type_detected)
+                            
+                            downloaded_file = await reliable_action(
+                                f"下载 {media_type_detected} {msg.id}",
+                                client.download_media,
+                                download_target,
+                                file=file_path,
+                                progress_callback=progress_cb
+                            )
+                            
+                            if downloaded_file:
+                                # 验证文件完整性
+                                actual_size = os.path.getsize(downloaded_file) if os.path.exists(downloaded_file) else 0
+                                if expected_size > 0 and actual_size > 0:
+                                    size_diff_percent = abs(actual_size - expected_size) / expected_size * 100
+                                    if size_diff_percent > 5:  # 大小差异超过5%
+                                        log_message(f"警告: 下载文件大小异常 - 预期{expected_size/(1024*1024):.1f}MB，实际{actual_size/(1024*1024):.1f}MB (差异{size_diff_percent:.1f}%)")
+                                    else:
+                                        log_message(f"{media_type_detected} 已成功下载到 {downloaded_file} ({actual_size/(1024*1024):.1f}MB)。")
                                 else:
-                                    log_message(f"{media_type_detected} 已成功下载到 {downloaded_file} ({actual_size/(1024*1024):.1f}MB)。")
+                                    log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。")
                             else:
-                                log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。")
-                        else:
-                            log_message(f"{media_type_detected} 下载失败。")
-                    except Exception as e:
-                        log_message(f"{media_type_detected} 下载异常: {e}")
+                                log_message(f"{media_type_detected} 下载失败。")
+                        except Exception as e:
+                            log_message(f"{media_type_detected} 下载异常: {e}")
                 else:
                     log_message(f"跳过下载 {media_type_detected}，因为未配置下载目录。")
 

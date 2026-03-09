@@ -48,8 +48,6 @@ def load_config():
         logger.error(f"Failed to load config: {e}")
         return {}
 
-import time
-
 def merge_cookies_logic(existing_path, new_path):
     """
     Merges new cookies into existing cookies.
