@@ -40,24 +40,53 @@
 ### ⚡ 5分钟部署
 
 ```bash
-# 1. 安装依赖
+# 1. 创建并激活虚拟环境（推荐）
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 2. 安装依赖
 pip install -r requirements.txt
 
-# 2. 配置API（在config/.env中）
+# 3. 配置API（在config/.env中）
 TELEGRAM_API_ID=your_api_id
 TELEGRAM_API_HASH=your_api_hash
 
-# 3. 启动Web界面
+# 4. 启动Web界面
 python app/app.py
 
-# 4. 访问 http://localhost:5001/web_login
+# 5. 访问 http://localhost:5001/web_login
 # 首次访问会引导设置初始密码（用户名默认为 admin）
 ```
 
 ### 🐳 Docker 一键部署
 
 ```bash
-docker-compose up -d
+docker compose up -d
+```
+
+## 🖥️ VPS 部署建议
+
+### 基础检查
+
+```bash
+# 时间同步（Telethon 强依赖）
+timedatectl status
+
+# 防火墙确保放行 Web 端口
+sudo ufw allow 5001/tcp
+```
+
+### 进程运行建议
+
+- 优先使用 Docker/Compose 运行，便于重启与回滚。
+- 若使用 Python 直接运行，建议配合 systemd 守护进程，避免 SSH 断开导致服务退出。
+- 不要让多个进程同时占用同一个 `.session` 文件。
+
+### 升级建议
+
+```bash
+git pull
+docker compose up -d --build
 ```
 
 ## 📖 使用指南
@@ -130,6 +159,13 @@ Web 界面 → 配置 → 代理配置
 例如: "频道名称", "t.me/xxx"
 ```
 
+## 🔐 安全建议
+
+- 不要提交 `config/config.json`、`config/.env`、`*.session` 到 GitHub。
+- API 凭据优先放在环境变量或 `.env`，避免硬编码。
+- 建议将 Web 管理面板放在反向代理后，并限制访问来源 IP。
+- 生产环境建议开启 HTTPS（如 Nginx + Let's Encrypt）。
+
 ## 💡 常见问题
 
 <details>
@@ -158,6 +194,28 @@ Web 界面 → 配置 → 代理配置
 2. 是否有读取权限
 3. 稳定时间是否设置合理
 4. 查看"文件监控日志"了解详情
+</details>
+
+<details>
+<summary><b>Q: 出现 <code>Server sent a very old message with ID ...</code> 怎么办？</b></summary>
+
+**原因：**
+常见于系统时间漂移、NTP 未同步、或旧会话文件异常。
+
+**处理步骤：**
+1. 检查时间同步：`timedatectl status`
+2. 开启 NTP：`sudo timedatectl set-ntp true`
+3. 停止相关进程后重建 session（备份并删除 `config/*.session*`）
+4. 重新登录 Telegram 授权
+</details>
+
+<details>
+<summary><b>Q: Bot/监控启动提示数据库锁定（database is locked）？</b></summary>
+
+**处理方式：**
+1. 停止所有相关进程（Web / monitor / bot）
+2. 执行仓库内脚本：`bash fix_database_lock.sh`
+3. 再次启动服务并观察日志
 </details>
 
 ## 🛠️ 技术栈
