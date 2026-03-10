@@ -68,6 +68,19 @@ def _token_fingerprint(token: str) -> str:
     return f"sha1:{digest},len:{len(token)}"
 
 
+def _extract_bot_id_from_token(bot_token: str) -> Optional[int]:
+    """Extract bot id prefix from token like '<bot_id>:<secret>' for validation."""
+    if not bot_token or ':' not in bot_token:
+        return None
+    head = (bot_token or '').split(':', 1)[0].strip()
+    if not head.isdigit():
+        return None
+    try:
+        return int(head)
+    except Exception:
+        return None
+
+
 def resolve_writable_download_dir(config):
     """Return a writable download path, falling back to project downloads dir."""
     configured_path = config.get('downloader', {}).get('default_path') or os.path.join(BASE_DIR, 'downloads')
@@ -847,6 +860,48 @@ async def main():
                 await msg.edit(f"发生错误: {str(e)}")
         else:
             await event.reply("请发送有效的视频链接（支持 YouTube/Instagram 等）。")
+
+    # Ensure existing session matches the current bot token.
+    # Otherwise Telethon may ignore the provided bot token and keep old auth.
+    expected_bot_id = _extract_bot_id_from_token(bot_token)
+    try:
+        await client.connect()
+        if await client.is_user_authorized():
+            me = await client.get_me()
+            current_id = int(getattr(me, 'id', 0) or 0)
+            is_bot = bool(getattr(me, 'bot', False))
+
+            must_reset = False
+            reset_reason = ""
+            if not is_bot:
+                must_reset = True
+                reset_reason = "session is bound to a user account"
+            elif expected_bot_id and current_id and current_id != expected_bot_id:
+                must_reset = True
+                reset_reason = f"session bot id {current_id} != token bot id {expected_bot_id}"
+
+            if must_reset:
+                downloader.log(
+                    f"Detected stale bot session ({reset_reason}), rebuilding bot session...",
+                    "warning"
+                )
+                await client.disconnect()
+                for suffix in ('.session', '.session-journal', '.session-shm', '.session-wal'):
+                    try:
+                        p = session_path + suffix
+                        if os.path.exists(p):
+                            os.remove(p)
+                    except Exception as e:
+                        downloader.log(f"Failed to remove old session file: {e}", "warning")
+                client = TelegramClient(session_path, api_id, api_hash)
+        else:
+            await client.disconnect()
+    except Exception as e:
+        downloader.log(f"Session precheck failed, continue with fresh login attempt: {e}", "warning")
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
     downloader.log("Starting Bot...")
     # Retry logic for database lock

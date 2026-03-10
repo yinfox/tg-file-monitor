@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.24-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.25-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.24 (2026-03-10) - 当前版本
+### v0.4.25 (2026-03-10) - 当前版本
+- ✅ 修复 Bot Token 切换后仍复用旧会话问题：启动前校验 `bot_session` 身份
+- ✅ 自动重建失配会话：当会话绑定用户账号或 Bot ID 与 token 不一致时，自动清理并重登
+- ✅ 避免 Telethon 忽略新 `bot_token`，确保 Bot 指令菜单与 `/start` 对应新 Bot 生效
+
+### v0.4.24 (2026-03-10)
 - ✅ 修复 Bot 启动日志崩溃：`load_config()` 返回值异常导致的 `NoneType.get` 报错
 - ✅ 加固配置读取：配置格式异常时安全回退，避免启动链路中断
 
