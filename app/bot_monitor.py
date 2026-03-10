@@ -1137,6 +1137,15 @@ async def main():
                 
                 if filename and os.path.exists(filename):
                     original_download_path = filename
+                    original_probe = None
+                    original_streaming_compatible = False
+                    try:
+                        original_probe = downloader._probe_media_streams(original_download_path)
+                        original_streaming_compatible = is_streaming_compatible_media(original_probe)
+                    except Exception:
+                        original_probe = None
+                        original_streaming_compatible = False
+
                     compat_elapsed = 0.0
                     transcoded_for_upload = False
                     part_size_kb = 512
@@ -1162,6 +1171,20 @@ async def main():
                             filename, compat_elapsed, transcoded_for_upload = await _run_compatibility_pass(filename)
                         except Exception as _fix_err:
                             downloader.log(f"Upload compatibility precheck failed, fallback to original file: {_fix_err}", "warning")
+
+                        # In transcode mode, if original media is not stream-compatible but transcode did not produce
+                        # a converted file, do not continue with a misleading "upload success" flow.
+                        if (not original_streaming_compatible) and (not transcoded_for_upload):
+                            await msg.edit(
+                                "❌ **上传已中止（转码失败）**\n"
+                                "当前源视频不兼容 Telegram 流媒体播放，且兼容转码未成功。\n"
+                                "请重试，或在下载设置中切换为 `上传: 原码直传`。"
+                            )
+                            downloader.log(
+                                f"转码模式下中止上传: 源文件不兼容(vcodec={(original_probe or {}).get('vcodec')}, pix_fmt={(original_probe or {}).get('pix_fmt')}) 且转码失败。",
+                                "warning",
+                            )
+                            return
 
                     try:
                         file_size_bytes = os.path.getsize(filename)

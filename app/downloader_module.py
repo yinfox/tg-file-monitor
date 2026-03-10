@@ -705,7 +705,7 @@ class Downloader:
             safe_h = _round_even(fallback_h or height or 720)
 
             if not _is_reasonable_ratio(target_ratio, low=0.2, high=5.0):
-                return f"scale={safe_w}:{safe_h},setsar=1,setdar=iw/ih", safe_w, safe_h
+                return f"scale={safe_w}:{safe_h},setsar=1", safe_w, safe_h
 
             by_width_h = _round_even(float(safe_w) / float(target_ratio))
             by_height_w = _round_even(float(safe_h) * float(target_ratio))
@@ -722,7 +722,7 @@ class Downloader:
                 target_w_local, target_h_local = cand2_w, cand2_h
 
             return (
-                f"scale={target_w_local}:{target_h_local},setsar=1,setdar=iw/ih",
+                f"scale={target_w_local}:{target_h_local},setsar=1",
                 target_w_local,
                 target_h_local,
             )
@@ -737,7 +737,6 @@ class Downloader:
             if src_w <= 0 or src_h <= 0:
                 filter_parts.append("scale='trunc(iw/2)*2':'trunc(ih/2)*2'")
                 filter_parts.append('setsar=1')
-                filter_parts.append('setdar=iw/ih')
                 return ','.join(filter_parts), None, None
 
             if _is_reasonable_ratio(sar_ratio) and abs(float(sar_ratio) - 1.0) > 0.01:
@@ -751,7 +750,6 @@ class Downloader:
             target_h = _round_even(display_h)
             filter_parts.append(f"scale={target_w}:{target_h}")
             filter_parts.append('setsar=1')
-            filter_parts.append('setdar=iw/ih')
             filt = ','.join(filter_parts)
             return filt, target_w, target_h
 
