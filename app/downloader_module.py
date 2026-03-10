@@ -798,7 +798,6 @@ class Downloader:
             '-vf', safe_filter,
             '-pix_fmt', 'yuv420p',
             '-profile:v', 'high',
-            '-level', '4.1',
             '-metadata:s:v:0', 'rotate=0',
             '-movflags', '+faststart',
         ]
@@ -846,7 +845,6 @@ class Downloader:
                             '-vf', locked_filter,
                             '-pix_fmt', 'yuv420p',
                             '-profile:v', 'high',
-                            '-level', '4.1',
                             '-metadata:s:v:0', 'rotate=0',
                             '-movflags', '+faststart',
                         ]
@@ -868,12 +866,25 @@ class Downloader:
                                 self.log(f"二次比例锁定转码完成: {os.path.basename(retry_path)}", "success")
                                 return retry_path
                             self.log("二次比例锁定未产出有效文件，回退首轮转码结果。", "warning")
+                        except subprocess.CalledProcessError as retry_error:
+                            retry_err = (retry_error.stderr or retry_error.stdout or '').strip()
+                            if retry_err:
+                                tail = '\n'.join(retry_err.splitlines()[-8:])
+                                self.log(f"二次比例锁定转码失败，ffmpeg 输出(末尾): {tail}", "warning")
+                            self.log(f"二次比例锁定转码失败，回退首轮转码结果: {retry_error}", "warning")
                         except Exception as retry_error:
                             self.log(f"二次比例锁定转码失败，回退首轮转码结果: {retry_error}", "warning")
 
                 self.log(f"兼容性转码完成: {os.path.basename(fixed_path)}", "success")
                 return fixed_path
             self.log("兼容性转码未产出有效文件，继续使用原文件。", "warning")
+            return file_path
+        except subprocess.CalledProcessError as e:
+            ffmpeg_err = (e.stderr or e.stdout or '').strip()
+            if ffmpeg_err:
+                tail = '\n'.join(ffmpeg_err.splitlines()[-10:])
+                self.log(f"兼容性转码失败，ffmpeg 输出(末尾): {tail}", "warning")
+            self.log(f"兼容性转码失败，继续使用原文件: {e}", "warning")
             return file_path
         except Exception as e:
             self.log(f"兼容性转码失败，继续使用原文件: {e}", "warning")
