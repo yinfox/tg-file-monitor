@@ -973,8 +973,10 @@ class Downloader:
 
         if quality_mode == 'fast_compatible':
             return (
+                'bestvideo[height<=1080][height>=720][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
                 'bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
                 'bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/'
+                'bestvideo[height<=1080]+bestaudio/'
                 'best[height<=1080][ext=mp4]/best[height<=1080]'
             )
 
