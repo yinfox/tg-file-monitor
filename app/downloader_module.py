@@ -289,8 +289,8 @@ class Downloader:
         # Quality profiles:
         # - super_fast_720p: smallest practical output for fastest Telegram upload.
         # - fast_compatible: prioritize Telegram compatibility and upload speed.
-        # - balanced_hd: higher quality with compatibility fallback.
-        # - ultra_quality: quality-first with compatibility still preferred first.
+        # - balanced_hd: quality-first up to 2K with compatibility fallback.
+        # - ultra_quality: quality-first up to 4K with compatibility fallback.
         quality_mode = self._normalize_quality_mode(quality_mode_override) or self._get_quality_mode_from_config()
         format_spec = self._build_format_spec(quality_mode)
         self.log(f"下载画质模式: {quality_mode}", "info")
@@ -464,6 +464,25 @@ class Downloader:
     def _process_info(self, ydl, info):
         if info is None:
             return None
+
+        try:
+            requested_formats = info.get('requested_formats')
+            if isinstance(requested_formats, list) and requested_formats:
+                selected = []
+                for fmt in requested_formats:
+                    if not isinstance(fmt, dict):
+                        continue
+                    fid = str(fmt.get('format_id') or '?')
+                    fext = str(fmt.get('ext') or '?')
+                    fw = fmt.get('width') or '?'
+                    fh = fmt.get('height') or '?'
+                    vcodec = str(fmt.get('vcodec') or '?')
+                    acodec = str(fmt.get('acodec') or '?')
+                    selected.append(f"{fid}:{fext}:{fw}x{fh}:v={vcodec}:a={acodec}")
+                if selected:
+                    self.log(f"yt-dlp 选中流: {' | '.join(selected)}", "info")
+        except Exception:
+            pass
 
         self.last_download_metadata = self._extract_download_metadata(info)
 
@@ -904,16 +923,16 @@ class Downloader:
 
         if quality_mode == 'ultra_quality':
             return (
+                'bestvideo[height<=4320]+bestaudio/best[height<=4320]/'
                 'bestvideo[height<=4320][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
-                'bestvideo[height<=4320][vcodec^=avc1]+bestaudio[ext=m4a]/'
-                'bestvideo[height<=4320]+bestaudio/best[height<=4320]/best'
+                'bestvideo[height<=4320][vcodec^=avc1]+bestaudio[ext=m4a]/best'
             )
 
         # balanced_hd
         return (
+            'bestvideo[height<=2160]+bestaudio/best[height<=2160]/'
             'bestvideo[height<=2160][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
-            'bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/'
-            'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best'
+            'bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best'
         )
 
     async def download_task(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None, quality_mode_override=None):
