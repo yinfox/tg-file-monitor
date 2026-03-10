@@ -51,6 +51,15 @@
                         </div>
                     </div>
 
+                    <div class="mb-3">
+                        <label for="qualityMode" class="form-label small mb-1">下载画质模式:</label>
+                        <select class="form-select form-select-sm" id="qualityMode">
+                            <option value="fast_compatible" {% if quality_mode == 'fast_compatible' %}selected{% endif %}>极速兼容 (1080p, 更快上传)</option>
+                            <option value="balanced_hd" {% if quality_mode == 'balanced_hd' %}selected{% endif %}>高清平衡 (2K/4K, 推荐)</option>
+                            <option value="ultra_quality" {% if quality_mode == 'ultra_quality' %}selected{% endif %}>超清优先 (最高画质, 可能更慢)</option>
+                        </select>
+                    </div>
+
                     <button type="submit" class="btn btn-success btn-sm w-100" id="downloadBtn">开始下载任务</button>
                 </form>
             </div>
@@ -144,6 +153,7 @@
         const url = videoUrlInput.value.trim();
         const outputDir = outputDirInput.value.trim();
         const browser = document.getElementById('browserCookies').value;
+        const qualityMode = document.getElementById('qualityMode').value;
         const cookieFile = document.getElementById('cookiesFile').files[0];
 
         if (!url || !outputDir) {
@@ -157,6 +167,7 @@
         const formData = new FormData();
         formData.append('url', url);
         formData.append('output_dir', outputDir);
+        formData.append('quality_mode', qualityMode);
         if (browser) formData.append('browser', browser);
         if (cookieFile) formData.append('cookie_file', cookieFile);
 
@@ -186,6 +197,7 @@
 
     saveDirBtn.addEventListener('click', async function () {
         const outputDir = outputDirInput.value.trim();
+        const qualityMode = document.getElementById('qualityMode').value;
         if (!outputDir) {
             alert('请先填写保存目录。');
             return;
@@ -197,7 +209,7 @@
             const response = await fetch('/api/downloader/default_path', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ output_dir: outputDir })
+                body: JSON.stringify({ output_dir: outputDir, quality_mode: qualityMode })
             });
             const data = await response.json();
             if (!response.ok || data.error) {
@@ -209,7 +221,7 @@
                 outputDirInput.value = data.default_path;
                 saveDirStatus.textContent = '当前默认目录: ' + data.default_path;
             }
-            alert('默认下载目录已保存。');
+            alert('默认下载设置已保存。');
         } catch (e) {
             alert('请求失败: ' + e);
         } finally {

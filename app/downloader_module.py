@@ -248,13 +248,13 @@ class Downloader:
         if node_path:
             js_runtimes_config['node'] = {'path': node_path}
 
-        # Prefer Telegram-compatible H.264/AAC MP4 and cap to 1080p to reduce upload size/time.
-        # This avoids cases where AV1/VP9 streams upload successfully but Telegram clients only play audio.
-        format_spec = (
-            'bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
-            'bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/'
-            'best[height<=1080][ext=mp4]/best[height<=1080]'
-        )
+        # Quality profiles:
+        # - fast_compatible: prioritize Telegram compatibility and upload speed.
+        # - balanced_hd: higher quality with compatibility fallback.
+        # - ultra_quality: quality-first with compatibility still preferred first.
+        quality_mode = self._get_quality_mode_from_config()
+        format_spec = self._build_format_spec(quality_mode)
+        self.log(f"下载画质模式: {quality_mode}", "info")
         merge_format = 'mp4'
 
         if not has_ffmpeg:
@@ -449,6 +449,40 @@ class Downloader:
 
     def error(self, msg):
         self.log(msg, "error")
+
+    def _get_quality_mode_from_config(self):
+        try:
+            if os.path.exists(CONFIG_FILE):
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    cfg = json.load(f)
+                mode = ((cfg.get('downloader', {}) or {}).get('quality_mode') or '').strip()
+                if mode in {'fast_compatible', 'balanced_hd', 'ultra_quality'}:
+                    return mode
+        except Exception:
+            pass
+        return 'balanced_hd'
+
+    def _build_format_spec(self, quality_mode):
+        if quality_mode == 'fast_compatible':
+            return (
+                'bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
+                'bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/'
+                'best[height<=1080][ext=mp4]/best[height<=1080]'
+            )
+
+        if quality_mode == 'ultra_quality':
+            return (
+                'bestvideo[height<=4320][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
+                'bestvideo[height<=4320][vcodec^=avc1]+bestaudio[ext=m4a]/'
+                'bestvideo[height<=4320]+bestaudio/best[height<=4320]/best'
+            )
+
+        # balanced_hd
+        return (
+            'bestvideo[height<=2160][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
+            'bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/'
+            'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best'
+        )
 
     async def download_task(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None):
         """Async wrapper for download_video."""

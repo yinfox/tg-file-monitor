@@ -27,7 +27,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.26"
+VERSION = "0.4.27"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
@@ -1225,9 +1225,12 @@ def downloader_page():
     # Use project root/downloads as default if not set
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     default_path = config.get('downloader', {}).get('default_path')
+    quality_mode = config.get('downloader', {}).get('quality_mode', 'balanced_hd')
+    if quality_mode not in ('fast_compatible', 'balanced_hd', 'ultra_quality'):
+        quality_mode = 'balanced_hd'
     if not default_path:
         default_path = os.path.join(project_root, 'downloads')
-    return render_template('downloader.html', default_path=default_path)
+    return render_template('downloader.html', default_path=default_path, quality_mode=quality_mode)
 
 @app.route('/downloader/log')
 @login_required
@@ -1246,6 +1249,9 @@ async def api_download():
     url = request.form.get('url')
     output_dir = request.form.get('output_dir')
     browser = request.form.get('browser')
+    quality_mode = (request.form.get('quality_mode') or 'balanced_hd').strip()
+    if quality_mode not in ('fast_compatible', 'balanced_hd', 'ultra_quality'):
+        quality_mode = 'balanced_hd'
     cookie_file = request.files.get('cookie_file')
     
     if not url or not output_dir:
@@ -1275,7 +1281,9 @@ async def api_download():
     downloader_cfg = config.setdefault('downloader', {})
     if downloader_cfg.get('default_path') != output_dir:
         downloader_cfg['default_path'] = output_dir
-        save_config(config)
+    if downloader_cfg.get('quality_mode') != quality_mode:
+        downloader_cfg['quality_mode'] = quality_mode
+    save_config(config)
 
     p_cfg = config.get("proxy", {})
     proxy_url = None
@@ -1293,6 +1301,9 @@ async def api_download():
 def api_set_downloader_default_path():
     data = request.get_json(silent=True) or {}
     output_dir = str(data.get('output_dir', '')).strip()
+    quality_mode = str(data.get('quality_mode', 'balanced_hd')).strip()
+    if quality_mode not in ('fast_compatible', 'balanced_hd', 'ultra_quality'):
+        quality_mode = 'balanced_hd'
 
     if not output_dir:
         return jsonify({"error": "保存目录不能为空"}), 400
@@ -1311,9 +1322,10 @@ def api_set_downloader_default_path():
     config = load_config()
     downloader_cfg = config.setdefault('downloader', {})
     downloader_cfg['default_path'] = output_dir
+    downloader_cfg['quality_mode'] = quality_mode
     save_config(config)
 
-    return jsonify({"success": True, "default_path": output_dir})
+    return jsonify({"success": True, "default_path": output_dir, "quality_mode": quality_mode})
 
 # HDHive 资源请求功能已移除
 

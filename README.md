@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.26-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.27-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.26 (2026-03-10) - 当前版本
+### v0.4.27 (2026-03-10) - 当前版本
+- ✅ 新增下载画质模式可选：`极速兼容 / 高清平衡 / 超清优先`
+- ✅ Web 下载页支持直接切换并保存画质模式，无需手改配置文件
+- ✅ 下载策略改为按模式动态选择 yt-dlp format，兼顾清晰度、兼容性与上传速度
+
+### v0.4.26 (2026-03-10)
 - ✅ YouTube 下载格式优化：优先 `H.264(avc1)+AAC(mp4a)` 并限制 `<=1080p`，降低 Telegram 兼容性问题
 - ✅ 修复“上传后只有声音无画面”高频场景：避免选择 AV1/VP9 等部分客户端兼容较差的视频流
 - ✅ 上传参数优化：启用 `supports_streaming` 并调整分片，改善上传与在线播放体验
