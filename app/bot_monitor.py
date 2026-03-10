@@ -1056,31 +1056,43 @@ async def main():
                 )
                 
                 if filename and os.path.exists(filename):
-                     download_meta = downloader.get_last_download_metadata()
-                     source_url = (download_meta.get('source_url') or url or '').strip()
-                     source_title = (download_meta.get('title') or '').strip()
-                     source_resolution = (download_meta.get('resolution') or '').strip()
+                    # Final guard: local files (or edge outputs) should still pass compatibility check.
+                    try:
+                        fixed_for_upload = await asyncio.get_running_loop().run_in_executor(
+                            downloader.executor,
+                            downloader._maybe_make_telegram_compatible,
+                            filename,
+                        )
+                        if fixed_for_upload and os.path.exists(fixed_for_upload):
+                            filename = fixed_for_upload
+                    except Exception as _fix_err:
+                        downloader.log(f"Upload compatibility precheck failed, fallback to original file: {_fix_err}", "warning")
 
-                     lines = [
-                         "✅ **下载完成**",
-                         f"文件: `{os.path.basename(filename)}`",
-                     ]
-                     if source_url:
-                         lines.append(f"原链接: {source_url}")
-                     if source_title:
-                         lines.append(f"标题: {source_title}")
-                     if source_resolution:
-                         lines.append(f"分辨率: {source_resolution}")
-                     lines.append("正在上传...")
+                    download_meta = downloader.get_last_download_metadata()
+                    source_url = (download_meta.get('source_url') or url or '').strip()
+                    source_title = (download_meta.get('title') or '').strip()
+                    source_resolution = (download_meta.get('resolution') or '').strip()
 
-                     await msg.edit("\n".join(lines))
+                    lines = [
+                        "✅ **下载完成**",
+                        f"文件: `{os.path.basename(filename)}`",
+                    ]
+                    if source_url:
+                        lines.append(f"原链接: {source_url}")
+                    if source_title:
+                        lines.append(f"标题: {source_title}")
+                    if source_resolution:
+                        lines.append(f"分辨率: {source_resolution}")
+                    lines.append("正在上传...")
 
-                     upload_caption_parts = ["下载完成"]
-                     if source_title:
-                         upload_caption_parts.append(f"标题: {source_title}")
-                     if source_resolution:
-                         upload_caption_parts.append(f"分辨率: {source_resolution}")
-                     await client.send_file(
+                    await msg.edit("\n".join(lines))
+
+                    upload_caption_parts = ["下载完成"]
+                    if source_title:
+                        upload_caption_parts.append(f"标题: {source_title}")
+                    if source_resolution:
+                        upload_caption_parts.append(f"分辨率: {source_resolution}")
+                    await client.send_file(
                          event.chat_id,
                          filename,
                          caption="\n".join(upload_caption_parts),

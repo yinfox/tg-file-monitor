@@ -769,6 +769,7 @@ class Downloader:
 
         cmd = [
             self.ffmpeg_path or 'ffmpeg', '-y',
+            '-noautorotate',
             '-i', file_path,
             '-map', '0:v:0',
             '-c:v', 'libx264',
@@ -817,6 +818,7 @@ class Downloader:
                         retry_path = base + '.tgfix2.mp4'
                         retry_cmd = [
                             self.ffmpeg_path or 'ffmpeg', '-y',
+                            '-noautorotate',
                             '-i', file_path,
                             '-map', '0:v:0',
                             '-c:v', 'libx264',
