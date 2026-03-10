@@ -1131,11 +1131,12 @@ async def main():
                     cookies_from_browser,
                     proxy_url,
                     youtube_quality_mode,
-                    use_transcode_upload,
+                    False,
                 )
                 download_elapsed = time.perf_counter() - download_started_at
                 
                 if filename and os.path.exists(filename):
+                    original_download_path = filename
                     compat_elapsed = 0.0
                     transcoded_for_upload = False
                     part_size_kb = 512
@@ -1280,6 +1281,21 @@ async def main():
                             return
                         raise
                     upload_elapsed = time.perf_counter() - upload_started_at
+
+                    # Keep original source file; only cleanup uploaded transcode artifact.
+                    if (
+                        transcoded_for_upload
+                        and os.path.abspath(filename) != os.path.abspath(original_download_path)
+                        and os.path.exists(filename)
+                    ):
+                        try:
+                            os.remove(filename)
+                            downloader.log(
+                                f"上传成功后已清理转码文件: {os.path.basename(filename)}",
+                                "info",
+                            )
+                        except Exception as cleanup_err:
+                            downloader.log(f"转码文件清理失败: {cleanup_err}", "warning")
 
                     downloader.log(
                         f"任务耗时统计: download={download_elapsed:.2f}s, compat={compat_elapsed:.2f}s, "
