@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.28-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.29-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.28 (2026-03-10) - 当前版本
+### v0.4.29 (2026-03-10) - 当前版本
+- ✅ 修复下载页保存设置交互：按钮文案与状态统一为“保存下载设置（含画质）”
+- ✅ 修复画质独立保存体验：移除目录输入框 `required` 校验干扰
+- ✅ 增强下载后兼容探测稳定性：统一复用已解析的 `ffmpeg/ffprobe` 路径，避免部分环境下探测/转码未生效
+
+### v0.4.28 (2026-03-10)
 - ✅ 修复下载器设置保存体验：画质模式可独立保存，不再依赖先执行下载任务
 - ✅ 新增 Telegram 视频兼容兜底：下载后自动探测并在必要时转码为 `H.264 + AAC + yuv420p + faststart`
 - ✅ 上传侧增强：显式按视频语义发送，降低“00:00/只有声音”概率

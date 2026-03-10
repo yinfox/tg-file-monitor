@@ -37,6 +37,36 @@ class Downloader:
         self.last_error_message = ""
         self.js_runtime_missing = False
         self.last_cookies_supplied = False
+        self.ffmpeg_path = None
+        self.ffprobe_path = None
+
+    def _ensure_ffmpeg_tools(self):
+        import shutil
+
+        if self.ffmpeg_path and os.path.exists(self.ffmpeg_path):
+            return self.ffmpeg_path, self.ffprobe_path
+
+        ffmpeg_path = shutil.which('ffmpeg')
+        ffprobe_path = shutil.which('ffprobe')
+
+        if not ffmpeg_path:
+            try:
+                import imageio_ffmpeg
+                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception:
+                ffmpeg_path = None
+
+        if ffmpeg_path and not ffprobe_path:
+            try:
+                sibling_ffprobe = os.path.join(os.path.dirname(ffmpeg_path), 'ffprobe')
+                if os.path.exists(sibling_ffprobe):
+                    ffprobe_path = sibling_ffprobe
+            except Exception:
+                pass
+
+        self.ffmpeg_path = ffmpeg_path
+        self.ffprobe_path = ffprobe_path
+        return ffmpeg_path, ffprobe_path
 
     def _log_hook(self, d):
         if d['status'] == 'downloading':
@@ -227,16 +257,11 @@ class Downloader:
         self.js_runtime_missing = False
         self.last_cookies_supplied = False
         
-        import shutil
-        ffmpeg_path = shutil.which('ffmpeg')
-        if not ffmpeg_path:
-            try:
-                import imageio_ffmpeg
-                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
-                if ffmpeg_path:
-                    self.log(f"使用内置 FFmpeg: {ffmpeg_path}", "info")
-            except Exception:
-                ffmpeg_path = None
+        ffmpeg_path, ffprobe_path = self._ensure_ffmpeg_tools()
+        if ffmpeg_path:
+            self.log(f"使用 FFmpeg: {ffmpeg_path}", "info")
+        if ffprobe_path:
+            self.log(f"使用 FFprobe: {ffprobe_path}", "debug")
 
         has_ffmpeg = bool(ffmpeg_path)
 
@@ -438,7 +463,8 @@ class Downloader:
 
     def _probe_media_streams(self, file_path):
         """Use ffprobe to inspect media streams for Telegram compatibility decisions."""
-        ffprobe = 'ffprobe'
+        _, ffprobe_path = self._ensure_ffmpeg_tools()
+        ffprobe = ffprobe_path or 'ffprobe'
         cmd = [
             ffprobe,
             '-v', 'error',
@@ -499,7 +525,7 @@ class Downloader:
         fixed_path = base + '.tgfix.mp4'
 
         cmd = [
-            'ffmpeg', '-y',
+            self.ffmpeg_path or 'ffmpeg', '-y',
             '-i', file_path,
             '-map', '0:v:0',
             '-c:v', 'libx264',

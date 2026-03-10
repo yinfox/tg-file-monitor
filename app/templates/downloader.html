@@ -20,12 +20,12 @@
                     <div class="mb-2">
                         <label for="outputDir" class="form-label small">保存目录:</label>
                         <div class="input-group input-group-sm">
-                            <input type="text" class="form-control" id="outputDir" value="{{ default_path }}" required>
+                            <input type="text" class="form-control" id="outputDir" value="{{ default_path }}">
                             <button class="btn btn-outline-secondary" type="button" id="browseDirBtn"><i
                                     class="bi bi-folder"></i></button>
                         </div>
                         <button type="button" class="btn btn-outline-primary btn-sm mt-2" id="saveDirBtn">
-                            保存为默认目录
+                            保存下载设置（含画质）
                         </button>
                         <div class="form-text mt-1" id="saveDirStatus">
                             当前默认目录: {{ default_path }}
@@ -222,7 +222,7 @@
             alert('请求失败: ' + e);
         } finally {
             saveDirBtn.disabled = false;
-            saveDirBtn.textContent = '保存为默认目录';
+            saveDirBtn.textContent = '保存下载设置（含画质）';
         }
     });
 
