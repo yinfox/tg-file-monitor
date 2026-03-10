@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.30-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.31-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.30 (2026-03-10) - 当前版本
+### v0.4.31 (2026-03-10) - 当前版本
+- ✅ 修复视频可播放但画面变形：转码时增加 `setsar=1`，归一化像素宽高比
+- ✅ 兼容性触发条件增强：当源视频 `sample_aspect_ratio` 异常时自动转码
+- ✅ 转码日志新增 `sar` 字段，便于排查比例异常
+
+### v0.4.30 (2026-03-10)
 - ✅ 修复下载器运行时报错：补充 `shutil` 导入，解决 `name 'shutil' is not defined`
 - ✅ 已通过 `py_compile` 快速语法校验
 

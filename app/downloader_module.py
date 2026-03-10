@@ -493,6 +493,7 @@ class Downloader:
                 'audio_stream': audio_stream,
                 'vcodec': (video_stream or {}).get('codec_name'),
                 'pix_fmt': (video_stream or {}).get('pix_fmt'),
+                'sar': (video_stream or {}).get('sample_aspect_ratio'),
                 'acodec': (audio_stream or {}).get('codec_name'),
             }
         except Exception as e:
@@ -512,13 +513,15 @@ class Downloader:
         audio_stream = probe.get('audio_stream')
         vcodec = (probe.get('vcodec') or '').lower()
         pix_fmt = (probe.get('pix_fmt') or '').lower()
+        sar = str(probe.get('sar') or '').strip()
 
         if not video_stream:
             self.log("检测到文件无视频流，无法修复为可播放视频。", "warning")
             return file_path
 
         # Telegram clients are most stable with H.264 + yuv420p in MP4.
-        needs_transcode = (vcodec != 'h264') or (pix_fmt not in ('yuv420p', 'yuvj420p'))
+        sar_is_non_square = bool(sar) and sar not in ('1:1', '0:1', 'N/A', 'unknown')
+        needs_transcode = (vcodec != 'h264') or (pix_fmt not in ('yuv420p', 'yuvj420p')) or sar_is_non_square
         if not needs_transcode:
             return file_path
 
@@ -532,6 +535,8 @@ class Downloader:
             '-c:v', 'libx264',
             '-preset', 'veryfast',
             '-crf', '20',
+            # Preserve displayed aspect ratio and normalize to square pixels for Telegram players.
+            '-vf', "scale='trunc(iw*sar/2)*2':'trunc(ih/2)*2',setsar=1",
             '-pix_fmt', 'yuv420p',
             '-movflags', '+faststart',
         ]
@@ -545,7 +550,7 @@ class Downloader:
 
         try:
             self.log(
-                f"检测到视频编码兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'})，开始转码为 Telegram 兼容格式...",
+                f"检测到视频兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'}, sar={sar or 'unknown'})，开始转码为 Telegram 兼容格式...",
                 "warning"
             )
             subprocess.run(cmd, check=True, capture_output=True, text=True)
