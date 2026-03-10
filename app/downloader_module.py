@@ -4,6 +4,7 @@ import asyncio
 import logging
 import json
 import subprocess
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 
 # Global logging configuration setup
