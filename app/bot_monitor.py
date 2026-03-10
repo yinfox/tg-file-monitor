@@ -1093,20 +1093,20 @@ async def main():
                     if source_resolution:
                         upload_caption_parts.append(f"分辨率: {source_resolution}")
                     await client.send_file(
-                         event.chat_id,
-                         filename,
-                         caption="\n".join(upload_caption_parts),
-                         force_document=False,
-                         supports_streaming=True,
-                         part_size_kb=512,
-                     )
-                     
-                     # Cleanup: Delete status message AND user's original message
-                     try:
-                         await msg.delete()
-                         await event.delete()
-                     except:
-                         pass
+                        event.chat_id,
+                        filename,
+                        caption="\n".join(upload_caption_parts),
+                        force_document=False,
+                        supports_streaming=True,
+                        part_size_kb=512,
+                    )
+
+                    # Cleanup: Delete status message AND user's original message
+                    try:
+                        await msg.delete()
+                        await event.delete()
+                    except:
+                        pass
                 else:
                     last_error = (downloader.get_last_error() or "").lower()
                     if 'ffmpeg' in last_error:
