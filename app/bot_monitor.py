@@ -107,6 +107,27 @@ def resolve_writable_download_dir(config):
     return None, candidate
 
 
+def resolve_youtube_quality_mode(config):
+    """Pick YouTube quality mode for bot link downloads.
+
+    Defaults to fast_compatible to reduce file size and improve upload speed.
+    """
+    downloader_cfg = (config or {}).get('downloader', {}) if isinstance(config, dict) else {}
+    if not isinstance(downloader_cfg, dict):
+        downloader_cfg = {}
+
+    mode = (downloader_cfg.get('youtube_quality_mode') or 'fast_compatible').strip()
+    if mode in {'super_fast_720p', 'fast_compatible', 'balanced_hd', 'ultra_quality'}:
+        return mode
+    return 'fast_compatible'
+
+
+def normalize_quality_mode(mode: str, default: str = 'balanced_hd') -> str:
+    allowed = {'super_fast_720p', 'fast_compatible', 'balanced_hd', 'ultra_quality'}
+    normalized = (mode or '').strip()
+    return normalized if normalized in allowed else default
+
+
 def acquire_single_instance_lock():
     """Ensure only one bot_monitor process can run at a time."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -251,6 +272,73 @@ async def main():
 
     # State management for interactive flows
     waiting_for_cookies = set()
+    waiting_for_download_path = set()
+
+    def save_runtime_config(cfg: dict) -> bool:
+        try:
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, indent=4, ensure_ascii=False)
+            return True
+        except Exception as e:
+            downloader.log(f"保存配置失败: {e}", "error")
+            return False
+
+    def ensure_downloader_config(cfg: dict) -> dict:
+        if not isinstance(cfg, dict):
+            cfg = {}
+        downloader_cfg = cfg.get('downloader')
+        if not isinstance(downloader_cfg, dict):
+            downloader_cfg = {}
+            cfg['downloader'] = downloader_cfg
+        return downloader_cfg
+
+    def quality_mode_label(mode: str) -> str:
+        labels = {
+            'super_fast_720p': '超快 720p',
+            'fast_compatible': '快速兼容 1080p',
+            'balanced_hd': '均衡高清',
+            'ultra_quality': '超清优先',
+        }
+        return labels.get(mode, mode or '未设置')
+
+    def build_download_settings_text(cfg: dict) -> str:
+        downloader_cfg = ensure_downloader_config(cfg)
+        default_path = (downloader_cfg.get('default_path') or '').strip() or os.path.join(BASE_DIR, 'downloads')
+        general_mode = normalize_quality_mode(
+            downloader_cfg.get('quality_mode', 'balanced_hd'),
+            default='balanced_hd'
+        )
+        yt_mode = normalize_quality_mode(
+            downloader_cfg.get('youtube_quality_mode', 'super_fast_720p'),
+            default='super_fast_720p'
+        )
+        return (
+            "⚙️ **下载设置**\n"
+            f"- 下载目录: `{default_path}`\n"
+            f"- 通用画质(非YouTube): `{general_mode}` ({quality_mode_label(general_mode)})\n"
+            f"- YouTube画质覆盖: `{yt_mode}` ({quality_mode_label(yt_mode)})\n\n"
+            "点击按钮可直接修改。"
+        )
+
+    def build_download_settings_buttons():
+        return [
+            [
+                types.KeyboardButtonCallback("YT: 超快720p", data=b'dl_yt_super_fast_720p'),
+                types.KeyboardButtonCallback("YT: 快速1080p", data=b'dl_yt_fast_compatible'),
+            ],
+            [
+                types.KeyboardButtonCallback("YT: 均衡高清", data=b'dl_yt_balanced_hd'),
+                types.KeyboardButtonCallback("YT: 超清优先", data=b'dl_yt_ultra_quality'),
+            ],
+            [
+                types.KeyboardButtonCallback("通用: 超快720p", data=b'dl_general_super_fast_720p'),
+                types.KeyboardButtonCallback("通用: 均衡高清", data=b'dl_general_balanced_hd'),
+            ],
+            [
+                types.KeyboardButtonCallback("设置下载目录", data=b'dl_set_path'),
+                types.KeyboardButtonCallback("刷新设置", data=b'dl_settings'),
+            ],
+        ]
 
     def locate_cookies_file(cfg) -> Tuple[Optional[str], List[str]]:
         configured = (cfg.get('downloader', {}) or {}).get('cookies_file')
@@ -446,6 +534,7 @@ async def main():
         # Strict types: buttons should be list of lists of Button.inline(...)
         await event.reply(welcome_text, buttons=[
             [types.KeyboardButtonCallback("🍪 更新 Cookies", data=b'update_cookies')],
+            [types.KeyboardButtonCallback("⚙️ 下载设置", data=b'dl_settings')],
             [types.KeyboardButtonCallback("🗑 清除记录", data=b'clear_history'), types.KeyboardButtonCallback("❓ 使用帮助", data=b'help_menu')]
         ])
 
@@ -474,8 +563,95 @@ async def main():
         )
         await client.send_message(chat_id, welcome_text, buttons=[
             [types.KeyboardButtonCallback("🍪 更新 Cookies", data=b'update_cookies')],
+            [types.KeyboardButtonCallback("⚙️ 下载设置", data=b'dl_settings')],
             [types.KeyboardButtonCallback("🗑 清除记录", data=b'clear_history'), types.KeyboardButtonCallback("❓ 使用帮助", data=b'help_menu')]
         ])
+
+    @client.on(events.NewMessage(pattern='/download_settings'))
+    async def download_settings_handler(event):
+        cfg = load_config()
+        await event.reply(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+
+    @client.on(events.CallbackQuery(data=b'dl_settings'))
+    async def download_settings_callback_handler(event):
+        await event.answer("已刷新")
+        cfg = load_config()
+        await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+
+    @client.on(events.CallbackQuery(data=b'dl_set_path'))
+    async def download_set_path_callback_handler(event):
+        waiting_for_download_path.add(event.sender_id)
+        await event.answer()
+        await event.respond(
+            "请发送新的下载目录绝对路径，例如：`/app/downloads`\n"
+            "发送 `/cancel` 可取消。"
+        )
+
+    @client.on(events.CallbackQuery(data=b'dl_yt_super_fast_720p'))
+    async def download_set_yt_super_fast_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['youtube_quality_mode'] = 'super_fast_720p'
+        if save_runtime_config(cfg):
+            await event.answer("YouTube 模式已设为超快720p")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_yt_fast_compatible'))
+    async def download_set_yt_fast_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['youtube_quality_mode'] = 'fast_compatible'
+        if save_runtime_config(cfg):
+            await event.answer("YouTube 模式已设为快速1080p")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_yt_balanced_hd'))
+    async def download_set_yt_balanced_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['youtube_quality_mode'] = 'balanced_hd'
+        if save_runtime_config(cfg):
+            await event.answer("YouTube 模式已设为均衡高清")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_yt_ultra_quality'))
+    async def download_set_yt_ultra_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['youtube_quality_mode'] = 'ultra_quality'
+        if save_runtime_config(cfg):
+            await event.answer("YouTube 模式已设为超清优先")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_general_super_fast_720p'))
+    async def download_set_general_super_fast_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['quality_mode'] = 'super_fast_720p'
+        if save_runtime_config(cfg):
+            await event.answer("通用模式已设为超快720p")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_general_balanced_hd'))
+    async def download_set_general_balanced_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['quality_mode'] = 'balanced_hd'
+        if save_runtime_config(cfg):
+            await event.answer("通用模式已设为均衡高清")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
 
     @client.on(events.CallbackQuery(data=b'update_cookies'))
     async def cookie_callback_handler(event):
@@ -491,17 +667,25 @@ async def main():
             "🛠 **帮助菜单**\n\n"
             "1. **发送链接**: 直接粘贴 URL。\n"
             "2. **更新 Cookies**: 点击菜单按钮后发送文件或文本。\n"
-            "3. **检查 Cookies**: 发送 `/cookies_status`\n"
-            "4. **深度检查 Cookies**: 发送 `/cookies_check`\n"
-            "5. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
+            "3. **下载设置**: 发送 `/download_settings` 或点 `⚙️ 下载设置`\n"
+            "4. **检查 Cookies**: 发送 `/cookies_status`\n"
+            "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
+            "6. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
         )
         await event.respond(help_text)
 
     @client.on(events.NewMessage(pattern='/cancel'))
     async def cancel_handler(event):
         sender_id = event.sender_id
+        was_waiting = False
         if sender_id in waiting_for_cookies:
             waiting_for_cookies.remove(sender_id)
+            was_waiting = True
+        if sender_id in waiting_for_download_path:
+            waiting_for_download_path.remove(sender_id)
+            was_waiting = True
+
+        if was_waiting:
             await event.reply("❌ 操作已取消。")
         else:
             await event.reply("当前没有进行中的操作。")
@@ -515,9 +699,10 @@ async def main():
             "🛠 **帮助菜单**\n\n"
             "1. **发送链接**: 直接粘贴 URL。\n"
             "2. **更新 Cookies**: 输入 /start 点击按钮。\n"
-            "3. **检查 Cookies**: 发送 `/cookies_status`\n"
-            "4. **深度检查 Cookies**: 发送 `/cookies_check`\n"
-            "5. **搜寻影视**: 发送 `/movie <剧名>`\n"
+            "3. **下载设置**: 发送 `/download_settings`\n"
+            "4. **检查 Cookies**: 发送 `/cookies_status`\n"
+            "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
+            "6. **搜寻影视**: 发送 `/movie <剧名>`\n"
         )
         await event.reply(help_text)
 
@@ -739,6 +924,40 @@ async def main():
 
         # --- 3. Normal Flow: URLs ---
         # If user sends a file but not waiting for cookies, ignore or hint
+        if sender_id in waiting_for_download_path:
+            new_path = (text or '').strip()
+            if not new_path:
+                await event.reply("❌ 路径不能为空，请重新发送。")
+                return
+
+            if not os.path.isabs(new_path):
+                await event.reply("❌ 请输入绝对路径，例如：`/app/downloads`")
+                return
+
+            try:
+                os.makedirs(new_path, exist_ok=True)
+                test_file = os.path.join(new_path, '.write_test')
+                with open(test_file, 'w', encoding='utf-8') as f:
+                    f.write('ok')
+                os.remove(test_file)
+            except Exception as e:
+                await event.reply(f"❌ 目录不可写: `{new_path}`\n原因: `{e}`")
+                return
+
+            cfg = load_config()
+            downloader_cfg = ensure_downloader_config(cfg)
+            downloader_cfg['default_path'] = new_path
+            if save_runtime_config(cfg):
+                waiting_for_download_path.discard(sender_id)
+                await event.reply(
+                    "✅ 下载目录已更新。\n"
+                    + build_download_settings_text(cfg),
+                    buttons=build_download_settings_buttons()
+                )
+            else:
+                await event.reply("❌ 保存失败，请稍后重试。")
+            return
+
         if event.file:
             await event.reply("请先通过 /start 菜单点击 '🍪 更新 Cookies' 按钮后再发送文件。")
             return
@@ -799,7 +1018,21 @@ async def main():
                     else:
                         proxy_url = f"http://{addr}:{port}"
 
-                filename = await loop.run_in_executor(downloader.executor, downloader.download_video, url, default_path, cookies_file, cookies_from_browser, proxy_url)
+                youtube_quality_mode = None
+                if "youtube.com" in url or "youtu.be" in url:
+                    youtube_quality_mode = resolve_youtube_quality_mode(config)
+                    downloader.log(f"YouTube 下载启用画质覆盖: {youtube_quality_mode}", "info")
+
+                filename = await loop.run_in_executor(
+                    downloader.executor,
+                    downloader.download_video,
+                    url,
+                    default_path,
+                    cookies_file,
+                    cookies_from_browser,
+                    proxy_url,
+                    youtube_quality_mode,
+                )
                 
                 if filename and os.path.exists(filename):
                      await msg.edit(f"✅ **下载完成**\n`{os.path.basename(filename)}`\n正在上传...")

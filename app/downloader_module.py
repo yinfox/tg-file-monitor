@@ -240,7 +240,13 @@ class Downloader:
         self.log(f"已生成临时 Cookies 文件: {temp_path}", "info")
         return temp_path
 
-    def download_video(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None):
+    def _normalize_quality_mode(self, mode):
+        normalized = (mode or '').strip()
+        if normalized in {'super_fast_720p', 'fast_compatible', 'balanced_hd', 'ultra_quality'}:
+            return normalized
+        return ''
+
+    def download_video(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None, quality_mode_override=None):
         """
         Downloads a video using yt-dlp synchronously. 
         Should be run in a separate thread/executor.
@@ -276,10 +282,11 @@ class Downloader:
             js_runtimes_config['node'] = {'path': node_path}
 
         # Quality profiles:
+        # - super_fast_720p: smallest practical output for fastest Telegram upload.
         # - fast_compatible: prioritize Telegram compatibility and upload speed.
         # - balanced_hd: higher quality with compatibility fallback.
         # - ultra_quality: quality-first with compatibility still preferred first.
-        quality_mode = self._get_quality_mode_from_config()
+        quality_mode = self._normalize_quality_mode(quality_mode_override) or self._get_quality_mode_from_config()
         format_spec = self._build_format_spec(quality_mode)
         self.log(f"下载画质模式: {quality_mode}", "info")
         merge_format = 'mp4'
@@ -660,13 +667,20 @@ class Downloader:
                 with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                     cfg = json.load(f)
                 mode = ((cfg.get('downloader', {}) or {}).get('quality_mode') or '').strip()
-                if mode in {'fast_compatible', 'balanced_hd', 'ultra_quality'}:
+                if mode in {'super_fast_720p', 'fast_compatible', 'balanced_hd', 'ultra_quality'}:
                     return mode
         except Exception:
             pass
         return 'balanced_hd'
 
     def _build_format_spec(self, quality_mode):
+        if quality_mode == 'super_fast_720p':
+            return (
+                'bestvideo[height<=720][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
+                'bestvideo[height<=720][vcodec^=avc1]+bestaudio[ext=m4a]/'
+                'best[height<=720][ext=mp4]/best[height<=720]'
+            )
+
         if quality_mode == 'fast_compatible':
             return (
                 'bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
@@ -688,7 +702,7 @@ class Downloader:
             'bestvideo[height<=2160]+bestaudio/best[height<=2160]/best'
         )
 
-    async def download_task(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None):
+    async def download_task(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None, quality_mode_override=None):
         """Async wrapper for download_video."""
         loop = asyncio.get_running_loop()
         downloaded = await loop.run_in_executor(
@@ -699,6 +713,7 @@ class Downloader:
             cookies_file,
             cookies_from_browser,
             proxy,
+            quality_mode_override,
         )
         if not downloaded:
             return downloaded

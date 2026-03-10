@@ -27,7 +27,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.33"
+VERSION = "0.4.34"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
@@ -1226,7 +1226,7 @@ def downloader_page():
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     default_path = config.get('downloader', {}).get('default_path')
     quality_mode = config.get('downloader', {}).get('quality_mode', 'balanced_hd')
-    if quality_mode not in ('fast_compatible', 'balanced_hd', 'ultra_quality'):
+    if quality_mode not in ('super_fast_720p', 'fast_compatible', 'balanced_hd', 'ultra_quality'):
         quality_mode = 'balanced_hd'
     if not default_path:
         default_path = os.path.join(project_root, 'downloads')
@@ -1250,7 +1250,7 @@ async def api_download():
     output_dir = request.form.get('output_dir')
     browser = request.form.get('browser')
     quality_mode = (request.form.get('quality_mode') or 'balanced_hd').strip()
-    if quality_mode not in ('fast_compatible', 'balanced_hd', 'ultra_quality'):
+    if quality_mode not in ('super_fast_720p', 'fast_compatible', 'balanced_hd', 'ultra_quality'):
         quality_mode = 'balanced_hd'
     cookie_file = request.files.get('cookie_file')
     
