@@ -33,6 +33,9 @@ class Downloader:
     def __init__(self):
         self.download_logs = []
         self.executor = ThreadPoolExecutor(max_workers=2) # Limit concurrent downloads
+        self.last_error_message = ""
+        self.js_runtime_missing = False
+        self.last_cookies_supplied = False
 
     def _log_hook(self, d):
         if d['status'] == 'downloading':
@@ -60,6 +63,8 @@ class Downloader:
         import sys
         
         entry = f"[{level.upper()}] {clean_message}"
+        if 'no supported javascript runtime could be found' in clean_message.lower():
+            self.js_runtime_missing = True
         # Use logger.info/error based on level or just print to stderr
         if level == "error":
             logger.error(clean_message)
@@ -69,6 +74,9 @@ class Downloader:
             logger.debug(clean_message)
         else:
             logger.info(clean_message)
+
+        if level == "error":
+            self.last_error_message = clean_message
 
         # Force flush stdout/stderr just in case
         sys.stderr.flush()
@@ -80,6 +88,34 @@ class Downloader:
     def clear_logs(self):
         """Clears the log buffer."""
         self.download_logs = []
+        self.js_runtime_missing = False
+        self.last_cookies_supplied = False
+
+    def get_last_error(self):
+        return self.last_error_message
+
+    def is_youtube_cookies_required_error(self):
+        msg = (self.last_error_message or '').lower()
+        return (
+            'sign in to confirm you\'re not a bot' in msg
+            or 'use --cookies-from-browser or --cookies' in msg
+            or 'cookies for the authentication' in msg
+            or 'cookies 可能已失效' in msg
+            or 'cookies may be expired' in msg
+        )
+
+    def is_youtube_client_or_ip_limited_error(self):
+        msg = (self.last_error_message or '').lower()
+        return (
+            'requested format is not available' in msg
+            or 'only images are available for download' in msg
+            or 'http error 403' in msg
+            or 'error code: 152' in msg
+            or 'po token' in msg
+        )
+
+    def is_js_runtime_missing(self):
+        return bool(self.js_runtime_missing)
 
     def _prepare_cookies(self, cookies_file):
         """
@@ -184,19 +220,45 @@ class Downloader:
             except Exception as e:
                 self.log(f"无法创建目录 {output_dir}: {e}", "error")
                 return None
+
+        # Reset per-run state regardless of output_dir existence.
+        self.last_error_message = ""
+        self.js_runtime_missing = False
+        self.last_cookies_supplied = False
         
         import shutil
-        has_ffmpeg = shutil.which('ffmpeg') is not None
+        ffmpeg_path = shutil.which('ffmpeg')
+        if not ffmpeg_path:
+            try:
+                import imageio_ffmpeg
+                ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+                if ffmpeg_path:
+                    self.log(f"使用内置 FFmpeg: {ffmpeg_path}", "info")
+            except Exception:
+                ffmpeg_path = None
 
-        # Absolute compatibility format for Telegram (H.264 + AAC)
-        # We explicitly prefer avc1 (H.264) and mp4a (AAC)
-        format_spec = 'bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/best[vcodec^=avc1]/best'
+        has_ffmpeg = bool(ffmpeg_path)
+
+        # Configure JS runtimes explicitly for yt-dlp EJS path (deno preferred, node fallback).
+        js_runtimes_config = {}
+        deno_path = shutil.which('deno') or os.path.expanduser('~/.deno/bin/deno')
+        if deno_path and os.path.exists(deno_path):
+            js_runtimes_config['deno'] = {'path': deno_path}
+        node_path = shutil.which('node')
+        if node_path:
+            js_runtimes_config['node'] = {'path': node_path}
+
+        # Strict max-quality policy: always prefer separate best video + best audio.
+        # This requires ffmpeg for merging streams.
+        format_spec = 'bestvideo*+bestaudio/best'
         merge_format = 'mp4'
 
         if not has_ffmpeg:
-            self.log("未找到 FFmpeg。降级为单文件格式以确保音画同步。", "warning")
-            format_spec = 'best' 
-            merge_format = None
+            self.log(
+                "未检测到 FFmpeg，无法保证最高画质。请先安装 FFmpeg 后再下载。",
+                "error",
+            )
+            return None
 
         # Base options
         base_ydl_opts = {
@@ -205,17 +267,28 @@ class Downloader:
             'logger': self, 
             'restrictfilenames': True, 
             'nocheckcertificate': True, 
-            'ignoreerrors': True,
+            'ignoreerrors': False,
             'format': format_spec,
-            'merge_output_format': merge_format,
-            'postprocessors': [{
-                'key': 'FFmpegVideoConvertor',
-                'preferedformat': 'mp4',
-            }],
             'http_headers': {
                 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
             },
+            'noplaylist': True,
+            'remote_components': {'ejs:github', 'ejs:npm'},
         }
+
+        # Pin ffmpeg location (system or bundled) to guarantee merge capability.
+        base_ydl_opts['ffmpeg_location'] = ffmpeg_path
+        if js_runtimes_config:
+            base_ydl_opts['js_runtimes'] = js_runtimes_config
+            runtime_desc = ', '.join(
+                f"{name}:{cfg.get('path')}" for name, cfg in js_runtimes_config.items()
+            )
+            self.log(f"启用 JS runtime: {runtime_desc}", "info")
+
+        # Only enable ffmpeg-dependent output merge/conversion when ffmpeg exists.
+        if merge_format:
+            base_ydl_opts['merge_output_format'] = merge_format
+            # Keep highest quality by merging/remuxing only; avoid extra re-encode convertor.
 
         if proxy:
             base_ydl_opts['proxy'] = proxy
@@ -229,12 +302,15 @@ class Downloader:
             final_cookies_path = self._prepare_cookies(cookies_file)
             base_ydl_opts['cookiefile'] = final_cookies_path
             self.log(f"使用 Cookies: {os.path.basename(cookies_file)}", "info")
-        
+            self.last_cookies_supplied = True
+
         if cookies_from_browser:
             base_ydl_opts['cookiesfrombrowser'] = (cookies_from_browser,)
+            self.last_cookies_supplied = True
 
         # Define client combinations to try for YouTube
         youtube_client_combos = [
+            None,
             ['ios'],
             ['web_embedded', 'ios'],
             ['android'],
@@ -258,15 +334,17 @@ class Downloader:
             # YouTube
             last_error = None
             for combo in youtube_client_combos:
-                self.log(f"尝试组合: {combo}", "info")
+                self.log(f"尝试组合: {combo or 'default'}", "info")
                 # Shallow copy is safer for objects like logger
                 current_opts = base_ydl_opts.copy()
-                current_opts['extractor_args'] = {
-                    'youtube': {
-                        'player_client': combo,
-                        'player_skip': ['webpage', 'configs']
+                if combo:
+                    # Keep extractor args conservative: forcing player_skip(webpage,configs)
+                    # may require extra account signals (e.g. data_sync_id) and reduce robustness.
+                    current_opts['extractor_args'] = {
+                        'youtube': {
+                            'player_client': combo,
+                        }
                     }
-                }
                 
                 try:
                     with yt_dlp.YoutubeDL(current_opts) as ydl:
@@ -279,15 +357,61 @@ class Downloader:
                         self.log(f"组合 {combo} 被拦截 (Sign in)。", "warning")
                         continue
                     else:
-                        self.log(f"组合 {combo} 失败: {e}", "warning")
+                        self.log(f"组合 {combo} 失败: {type(e).__name__}: {e!r}", "warning")
                         continue
+
+            # Fallback 1: retry once with relaxed YouTube defaults to avoid player-client/PO-token issues.
+            if last_error:
+                self.log("YouTube 首轮失败，尝试默认客户端重试（保持最高画质策略）...", "warning")
+                relaxed_opts = base_ydl_opts.copy()
+                try:
+                    with yt_dlp.YoutubeDL(relaxed_opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                        if info:
+                            return self._process_info(ydl, info)
+                except Exception as e:
+                    last_error = e
+                    self.log(f"默认客户端重试失败: {type(e).__name__}: {e!r}", "warning")
+
+            # Fallback 2: retry without proxy/cookies to avoid bad cookie/proxy failures.
+            if last_error and (proxy or cookies_file or cookies_from_browser):
+                self.log("YouTube 首轮失败，降级重试（不使用代理/Cookies）...", "warning")
+                fallback_opts = base_ydl_opts.copy()
+                fallback_opts.pop('proxy', None)
+                fallback_opts.pop('cookiefile', None)
+                fallback_opts.pop('cookiesfrombrowser', None)
+
+                try:
+                    with yt_dlp.YoutubeDL(fallback_opts) as ydl:
+                        info = ydl.extract_info(url, download=True)
+                        if info:
+                            return self._process_info(ydl, info)
+                except Exception as e:
+                    last_error = e
+                    self.log(f"降级直连失败: {type(e).__name__}: {e!r}", "warning")
             
             if last_error:
                 raise last_error
             return None
 
         except Exception as e:
-            self.log(f"下载最终失败: {e}", "error")
+            if (
+                "Sign in to confirm you're not a bot" in str(e)
+                or "Use --cookies-from-browser or --cookies" in str(e)
+            ):
+                if self.last_cookies_supplied:
+                    self.log(
+                        "YouTube 仍要求登录验证：已检测到 Cookies，但 Cookies 可能已失效或当前出口/IP 被风控。"
+                        "请重新导出最新 Cookies 后重试，必要时更换网络出口。",
+                        "error"
+                    )
+                else:
+                    self.log(
+                        "YouTube 需要登录态 Cookies 才能继续下载。请先更新 cookies.txt 后重试。",
+                        "error"
+                    )
+            else:
+                self.log(f"下载最终失败: {e}", "error")
             return None
         finally:
             if final_cookies_path and final_cookies_path != cookies_file and os.path.exists(final_cookies_path):

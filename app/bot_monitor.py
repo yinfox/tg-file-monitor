@@ -3,6 +3,11 @@ import json
 import logging
 import asyncio
 import sqlite3
+import time
+import fcntl
+import hashlib
+from datetime import datetime
+from typing import Dict, List, Optional, Set, Tuple
 from telethon import TelegramClient, events, functions, types
 from telethon.sessions import SQLiteSession
 import sys
@@ -10,6 +15,7 @@ from dotenv import load_dotenv
 
 # Add current directory to sys.path to find downloader_module when running from app directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+import re
 
 from downloader_module import downloader
 
@@ -34,6 +40,7 @@ if not os.path.exists(CONFIG_DIR):
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 TELEGRAM_SESSION_NAME = "bot_session"
+BOT_LOCK_FILE = os.path.join(CONFIG_DIR, 'bot_monitor.lock')
 
 # Load environment variables
 load_dotenv(os.path.join(CONFIG_DIR, '.env'))
@@ -41,12 +48,63 @@ load_dotenv(os.path.join(CONFIG_DIR, '.env'))
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         return {}
+
+
+def _token_fingerprint(token: str) -> str:
+    """Return a short non-reversible fingerprint for safe diagnostics."""
+    if not token:
+        return "empty"
+    digest = hashlib.sha1(token.encode('utf-8')).hexdigest()[:10]
+    return f"sha1:{digest},len:{len(token)}"
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             return json.load(f)
     except Exception as e:
         logger.error(f"Failed to load config: {e}")
         return {}
+
+
+def resolve_writable_download_dir(config):
+    """Return a writable download path, falling back to project downloads dir."""
+    configured_path = config.get('downloader', {}).get('default_path') or os.path.join(BASE_DIR, 'downloads')
+    candidate = os.path.abspath(os.path.expanduser(configured_path))
+
+    def _is_writable_dir(path):
+        try:
+            os.makedirs(path, exist_ok=True)
+            test_file = os.path.join(path, '.write_test')
+            with open(test_file, 'w', encoding='utf-8') as f:
+                f.write('ok')
+            os.remove(test_file)
+            return True
+        except Exception:
+            return False
+
+    if _is_writable_dir(candidate):
+        return candidate, None
+
+    fallback = os.path.join(BASE_DIR, 'downloads')
+    if _is_writable_dir(fallback):
+        return fallback, candidate
+
+    return None, candidate
+
+
+def acquire_single_instance_lock():
+    """Ensure only one bot_monitor process can run at a time."""
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    lock_fp = open(BOT_LOCK_FILE, 'w', encoding='utf-8')
+    try:
+        fcntl.flock(lock_fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_fp.write(str(os.getpid()))
+        lock_fp.flush()
+        return lock_fp
+    except BlockingIOError:
+        try:
+            lock_fp.close()
+        except Exception:
+            pass
+        return None
 
 def merge_cookies_logic(existing_path, new_path):
     """
@@ -125,12 +183,25 @@ def merge_cookies_logic(existing_path, new_path):
         return False, str(e)
 
 async def main():
+    lock_fp = acquire_single_instance_lock()
+    if lock_fp is None:
+        downloader.log("检测到已有 bot_monitor 实例在运行，当前进程退出以避免 session 锁冲突。", "warning")
+        return
+
     config = load_config()
     
-    # Priority: Env Vars > Config
+    # Priority: Config > Env fallback
     api_id = os.environ.get('TELEGRAM_API_ID') or config.get('telegram', {}).get('api_id')
     api_hash = os.environ.get('TELEGRAM_API_HASH') or config.get('telegram', {}).get('api_hash')
-    bot_token = os.environ.get('TELEGRAM_BOT_TOKEN') or config.get('bot', {}).get('token')
+    config_bot_token = (config.get('bot', {}).get('token') or '').strip()
+    env_bot_token = (os.environ.get('TELEGRAM_BOT_TOKEN') or '').strip()
+    bot_token = config_bot_token or env_bot_token
+    bot_token_source = 'config.json' if config_bot_token else ('env' if env_bot_token else 'none')
+
+    downloader.log(
+        f"Bot token source={bot_token_source}, fingerprint={_token_fingerprint(bot_token)}",
+        "info"
+    )
 
     if not api_id or not api_hash or not bot_token:
         downloader.log("Bot credentials (API ID, Hash, or Token) missing. Bot monitor will not start.", "warning")
@@ -163,6 +234,183 @@ async def main():
 
     # State management for interactive flows
     waiting_for_cookies = set()
+
+    def locate_cookies_file(cfg) -> Tuple[Optional[str], List[str]]:
+        configured = (cfg.get('downloader', {}) or {}).get('cookies_file')
+        candidates: List[str] = []
+        if configured:
+            candidates.append(os.path.abspath(os.path.expanduser(configured)))
+        candidates.append(os.path.join(CONFIG_DIR, 'cookies.txt'))
+        candidates.append(os.path.abspath('cookies.txt'))
+
+        seen = set()
+        paths: List[str] = []
+        for p in candidates:
+            if p and p not in seen:
+                seen.add(p)
+                paths.append(p)
+
+        for p in paths:
+            if os.path.exists(p):
+                return p, paths
+        return None, paths
+
+    def inspect_cookies_file(path: str) -> Dict[str, object]:
+        now_ts = int(time.time())
+        total_lines = 0
+        valid_lines = 0
+        malformed_lines = 0
+        expired_lines = 0
+        domains: Set[str] = set()
+        cookie_names: Set[str] = set()
+
+        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+            for raw in f:
+                line = (raw or '').strip()
+                if not line or line.startswith('#'):
+                    continue
+
+                total_lines += 1
+                parts = line.split('\t')
+                if len(parts) < 7:
+                    malformed_lines += 1
+                    continue
+
+                valid_lines += 1
+                domain = (parts[0] or '').strip().lower()
+                name = (parts[5] or '').strip()
+                expires = (parts[4] or '').strip()
+
+                if domain:
+                    domains.add(domain)
+                if name:
+                    cookie_names.add(name)
+
+                try:
+                    exp_ts = int(expires)
+                    if exp_ts > 0 and exp_ts < now_ts:
+                        expired_lines += 1
+                except Exception:
+                    pass
+
+        yt_domains = {d for d in domains if 'youtube.com' in d or 'youtu.be' in d}
+        google_domains = {d for d in domains if 'google.com' in d}
+        key_login_cookies = {
+            'SID', 'HSID', 'SSID', 'APISID', 'SAPISID',
+            '__Secure-1PSID', '__Secure-3PSID', 'LOGIN_INFO'
+        }
+        present_key = sorted(list(key_login_cookies.intersection(cookie_names)))
+
+        return {
+            'total_lines': total_lines,
+            'valid_lines': valid_lines,
+            'malformed_lines': malformed_lines,
+            'expired_lines': expired_lines,
+            'domains': domains,
+            'yt_domains': yt_domains,
+            'google_domains': google_domains,
+            'cookie_names': cookie_names,
+            'present_key': present_key,
+        }
+
+    def build_cookies_status_text(cfg):
+        found, _ = locate_cookies_file(cfg)
+
+        if not found:
+            return (
+                "🍪 **Cookies 状态**\n"
+                "- 状态: 未找到 cookies 文件\n"
+                "- 建议: 发送 `/start` -> 点击 `🍪 更新 Cookies` 上传 `cookies.txt`"
+            )
+
+        try:
+            st = os.stat(found)
+            size_kb = st.st_size / 1024
+            mtime = datetime.fromtimestamp(st.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            size_kb = 0
+            mtime = '未知'
+
+        hint = "✅ 文件存在，可用于下载测试"
+        if size_kb < 1:
+            hint = "⚠️ 文件过小，可能不是有效导出的 Cookies"
+
+        return (
+            "🍪 **Cookies 状态**\n"
+            f"- 路径: `{found}`\n"
+            f"- 大小: `{size_kb:.1f} KB`\n"
+            f"- 修改时间: `{mtime}`\n"
+            f"- 检查结果: {hint}"
+        )
+
+    def build_cookies_check_text(cfg):
+        found, searched_paths = locate_cookies_file(cfg)
+        if not found:
+            searched = '\n'.join([f"  - `{p}`" for p in searched_paths]) or "  - (无)"
+            return (
+                "🍪 **Cookies 深度检查**\n"
+                "- 结果: 未找到 cookies 文件\n"
+                "- 已检查路径:\n"
+                f"{searched}\n"
+                "- 建议: 发送 `/start` -> 点击 `🍪 更新 Cookies` 上传最新 `cookies.txt`"
+            )
+
+        try:
+            st = os.stat(found)
+            info = inspect_cookies_file(found)
+        except Exception as e:
+            return (
+                "🍪 **Cookies 深度检查**\n"
+                f"- 路径: `{found}`\n"
+                f"- 结果: 读取失败 `{e}`"
+            )
+
+        valid_lines = int(info['valid_lines'])
+        malformed_lines = int(info['malformed_lines'])
+        expired_lines = int(info['expired_lines'])
+        yt_domains = sorted(list(info['yt_domains']))
+        google_domains = sorted(list(info['google_domains']))
+        present_key = info['present_key']
+
+        verdict = "✅ 基本可用"
+        if valid_lines == 0:
+            verdict = "❌ 无有效 Netscape Cookie 记录"
+        elif not yt_domains and not google_domains:
+            verdict = "⚠️ 缺少 YouTube/Google 域名记录"
+        elif len(present_key) < 2:
+            verdict = "⚠️ 登录态关键信息偏少，可能仍会触发风控"
+
+        return (
+            "🍪 **Cookies 深度检查**\n"
+            f"- 路径: `{found}`\n"
+            f"- 文件大小: `{st.st_size / 1024:.1f} KB`\n"
+            f"- 有效记录: `{valid_lines}`\n"
+            f"- 格式异常行: `{malformed_lines}`\n"
+            f"- 已过期记录: `{expired_lines}`\n"
+            f"- YouTube域: `{len(yt_domains)}`\n"
+            f"- Google域: `{len(google_domains)}`\n"
+            f"- 关键登录Cookie: `{', '.join(present_key) if present_key else '未检测到'}`\n"
+            f"- 结论: {verdict}\n"
+            "- 提示: 若仍下载失败，请在浏览器保持登录后重新导出 cookies。"
+        )
+
+    def has_strong_youtube_cookies(cfg) -> bool:
+        """Heuristic: enough evidence that login cookies are present."""
+        found, _ = locate_cookies_file(cfg)
+        if not found:
+            return False
+        try:
+            info = inspect_cookies_file(found)
+        except Exception:
+            return False
+
+        yt_domains = set(info.get('yt_domains') or [])
+        google_domains = set(info.get('google_domains') or [])
+        present_key = set(info.get('present_key') or [])
+
+        has_domain = bool(yt_domains or google_domains)
+        # At least 2 key cookies usually means usable login state exists.
+        return has_domain and len(present_key) >= 2
 
     # --- Command Handlers ---
     @client.on(events.NewMessage(pattern='/start'))
@@ -226,7 +474,9 @@ async def main():
             "🛠 **帮助菜单**\n\n"
             "1. **发送链接**: 直接粘贴 URL。\n"
             "2. **更新 Cookies**: 点击菜单按钮后发送文件或文本。\n"
-            "3. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
+            "3. **检查 Cookies**: 发送 `/cookies_status`\n"
+            "4. **深度检查 Cookies**: 发送 `/cookies_check`\n"
+            "5. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
         )
         await event.respond(help_text)
 
@@ -248,9 +498,21 @@ async def main():
             "🛠 **帮助菜单**\n\n"
             "1. **发送链接**: 直接粘贴 URL。\n"
             "2. **更新 Cookies**: 输入 /start 点击按钮。\n"
-            "3. **搜寻影视**: 发送 `/movie <剧名>`\n"
+            "3. **检查 Cookies**: 发送 `/cookies_status`\n"
+            "4. **深度检查 Cookies**: 发送 `/cookies_check`\n"
+            "5. **搜寻影视**: 发送 `/movie <剧名>`\n"
         )
         await event.reply(help_text)
+
+    @client.on(events.NewMessage(pattern='/cookies_status'))
+    async def cookies_status_handler(event):
+        cfg = load_config()
+        await event.reply(build_cookies_status_text(cfg))
+
+    @client.on(events.NewMessage(pattern='/cookies_check'))
+    async def cookies_check_handler(event):
+        cfg = load_config()
+        await event.reply(build_cookies_check_text(cfg))
 
 
     @client.on(events.NewMessage(pattern='/movie'))
@@ -309,13 +571,14 @@ async def main():
         
         if not event.is_private:
             return
+
+        text = (event.text or '').strip()
         
         # Ignore commands handled by other handlers
-        if event.text.startswith('/'):
+        if text.startswith('/'):
             return
 
         sender_id = event.sender_id
-        text = event.text.strip()
         
         # --- 1. Check for Cookies Content (Direct Text) ---
         # Heuristic: starts with # Netscape OR contains typical cookie fields OR specific domains
@@ -463,15 +726,24 @@ async def main():
             await event.reply("请先通过 /start 菜单点击 '🍪 更新 Cookies' 按钮后再发送文件。")
             return
 
-        if text.startswith('http://') or text.startswith('https://'):
-            url = text
+        url_match = re.search(r'https?://\S+', text)
+        if url_match:
+            url = url_match.group(0).rstrip(')>,.;!\"\'')
             # sender = await event.get_sender() # Might fail if user restricted privacy? just use sender_id
             downloader.log(f"Received URL from {sender_id}: {url}")
             # await event.reply(f"📥 **已加入下载队列**\n链接: {url}")
             
             msg = await event.reply("收到链接，正在准备下载...")
             
-            default_path = config.get('downloader', {}).get('default_path', os.path.join(BASE_DIR, 'downloads'))
+            default_path, bad_path = resolve_writable_download_dir(config)
+            if bad_path:
+                downloader.log(
+                    f"配置下载目录不可写: {bad_path}，自动回退到项目目录 downloads/",
+                    "warning"
+                )
+            if not default_path:
+                await msg.edit("❌ **下载失败**\n原因: `下载目录不可写，请检查 downloader.default_path 权限配置。`")
+                return
             
             # Use downloader module to download
             # Since download_video is blocking, run in executor
@@ -523,10 +795,54 @@ async def main():
                      except:
                          pass
                 else:
-                    await msg.edit("❌ **下载失败**\n请检查链接或日志。")
+                    last_error = (downloader.get_last_error() or "").lower()
+                    if 'ffmpeg' in last_error:
+                        await msg.edit(
+                            "❌ **下载失败（缺少 FFmpeg）**\n"
+                            "你当前已启用“最高画质”策略，但服务器未安装 FFmpeg，无法合并最佳音视频流。\n"
+                            "请先安装 FFmpeg 后重试。"
+                        )
+                        return
+
+                    cookies_required = downloader.is_youtube_cookies_required_error()
+                    ip_or_client_limited = downloader.is_youtube_client_or_ip_limited_error()
+                    strong_cookies = has_strong_youtube_cookies(config)
+
+                    # If we already have strong cookies but still hit Sign-in style failures,
+                    # it is commonly an IP/client risk-control issue rather than missing cookies.
+                    if ip_or_client_limited or (cookies_required and strong_cookies):
+                        js_runtime_hint = ""
+                        if downloader.is_js_runtime_missing():
+                            js_runtime_hint = "\n4. 当前服务器缺少 JS 运行时（deno/node），先安装后再试"
+                        await msg.edit(
+                            "❌ **下载失败（YouTube 风控/出口受限）**\n"
+                            "当前 Cookies 已检测到登录态，但仍被 YouTube 限制。\n"
+                            "建议依次尝试：\n"
+                            "1. 临时关闭代理后重试\n"
+                            "2. 更换网络出口/IP（优先住宅网络）\n"
+                            "3. 使用该出口网络重新登录并导出 Cookies"
+                            f"{js_runtime_hint}"
+                        )
+                        return
+
+                    if cookies_required:
+                        await msg.edit(
+                            "❌ **下载失败（YouTube 需要登录态）**\n"
+                            "请先更新 Cookies：\n"
+                            "1. 发送 `/start`\n"
+                            "2. 点击 `🍪 更新 Cookies`\n"
+                            "3. 上传可用的 `cookies.txt`（含 YouTube 登录态）\n"
+                            "4. 重新发送链接"
+                        )
+                        return
+
+                    reason = downloader.get_last_error() or "未拿到可下载的视频流，可能需要代理或有效 Cookies。"
+                    await msg.edit(f"❌ **下载失败**\n原因: `{reason}`")
             except Exception as e:
                 downloader.log(f"Bot processing error: {e}", "error")
                 await msg.edit(f"发生错误: {str(e)}")
+        else:
+            await event.reply("请发送有效的视频链接（支持 YouTube/Instagram 等）。")
 
     downloader.log("Starting Bot...")
     # Retry logic for database lock
@@ -550,6 +866,8 @@ async def main():
         await client(functions.bots.SetBotCommandsRequest(
             commands=[
                 types.BotCommand("start", "开始菜单"),
+                types.BotCommand("cookies_status", "检查 Cookies 状态"),
+                types.BotCommand("cookies_check", "深度检查 Cookies 可用性"),
                 types.BotCommand("movie", "影巢资源搜寻"),
                 types.BotCommand("help", "使用帮助"),
                 types.BotCommand("status", "检查服务状态"),

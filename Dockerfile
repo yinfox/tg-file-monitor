@@ -7,12 +7,20 @@ WORKDIR /app
 # Copy requirements file and install dependencies
 COPY requirements.txt .
 
-# Install FFmpeg and basic runtime dependencies
+# Install FFmpeg + JS runtimes needed by yt-dlp (node/deno)
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
     ffmpeg \
+    curl \
+    unzip \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Install deno runtime (used by yt-dlp EJS challenge path)
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV PATH="/root/.deno/bin:${PATH}"
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt

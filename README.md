@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.18-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.23-orange.svg)](.)
 
 </div>
 
@@ -228,6 +228,26 @@ Web 界面 → 配置 → 代理配置
 | 部署 | Docker, Docker Compose |
 
 ## 📊 版本历史
+
+### v0.4.23 (2026-03-10) - 当前版本
+- ✅ Bot Token 生效逻辑优化：Web 配置优先，环境变量仅作为兜底
+- ✅ Web 端更新 Bot Token 后自动重启 Bot 监控进程，修改后立即生效
+- ✅ 新增 Bot 启动诊断日志：输出 token 来源与脱敏指纹，便于排查配置覆盖
+
+### v0.4.22 (2026-03-09)
+- ✅ 优化 YouTube 失败诊断：区分“未提供 Cookies”与“已提供但可能失效/出口受限”
+- ✅ Bot 提示更准确：避免始终提示重新上传 Cookies，优先引导排查网络出口/IP 风控
+
+### v0.4.21 (2026-03-09)
+- ✅ 修复 Web 端版本显示未同步问题：统一更新页面版本变量为 `0.4.21`
+- ✅ 补丁发布：同步 Docker 镜像与页面显示版本，避免“镜像版本/页面版本”不一致
+
+### v0.4.20 (2026-03-09)
+- ✅ Docker 发布链路增强：补齐 `deno` 安装依赖 `unzip`，避免镜像构建中断
+- ✅ 运行环境补齐：镜像内置 `nodejs`/`npm`/`deno` + `ffmpeg`，提升 yt-dlp 可用性
+- ✅ Python 依赖完善：新增 `imageio-ffmpeg`，在受限环境提供 ffmpeg 兜底
+- ✅ 监控日志体验优化：`telegram_monitor.py` 日志输出实时 `flush`
+- ✅ 新增发布脚本：`scripts/docker_release.sh`、`scripts/netcup_deploy.sh`
 
 ### v0.4.18 (2026-03-08) - 当前版本
 - ✅ 下载风控优化：限频/冷却触发时进入队列等待并自动重试

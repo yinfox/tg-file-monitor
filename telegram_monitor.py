@@ -46,7 +46,7 @@ def log_message(message: str, level: str = "INFO"):
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
     if level == "DEBUG" and not DEBUG_MODE:
         return
-    print(f"[{ts}] [{level}] {message}")
+    print(f"[{ts}] [{level}] {message}", flush=True)
 
 
 def debug_log(message: str):

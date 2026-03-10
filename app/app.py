@@ -27,7 +27,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.18"
+VERSION = "0.4.23"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
@@ -111,11 +111,15 @@ def load_config():
     if os.environ.get('TELEGRAM_API_HASH'):
         config['telegram']['api_hash'] = os.environ.get('TELEGRAM_API_HASH')
     
-    # Telegram Bot Token
-    if os.environ.get('TELEGRAM_BOT_TOKEN'):
+    # Telegram Bot Token: prefer config value so Web updates can take effect directly.
+    # Env var remains a fallback when config token is missing.
+    env_bot_token = os.environ.get('TELEGRAM_BOT_TOKEN')
+    if env_bot_token:
         if 'bot' not in config:
             config['bot'] = {}
-        config['bot']['token'] = os.environ.get('TELEGRAM_BOT_TOKEN')
+        current_bot_token = (config.get('bot', {}).get('token') or '').strip()
+        if not current_bot_token:
+            config['bot']['token'] = env_bot_token
     
     # 115 Cookie
     if os.environ.get('COOKIE_115'):
@@ -809,7 +813,12 @@ def manage_config():
                 config['bot'] = {}
             config['bot']['token'] = bot_token
             save_config(config)
-            flash("Bot Token 已更新！", "success")
+            if get_bot_monitor_status() == "运行中":
+                stop_bot_monitor_process()
+                start_bot_monitor_process()
+                flash("Bot Token 已更新，Bot 监控已自动重启并应用新配置。", "success")
+            else:
+                flash("Bot Token 已更新！启动 Bot 监控后将使用新配置。", "success")
 
         elif action == 'update_filename_blacklist':
             blacklist_str = request.form.get('filename_blacklist_keywords', '')
@@ -1241,6 +1250,19 @@ async def api_download():
     
     if not url or not output_dir:
         return jsonify({"error": "Missing parameters"}), 400
+
+    output_dir = os.path.abspath(os.path.expanduser(output_dir.strip()))
+    if not output_dir:
+        return jsonify({"error": "保存目录不能为空"}), 400
+
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        write_test = os.path.join(output_dir, '.write_test')
+        with open(write_test, 'w', encoding='utf-8') as f:
+            f.write('ok')
+        os.remove(write_test)
+    except Exception as e:
+        return jsonify({"error": f"保存目录不可写: {e}"}), 400
         
     # Save cookie file if provided
     cookie_path = None
@@ -1250,6 +1272,11 @@ async def api_download():
         cookie_file.save(cookie_path)
     
     config = load_config()
+    downloader_cfg = config.setdefault('downloader', {})
+    if downloader_cfg.get('default_path') != output_dir:
+        downloader_cfg['default_path'] = output_dir
+        save_config(config)
+
     p_cfg = config.get("proxy", {})
     proxy_url = None
     if p_cfg.get("addr") and p_cfg.get("port"):
@@ -1259,6 +1286,34 @@ async def api_download():
     asyncio.create_task(downloader.download_task(url, output_dir, cookie_path, browser, proxy_url))
     
     return jsonify({"success": True})
+
+
+@app.route('/api/downloader/default_path', methods=['POST'])
+@login_required
+def api_set_downloader_default_path():
+    data = request.get_json(silent=True) or {}
+    output_dir = str(data.get('output_dir', '')).strip()
+
+    if not output_dir:
+        return jsonify({"error": "保存目录不能为空"}), 400
+
+    output_dir = os.path.abspath(os.path.expanduser(output_dir))
+
+    try:
+        os.makedirs(output_dir, exist_ok=True)
+        write_test = os.path.join(output_dir, '.write_test')
+        with open(write_test, 'w', encoding='utf-8') as f:
+            f.write('ok')
+        os.remove(write_test)
+    except Exception as e:
+        return jsonify({"error": f"保存目录不可写: {e}"}), 400
+
+    config = load_config()
+    downloader_cfg = config.setdefault('downloader', {})
+    downloader_cfg['default_path'] = output_dir
+    save_config(config)
+
+    return jsonify({"success": True, "default_path": output_dir})
 
 # HDHive 资源请求功能已移除
 
