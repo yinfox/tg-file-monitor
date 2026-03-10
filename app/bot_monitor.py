@@ -1092,10 +1092,39 @@ async def main():
                         upload_caption_parts.append(f"标题: {source_title}")
                     if source_resolution:
                         upload_caption_parts.append(f"分辨率: {source_resolution}")
+
+                    upload_attributes = None
+                    try:
+                        probe = downloader._probe_media_streams(filename)
+                        if probe and probe.get('video_stream'):
+                            probe_w = int(probe.get('width') or 0)
+                            probe_h = int(probe.get('height') or 0)
+                            probe_rot = int(probe.get('rotation') or 0) % 360
+                            if probe_rot in (90, 270):
+                                probe_w, probe_h = probe_h, probe_w
+
+                            stream_duration = (probe.get('video_stream') or {}).get('duration')
+                            duration_seconds = int(round(float(stream_duration or 0))) if stream_duration else 0
+                            if duration_seconds <= 0:
+                                duration_seconds = 1
+
+                            if probe_w > 0 and probe_h > 0:
+                                upload_attributes = [
+                                    types.DocumentAttributeVideo(
+                                        duration=duration_seconds,
+                                        w=probe_w,
+                                        h=probe_h,
+                                        supports_streaming=True,
+                                    )
+                                ]
+                    except Exception as attr_err:
+                        downloader.log(f"Upload video attribute probe failed, fallback to auto attributes: {attr_err}", "warning")
+
                     await client.send_file(
                         event.chat_id,
                         filename,
                         caption="\n".join(upload_caption_parts),
+                        attributes=upload_attributes,
                         force_document=False,
                         supports_streaming=True,
                         part_size_kb=512,
