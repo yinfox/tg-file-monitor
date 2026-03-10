@@ -369,6 +369,38 @@ class Downloader:
             if "youtube.com" not in lower_url and "youtu.be" not in lower_url:
                 is_instagram = "instagram.com" in lower_url
                 is_tiktok = "tiktok.com" in lower_url or "douyin.com" in lower_url
+                is_twitter = (
+                    "x.com" in lower_url
+                    or "twitter.com" in lower_url
+                    or "t.co/" in lower_url
+                )
+                is_facebook = (
+                    "facebook.com" in lower_url
+                    or "fb.watch" in lower_url
+                    or "fb.com" in lower_url
+                )
+
+                def _run_non_youtube_retry(attempt_headers, source_name):
+                    last_error = None
+                    for idx, headers in enumerate(attempt_headers, start=1):
+                        current_opts = base_ydl_opts.copy()
+                        current_headers = dict(base_ydl_opts.get('http_headers') or {})
+                        current_headers.update(headers)
+                        current_opts['http_headers'] = current_headers
+
+                        self.log(f"{source_name} 下载尝试 {idx}/{len(attempt_headers)}", "info")
+                        try:
+                            with yt_dlp.YoutubeDL(current_opts) as ydl:
+                                info = ydl.extract_info(url, download=True)
+                                if info:
+                                    return self._process_info(ydl, info)
+                        except Exception as e:
+                            last_error = e
+                            self.log(f"{source_name} 尝试 {idx} 失败: {type(e).__name__}: {e!r}", "warning")
+
+                    if last_error:
+                        raise last_error
+                    return None
 
                 if is_tiktok:
                     tiktok_attempt_headers = [
@@ -385,26 +417,39 @@ class Downloader:
                         },
                     ]
 
-                    last_tiktok_error = None
-                    for idx, headers in enumerate(tiktok_attempt_headers, start=1):
-                        current_opts = base_ydl_opts.copy()
-                        current_headers = dict(base_ydl_opts.get('http_headers') or {})
-                        current_headers.update(headers)
-                        current_opts['http_headers'] = current_headers
+                    return _run_non_youtube_retry(tiktok_attempt_headers, 'TikTok')
 
-                        self.log(f"TikTok 下载尝试 {idx}/{len(tiktok_attempt_headers)}", "info")
-                        try:
-                            with yt_dlp.YoutubeDL(current_opts) as ydl:
-                                info = ydl.extract_info(url, download=True)
-                                if info:
-                                    return self._process_info(ydl, info)
-                        except Exception as e:
-                            last_tiktok_error = e
-                            self.log(f"TikTok 尝试 {idx} 失败: {type(e).__name__}: {e!r}", "warning")
+                if is_twitter:
+                    twitter_attempt_headers = [
+                        {
+                            'Referer': 'https://x.com/',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                        {
+                            'Referer': 'https://twitter.com/',
+                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1',
+                        },
+                        {
+                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                    ]
+                    return _run_non_youtube_retry(twitter_attempt_headers, 'X/Twitter')
 
-                    if last_tiktok_error:
-                        raise last_tiktok_error
-                    return None
+                if is_facebook:
+                    facebook_attempt_headers = [
+                        {
+                            'Referer': 'https://www.facebook.com/',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                        {
+                            'Referer': 'https://m.facebook.com/',
+                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1',
+                        },
+                        {
+                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                    ]
+                    return _run_non_youtube_retry(facebook_attempt_headers, 'Facebook')
 
                 if is_instagram:
                     base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.instagram.com/'

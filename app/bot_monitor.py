@@ -575,7 +575,7 @@ async def main():
     async def start_handler(event):
         welcome_text = (
             "👋 **你好！我是您的文件监控助手。**\n\n"
-            "我可以帮您下载视频（支持 YouTube、TikTok、Instagram 等）。\n\n"
+            "我可以帮您下载视频（支持 YouTube、TikTok、X/Twitter、Facebook、Instagram 等）。\n\n"
             "👇 **点击下方按钮开始交互**"
         )
         buttons = [
@@ -611,7 +611,7 @@ async def main():
         # Construct a fake event or just send the text/buttons directly
         welcome_text = (
             "👋 **你好！我是您的文件监控助手。**\n\n"
-            "我可以帮您下载视频（支持 YouTube、TikTok、Instagram 等）。\n\n"
+            "我可以帮您下载视频（支持 YouTube、TikTok、X/Twitter、Facebook、Instagram 等）。\n\n"
             "👇 **点击下方按钮开始交互**"
         )
         await client.send_message(chat_id, welcome_text, buttons=[
