@@ -14,7 +14,8 @@
   "downloader": {
     "default_path": "/app/downloads",
     "quality_mode": "balanced_hd",
-    "youtube_quality_mode": "ultra_quality"
+    "youtube_quality_mode": "ultra_quality",
+    "upload_mode": "transcode"
   },
   "bot": {
     "token": ""

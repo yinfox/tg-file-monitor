@@ -128,6 +128,12 @@ def normalize_quality_mode(mode: str, default: str = 'balanced_hd') -> str:
     return normalized if normalized in allowed else default
 
 
+def normalize_upload_mode(mode: str, default: str = 'transcode') -> str:
+    allowed = {'transcode', 'original'}
+    normalized = (mode or '').strip().lower()
+    return normalized if normalized in allowed else default
+
+
 def acquire_single_instance_lock():
     """Ensure only one bot_monitor process can run at a time."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -301,6 +307,13 @@ async def main():
         }
         return labels.get(mode, mode or '未设置')
 
+    def upload_mode_label(mode: str) -> str:
+        labels = {
+            'transcode': '兼容转码上传',
+            'original': '原码直传',
+        }
+        return labels.get(mode, mode or '未设置')
+
     def build_download_settings_text(cfg: dict) -> str:
         downloader_cfg = ensure_downloader_config(cfg)
         default_path = (downloader_cfg.get('default_path') or '').strip() or os.path.join(BASE_DIR, 'downloads')
@@ -312,11 +325,16 @@ async def main():
             downloader_cfg.get('youtube_quality_mode', 'ultra_quality'),
             default='ultra_quality',
         )
+        upload_mode = normalize_upload_mode(
+            downloader_cfg.get('upload_mode', 'transcode'),
+            default='transcode',
+        )
         return (
             "⚙️ **下载设置**\n"
             f"- 下载目录: `{default_path}`\n"
             f"- 通用画质(非YouTube): `{general_mode}` ({quality_mode_label(general_mode)})\n"
             f"- YouTube画质覆盖: `{yt_mode}` ({quality_mode_label(yt_mode)})\n\n"
+            f"- 上传策略: `{upload_mode}` ({upload_mode_label(upload_mode)})\n\n"
             "点击按钮可直接修改。"
         )
 
@@ -341,6 +359,10 @@ async def main():
             [
                 types.KeyboardButtonCallback("设置下载目录", data=b'dl_set_path'),
                 types.KeyboardButtonCallback("刷新设置", data=b'dl_settings'),
+            ],
+            [
+                types.KeyboardButtonCallback("上传: 兼容转码", data=b'dl_upload_transcode'),
+                types.KeyboardButtonCallback("上传: 原码直传", data=b'dl_upload_original'),
             ],
         ]
 
@@ -675,6 +697,28 @@ async def main():
         downloader_cfg['quality_mode'] = 'ultra_quality'
         if save_runtime_config(cfg):
             await event.answer("通用模式已设为超清优先")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_upload_transcode'))
+    async def download_set_upload_transcode_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['upload_mode'] = 'transcode'
+        if save_runtime_config(cfg):
+            await event.answer("上传策略已设为兼容转码")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_upload_original'))
+    async def download_set_upload_original_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['upload_mode'] = 'original'
+        if save_runtime_config(cfg):
+            await event.answer("上传策略已设为原码直传")
             await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
         else:
             await event.answer("保存失败", alert=True)
@@ -1046,6 +1090,16 @@ async def main():
                     youtube_quality_mode = resolve_youtube_quality_mode(config)
                     downloader.log(f"YouTube 下载启用画质覆盖: {youtube_quality_mode}", "info")
 
+                downloader_cfg = config.get('downloader', {}) if isinstance(config, dict) else {}
+                if not isinstance(downloader_cfg, dict):
+                    downloader_cfg = {}
+                upload_mode = normalize_upload_mode(
+                    downloader_cfg.get('upload_mode', 'transcode'),
+                    default='transcode',
+                )
+                use_transcode_upload = (upload_mode == 'transcode')
+                downloader.log(f"上传策略: {upload_mode}", "info")
+
                 download_started_at = time.perf_counter()
                 filename = await downloader.download_task(
                     url,
@@ -1054,27 +1108,29 @@ async def main():
                     cookies_from_browser,
                     proxy_url,
                     youtube_quality_mode,
+                    use_transcode_upload,
                 )
                 download_elapsed = time.perf_counter() - download_started_at
                 
                 if filename and os.path.exists(filename):
                     compat_elapsed = 0.0
                     transcoded_for_upload = False
-                    # Final guard: local files (or edge outputs) should still pass compatibility check.
-                    try:
-                        original_filename = filename
-                        compat_started_at = time.perf_counter()
-                        fixed_for_upload = await asyncio.get_running_loop().run_in_executor(
-                            downloader.executor,
-                            downloader._maybe_make_telegram_compatible,
-                            filename,
-                        )
-                        compat_elapsed = time.perf_counter() - compat_started_at
-                        if fixed_for_upload and os.path.exists(fixed_for_upload):
-                            filename = fixed_for_upload
-                            transcoded_for_upload = os.path.abspath(fixed_for_upload) != os.path.abspath(original_filename)
-                    except Exception as _fix_err:
-                        downloader.log(f"Upload compatibility precheck failed, fallback to original file: {_fix_err}", "warning")
+                    if use_transcode_upload:
+                        # Final guard: local files (or edge outputs) should still pass compatibility check.
+                        try:
+                            original_filename = filename
+                            compat_started_at = time.perf_counter()
+                            fixed_for_upload = await asyncio.get_running_loop().run_in_executor(
+                                downloader.executor,
+                                downloader._maybe_make_telegram_compatible,
+                                filename,
+                            )
+                            compat_elapsed = time.perf_counter() - compat_started_at
+                            if fixed_for_upload and os.path.exists(fixed_for_upload):
+                                filename = fixed_for_upload
+                                transcoded_for_upload = os.path.abspath(fixed_for_upload) != os.path.abspath(original_filename)
+                        except Exception as _fix_err:
+                            downloader.log(f"Upload compatibility precheck failed, fallback to original file: {_fix_err}", "warning")
 
                     download_meta = downloader.get_last_download_metadata()
                     source_url = (download_meta.get('source_url') or url or '').strip()
@@ -1142,7 +1198,7 @@ async def main():
 
                     downloader.log(
                         f"任务耗时统计: download={download_elapsed:.2f}s, compat={compat_elapsed:.2f}s, "
-                        f"upload={upload_elapsed:.2f}s, transcoded={transcoded_for_upload}, "
+                        f"upload={upload_elapsed:.2f}s, upload_mode={upload_mode}, transcoded={transcoded_for_upload}, "
                         f"file={os.path.basename(filename)}",
                         "info",
                     )

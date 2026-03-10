@@ -946,7 +946,16 @@ class Downloader:
             'bestvideo[height<=2160][vcodec^=avc1]+bestaudio[ext=m4a]/best'
         )
 
-    async def download_task(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None, quality_mode_override=None):
+    async def download_task(
+        self,
+        url,
+        output_dir,
+        cookies_file=None,
+        cookies_from_browser=None,
+        proxy=None,
+        quality_mode_override=None,
+        ensure_telegram_compatible=True,
+    ):
         """Async wrapper for download_video."""
         loop = asyncio.get_running_loop()
         downloaded = await loop.run_in_executor(
@@ -961,7 +970,9 @@ class Downloader:
         )
         if not downloaded:
             return downloaded
-        return await loop.run_in_executor(self.executor, self._maybe_make_telegram_compatible, downloaded)
+        if ensure_telegram_compatible:
+            return await loop.run_in_executor(self.executor, self._maybe_make_telegram_compatible, downloaded)
+        return downloaded
 
 # Global instance
 downloader = Downloader()
