@@ -494,6 +494,9 @@ class Downloader:
                 'vcodec': (video_stream or {}).get('codec_name'),
                 'pix_fmt': (video_stream or {}).get('pix_fmt'),
                 'sar': (video_stream or {}).get('sample_aspect_ratio'),
+                'dar': (video_stream or {}).get('display_aspect_ratio'),
+                'width': (video_stream or {}).get('width'),
+                'height': (video_stream or {}).get('height'),
                 'acodec': (audio_stream or {}).get('codec_name'),
             }
         except Exception as e:
@@ -514,14 +517,51 @@ class Downloader:
         vcodec = (probe.get('vcodec') or '').lower()
         pix_fmt = (probe.get('pix_fmt') or '').lower()
         sar = str(probe.get('sar') or '').strip()
+        dar = str(probe.get('dar') or '').strip()
+        width = int(probe.get('width') or 0)
+        height = int(probe.get('height') or 0)
 
         if not video_stream:
             self.log("检测到文件无视频流，无法修复为可播放视频。", "warning")
             return file_path
 
-        # Telegram clients are most stable with H.264 + yuv420p in MP4.
-        sar_is_non_square = bool(sar) and sar not in ('1:1', '0:1', 'N/A', 'unknown')
-        needs_transcode = (vcodec != 'h264') or (pix_fmt not in ('yuv420p', 'yuvj420p')) or sar_is_non_square
+        def _parse_ratio(ratio_text):
+            t = str(ratio_text or '').strip()
+            if not t or t in ('N/A', 'unknown', '0:1'):
+                return None
+            sep = ':' if ':' in t else ('/' if '/' in t else None)
+            if sep:
+                try:
+                    left, right = t.split(sep, 1)
+                    left_v = float(left)
+                    right_v = float(right)
+                    if right_v == 0:
+                        return None
+                    return left_v / right_v
+                except Exception:
+                    return None
+            try:
+                value = float(t)
+                return value if value > 0 else None
+            except Exception:
+                return None
+
+        # Telegram clients are most stable with H.264 + yuv420p and square pixels in MP4.
+        sar_ratio = _parse_ratio(sar)
+        dar_ratio = _parse_ratio(dar)
+        coded_ratio = (float(width) / float(height)) if width > 0 and height > 0 else None
+
+        sar_is_non_square = bool(sar_ratio and abs(sar_ratio - 1.0) > 0.01)
+        dar_mismatch_coded = bool(
+            dar_ratio and coded_ratio and abs(dar_ratio - coded_ratio) / coded_ratio > 0.03
+        )
+
+        needs_transcode = (
+            (vcodec != 'h264')
+            or (pix_fmt not in ('yuv420p', 'yuvj420p'))
+            or sar_is_non_square
+            or dar_mismatch_coded
+        )
         if not needs_transcode:
             return file_path
 
@@ -535,8 +575,8 @@ class Downloader:
             '-c:v', 'libx264',
             '-preset', 'veryfast',
             '-crf', '20',
-            # Preserve displayed aspect ratio and normalize to square pixels for Telegram players.
-            '-vf', "scale='trunc(iw*sar/2)*2':'trunc(ih/2)*2',setsar=1",
+            # Normalize to square pixels and clear odd DAR metadata that may stretch playback in Telegram.
+            '-vf', "scale='trunc(if(gte(sar,1),iw*sar,iw)/2)*2':'trunc(if(gte(sar,1),ih,ih/sar)/2)*2',setsar=1,setdar=iw/ih",
             '-pix_fmt', 'yuv420p',
             '-movflags', '+faststart',
         ]
@@ -550,7 +590,7 @@ class Downloader:
 
         try:
             self.log(
-                f"检测到视频兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'}, sar={sar or 'unknown'})，开始转码为 Telegram 兼容格式...",
+                f"检测到视频兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'}, sar={sar or 'unknown'}, dar={dar or 'unknown'})，开始转码为 Telegram 兼容格式...",
                 "warning"
             )
             subprocess.run(cmd, check=True, capture_output=True, text=True)
