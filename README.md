@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.34-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.35-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.34 (2026-03-10) - 当前版本
+### v0.4.35 (2026-03-10) - 当前版本
+- ✅ 修复 Bot 交互下载链路：从 `download_video` 切换为 `download_task`，确保兼容转码逻辑会执行
+- ✅ 修复“部分视频仍拉伸”根因：机器人模式此前未触发 `_maybe_make_telegram_compatible` 导致旧样本漏修
+
+### v0.4.34 (2026-03-10)
 - ✅ 新增 Bot 交互式下载设置：支持在 Telegram 里直接修改下载目录与画质，无需进入 Web 端
 - ✅ 新增 YouTube 超快模式：`super_fast_720p`，进一步缩小文件体积并提升上传速度
 - ✅ 设置流程增强：支持按钮切换 `youtube_quality_mode/quality_mode` 与路径输入校验、`/cancel` 取消

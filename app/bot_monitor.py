@@ -981,9 +981,6 @@ async def main():
                 await msg.edit("❌ **下载失败**\n原因: `下载目录不可写，请检查 downloader.default_path 权限配置。`")
                 return
             
-            # Use downloader module to download
-            # Since download_video is blocking, run in executor
-            loop = asyncio.get_running_loop()
             try:
                 # Check if it looks like a supported URL (basic check)
                 if "youtube.com" in url or "youtu.be" in url or "instagram.com" in url:
@@ -1023,9 +1020,7 @@ async def main():
                     youtube_quality_mode = resolve_youtube_quality_mode(config)
                     downloader.log(f"YouTube 下载启用画质覆盖: {youtube_quality_mode}", "info")
 
-                filename = await loop.run_in_executor(
-                    downloader.executor,
-                    downloader.download_video,
+                filename = await downloader.download_task(
                     url,
                     default_path,
                     cookies_file,
