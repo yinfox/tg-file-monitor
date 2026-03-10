@@ -110,16 +110,16 @@ def resolve_writable_download_dir(config):
 def resolve_youtube_quality_mode(config):
     """Pick YouTube quality mode for bot link downloads.
 
-    Defaults to fast_compatible to reduce file size and improve upload speed.
+    Defaults to ultra_quality to avoid unnecessary 1080p caps on 4K sources.
     """
     downloader_cfg = (config or {}).get('downloader', {}) if isinstance(config, dict) else {}
     if not isinstance(downloader_cfg, dict):
         downloader_cfg = {}
 
-    mode = (downloader_cfg.get('youtube_quality_mode') or 'fast_compatible').strip()
+    mode = (downloader_cfg.get('youtube_quality_mode') or 'ultra_quality').strip()
     if mode in {'super_fast_720p', 'fast_compatible', 'balanced_hd', 'ultra_quality'}:
         return mode
-    return 'fast_compatible'
+    return 'ultra_quality'
 
 
 def normalize_quality_mode(mode: str, default: str = 'balanced_hd') -> str:
@@ -309,8 +309,8 @@ async def main():
             default='balanced_hd'
         )
         yt_mode = normalize_quality_mode(
-            downloader_cfg.get('youtube_quality_mode', 'super_fast_720p'),
-            default='super_fast_720p'
+            downloader_cfg.get('youtube_quality_mode', 'ultra_quality'),
+            default='ultra_quality',
         )
         return (
             "⚙️ **下载设置**\n"
