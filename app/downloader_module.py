@@ -363,13 +363,53 @@ class Downloader:
 
         try:
             self.log(f"开始分析链接 {url}...", "info")
+            lower_url = (url or '').lower()
             
             # Non-YouTube
-            if "youtube.com" not in url and "youtu.be" not in url:
-                if "instagram.com" in url or "tiktok.com" in url:
+            if "youtube.com" not in lower_url and "youtu.be" not in lower_url:
+                is_instagram = "instagram.com" in lower_url
+                is_tiktok = "tiktok.com" in lower_url or "douyin.com" in lower_url
+
+                if is_tiktok:
+                    tiktok_attempt_headers = [
+                        {
+                            'Referer': 'https://www.tiktok.com/',
+                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1',
+                        },
+                        {
+                            'Referer': 'https://www.tiktok.com/',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                        {
+                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                    ]
+
+                    last_tiktok_error = None
+                    for idx, headers in enumerate(tiktok_attempt_headers, start=1):
+                        current_opts = base_ydl_opts.copy()
+                        current_headers = dict(base_ydl_opts.get('http_headers') or {})
+                        current_headers.update(headers)
+                        current_opts['http_headers'] = current_headers
+
+                        self.log(f"TikTok 下载尝试 {idx}/{len(tiktok_attempt_headers)}", "info")
+                        try:
+                            with yt_dlp.YoutubeDL(current_opts) as ydl:
+                                info = ydl.extract_info(url, download=True)
+                                if info:
+                                    return self._process_info(ydl, info)
+                        except Exception as e:
+                            last_tiktok_error = e
+                            self.log(f"TikTok 尝试 {idx} 失败: {type(e).__name__}: {e!r}", "warning")
+
+                    if last_tiktok_error:
+                        raise last_tiktok_error
+                    return None
+
+                if is_instagram:
                     base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.instagram.com/'
                     base_ydl_opts.setdefault('http_headers', {})['User-Agent'] = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1'
-                
+
                 with yt_dlp.YoutubeDL(base_ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=True)
                     return self._process_info(ydl, info)
