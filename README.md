@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.23-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.24-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.23 (2026-03-10) - 当前版本
+### v0.4.24 (2026-03-10) - 当前版本
+- ✅ 修复 Bot 启动日志崩溃：`load_config()` 返回值异常导致的 `NoneType.get` 报错
+- ✅ 加固配置读取：配置格式异常时安全回退，避免启动链路中断
+
+### v0.4.23 (2026-03-10)
 - ✅ Bot Token 生效逻辑优化：Web 配置优先，环境变量仅作为兜底
 - ✅ Web 端更新 Bot Token 后自动重启 Bot 监控进程，修改后立即生效
 - ✅ 新增 Bot 启动诊断日志：输出 token 来源与脱敏指纹，便于排查配置覆盖

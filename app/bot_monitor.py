@@ -48,6 +48,16 @@ load_dotenv(os.path.join(CONFIG_DIR, '.env'))
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         return {}
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        if not isinstance(config, dict):
+            logger.error("Invalid config format: top-level JSON must be an object")
+            return {}
+        return config
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}")
+        return {}
 
 
 def _token_fingerprint(token: str) -> str:
@@ -56,12 +66,6 @@ def _token_fingerprint(token: str) -> str:
         return "empty"
     digest = hashlib.sha1(token.encode('utf-8')).hexdigest()[:10]
     return f"sha1:{digest},len:{len(token)}"
-    try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    except Exception as e:
-        logger.error(f"Failed to load config: {e}")
-        return {}
 
 
 def resolve_writable_download_dir(config):
