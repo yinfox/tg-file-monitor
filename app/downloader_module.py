@@ -3,6 +3,7 @@ import os
 import asyncio
 import logging
 import json
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 
 # Global logging configuration setup
@@ -435,6 +436,101 @@ class Downloader:
                 return mp4_filename
         return filename
 
+    def _probe_media_streams(self, file_path):
+        """Use ffprobe to inspect media streams for Telegram compatibility decisions."""
+        ffprobe = 'ffprobe'
+        cmd = [
+            ffprobe,
+            '-v', 'error',
+            '-print_format', 'json',
+            '-show_streams',
+            '-show_format',
+            file_path,
+        ]
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            data = json.loads(result.stdout or '{}')
+            streams = data.get('streams') or []
+
+            video_stream = None
+            audio_stream = None
+            for s in streams:
+                codec_type = (s.get('codec_type') or '').lower()
+                if codec_type == 'video' and video_stream is None:
+                    video_stream = s
+                elif codec_type == 'audio' and audio_stream is None:
+                    audio_stream = s
+
+            return {
+                'video_stream': video_stream,
+                'audio_stream': audio_stream,
+                'vcodec': (video_stream or {}).get('codec_name'),
+                'pix_fmt': (video_stream or {}).get('pix_fmt'),
+                'acodec': (audio_stream or {}).get('codec_name'),
+            }
+        except Exception as e:
+            self.log(f"ffprobe 分析失败，跳过兼容性转码: {e}", "warning")
+            return None
+
+    def _maybe_make_telegram_compatible(self, file_path):
+        """Transcode to Telegram-friendly H.264/AAC MP4 when stream codec is likely incompatible."""
+        if not file_path or not os.path.exists(file_path):
+            return file_path
+
+        probe = self._probe_media_streams(file_path)
+        if not probe:
+            return file_path
+
+        video_stream = probe.get('video_stream')
+        audio_stream = probe.get('audio_stream')
+        vcodec = (probe.get('vcodec') or '').lower()
+        pix_fmt = (probe.get('pix_fmt') or '').lower()
+
+        if not video_stream:
+            self.log("检测到文件无视频流，无法修复为可播放视频。", "warning")
+            return file_path
+
+        # Telegram clients are most stable with H.264 + yuv420p in MP4.
+        needs_transcode = (vcodec != 'h264') or (pix_fmt not in ('yuv420p', 'yuvj420p'))
+        if not needs_transcode:
+            return file_path
+
+        base, _ = os.path.splitext(file_path)
+        fixed_path = base + '.tgfix.mp4'
+
+        cmd = [
+            'ffmpeg', '-y',
+            '-i', file_path,
+            '-map', '0:v:0',
+            '-c:v', 'libx264',
+            '-preset', 'veryfast',
+            '-crf', '20',
+            '-pix_fmt', 'yuv420p',
+            '-movflags', '+faststart',
+        ]
+
+        if audio_stream:
+            cmd.extend(['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k'])
+        else:
+            cmd.extend(['-an'])
+
+        cmd.append(fixed_path)
+
+        try:
+            self.log(
+                f"检测到视频编码兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'})，开始转码为 Telegram 兼容格式...",
+                "warning"
+            )
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            if os.path.exists(fixed_path) and os.path.getsize(fixed_path) > 0:
+                self.log(f"兼容性转码完成: {os.path.basename(fixed_path)}", "success")
+                return fixed_path
+            self.log("兼容性转码未产出有效文件，继续使用原文件。", "warning")
+            return file_path
+        except Exception as e:
+            self.log(f"兼容性转码失败，继续使用原文件: {e}", "warning")
+            return file_path
+
     # Redirect methods for yt-dlp logger interface
     def debug(self, msg):
         # Filter out too verbose debug info if needed
@@ -487,7 +583,18 @@ class Downloader:
     async def download_task(self, url, output_dir, cookies_file=None, cookies_from_browser=None, proxy=None):
         """Async wrapper for download_video."""
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self.executor, self.download_video, url, output_dir, cookies_file, cookies_from_browser, proxy)
+        downloaded = await loop.run_in_executor(
+            self.executor,
+            self.download_video,
+            url,
+            output_dir,
+            cookies_file,
+            cookies_from_browser,
+            proxy,
+        )
+        if not downloaded:
+            return downloaded
+        return await loop.run_in_executor(self.executor, self._maybe_make_telegram_compatible, downloaded)
 
 # Global instance
 downloader = Downloader()

@@ -198,10 +198,6 @@
     saveDirBtn.addEventListener('click', async function () {
         const outputDir = outputDirInput.value.trim();
         const qualityMode = document.getElementById('qualityMode').value;
-        if (!outputDir) {
-            alert('请先填写保存目录。');
-            return;
-        }
 
         saveDirBtn.disabled = true;
         saveDirBtn.textContent = '保存中...';
@@ -221,7 +217,7 @@
                 outputDirInput.value = data.default_path;
                 saveDirStatus.textContent = '当前默认目录: ' + data.default_path;
             }
-            alert('默认下载设置已保存。');
+            alert('下载设置已保存（含画质模式）。');
         } catch (e) {
             alert('请求失败: ' + e);
         } finally {

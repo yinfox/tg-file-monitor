@@ -807,6 +807,7 @@ async def main():
                          event.chat_id,
                          filename,
                          caption="下载完成",
+                         force_document=False,
                          supports_streaming=True,
                          part_size_kb=512,
                      )

@@ -27,7 +27,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.27"
+VERSION = "0.4.28"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
@@ -1305,27 +1305,30 @@ def api_set_downloader_default_path():
     if quality_mode not in ('fast_compatible', 'balanced_hd', 'ultra_quality'):
         quality_mode = 'balanced_hd'
 
-    if not output_dir:
-        return jsonify({"error": "保存目录不能为空"}), 400
-
-    output_dir = os.path.abspath(os.path.expanduser(output_dir))
-
-    try:
-        os.makedirs(output_dir, exist_ok=True)
-        write_test = os.path.join(output_dir, '.write_test')
-        with open(write_test, 'w', encoding='utf-8') as f:
-            f.write('ok')
-        os.remove(write_test)
-    except Exception as e:
-        return jsonify({"error": f"保存目录不可写: {e}"}), 400
+    normalized_output_dir = None
+    if output_dir:
+        normalized_output_dir = os.path.abspath(os.path.expanduser(output_dir))
+        try:
+            os.makedirs(normalized_output_dir, exist_ok=True)
+            write_test = os.path.join(normalized_output_dir, '.write_test')
+            with open(write_test, 'w', encoding='utf-8') as f:
+                f.write('ok')
+            os.remove(write_test)
+        except Exception as e:
+            return jsonify({"error": f"保存目录不可写: {e}"}), 400
 
     config = load_config()
     downloader_cfg = config.setdefault('downloader', {})
-    downloader_cfg['default_path'] = output_dir
+    if normalized_output_dir:
+        downloader_cfg['default_path'] = normalized_output_dir
     downloader_cfg['quality_mode'] = quality_mode
     save_config(config)
 
-    return jsonify({"success": True, "default_path": output_dir, "quality_mode": quality_mode})
+    return jsonify({
+        "success": True,
+        "default_path": downloader_cfg.get('default_path', ''),
+        "quality_mode": quality_mode,
+    })
 
 # HDHive 资源请求功能已移除
 
