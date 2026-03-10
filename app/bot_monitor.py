@@ -129,7 +129,7 @@ def normalize_quality_mode(mode: str, default: str = 'balanced_hd') -> str:
 
 
 def normalize_upload_mode(mode: str, default: str = 'transcode') -> str:
-    allowed = {'transcode', 'original'}
+    allowed = {'transcode', 'original', 'document'}
     normalized = (mode or '').strip().lower()
     return normalized if normalized in allowed else default
 
@@ -334,6 +334,7 @@ async def main():
         labels = {
             'transcode': '兼容转码上传',
             'original': '原码直传',
+            'document': '原码文件发送',
         }
         return labels.get(mode, mode or '未设置')
 
@@ -386,6 +387,9 @@ async def main():
             [
                 types.KeyboardButtonCallback("上传: 兼容转码", data=b'dl_upload_transcode'),
                 types.KeyboardButtonCallback("上传: 原码直传", data=b'dl_upload_original'),
+            ],
+            [
+                types.KeyboardButtonCallback("上传: 原码文件发送", data=b'dl_upload_document'),
             ],
         ]
 
@@ -742,6 +746,17 @@ async def main():
         downloader_cfg['upload_mode'] = 'original'
         if save_runtime_config(cfg):
             await event.answer("上传策略已设为原码直传")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_upload_document'))
+    async def download_set_upload_document_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['upload_mode'] = 'document'
+        if save_runtime_config(cfg):
+            await event.answer("上传策略已设为原码文件发送")
             await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
         else:
             await event.answer("保存失败", alert=True)
@@ -1121,6 +1136,7 @@ async def main():
                     default='transcode',
                 )
                 use_transcode_upload = (upload_mode == 'transcode')
+                force_document_mode = (upload_mode == 'document')
                 downloader.log(f"上传策略: {upload_mode}", "info")
 
                 download_started_at = time.perf_counter()
@@ -1191,7 +1207,7 @@ async def main():
                     except Exception:
                         file_size_bytes = 0
 
-                    if file_size_bytes > max_upload_bytes and not use_transcode_upload:
+                    if file_size_bytes > max_upload_bytes and upload_mode == 'original':
                         downloader.log(
                             f"原码文件过大({file_size_bytes} bytes)，超过 Telegram 分片上限，尝试先转码压缩...",
                             "warning",
@@ -1241,8 +1257,8 @@ async def main():
 
                     upload_attributes = None
                     final_probe = None
-                    force_document_upload = False
-                    supports_streaming_upload = True
+                    force_document_upload = force_document_mode
+                    supports_streaming_upload = not force_document_mode
                     try:
                         final_probe = downloader._probe_media_streams(filename)
                         if final_probe and final_probe.get('video_stream'):
@@ -1267,18 +1283,22 @@ async def main():
                                     )
                                 ]
 
-                            if not is_streaming_compatible_media(final_probe):
+                            if force_document_mode:
+                                upload_attributes = None
+                            elif not is_streaming_compatible_media(final_probe):
                                 force_document_upload = True
                                 supports_streaming_upload = False
                                 upload_attributes = None
                     except Exception as attr_err:
                         downloader.log(f"Upload video attribute probe failed, fallback to auto attributes: {attr_err}", "warning")
 
-                    if force_document_upload:
+                    if force_document_upload and not force_document_mode:
                         downloader.log(
                             f"检测到原码可能不兼容 Telegram 流媒体播放(vcodec={(final_probe or {}).get('vcodec')}, pix_fmt={(final_probe or {}).get('pix_fmt')})，改为文件发送避免只有声音无画面。",
                             "warning",
                         )
+                    elif force_document_mode:
+                        downloader.log("当前上传策略为原码文件发送，已强制使用 document 方式上传。", "info")
 
                     upload_started_at = time.perf_counter()
                     try:
