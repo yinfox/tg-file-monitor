@@ -753,6 +753,25 @@ class Downloader:
             filt = ','.join(filter_parts)
             return filt, target_w, target_h
 
+        def _build_capped_filter(max_long_side, rotate_filter='', src_w=0, src_h=0):
+            if not src_w or not src_h or max_long_side <= 0:
+                return _build_safe_filter(rotate_filter, src_w, src_h)
+
+            long_side = max(src_w, src_h)
+            if long_side <= max_long_side:
+                return _build_safe_filter(rotate_filter, src_w, src_h)
+
+            scale_ratio = float(max_long_side) / float(long_side)
+            target_w_local = _round_even(float(src_w) * scale_ratio)
+            target_h_local = _round_even(float(src_h) * scale_ratio)
+
+            filter_parts = []
+            if rotate_filter:
+                filter_parts.append(rotate_filter)
+            filter_parts.append(f"scale={target_w_local}:{target_h_local}")
+            filter_parts.append('setsar=1')
+            return ','.join(filter_parts), target_w_local, target_h_local
+
         # Telegram clients are most stable with H.264 + yuv420p and square pixels in MP4.
         sar_ratio = _parse_ratio(sar)
         dar_ratio = _parse_ratio(dar)
@@ -784,28 +803,32 @@ class Downloader:
         base, _ = os.path.splitext(file_path)
         fixed_path = base + '.tgfix.mp4'
 
-        cmd = [
-            self.ffmpeg_path or 'ffmpeg', '-y',
-            '-noautorotate',
-            '-i', file_path,
-            '-map', '0:v:0',
-            '-c:v', 'libx264',
-            '-preset', 'veryfast',
-            '-crf', '20',
-            # Normalize dimensions and clear ratio metadata for stable Telegram playback.
-            '-vf', safe_filter,
-            '-pix_fmt', 'yuv420p',
-            '-profile:v', 'high',
-            '-metadata:s:v:0', 'rotate=0',
-            '-movflags', '+faststart',
-        ]
+        def _build_transcode_cmd(vf_filter, output_path, preset='veryfast', crf='20'):
+            cmd_local = [
+                self.ffmpeg_path or 'ffmpeg', '-y',
+                '-noautorotate',
+                '-i', file_path,
+                '-map', '0:v:0',
+                '-c:v', 'libx264',
+                '-preset', preset,
+                '-crf', str(crf),
+                # Normalize dimensions and clear ratio metadata for stable Telegram playback.
+                '-vf', vf_filter,
+                '-pix_fmt', 'yuv420p',
+                '-profile:v', 'high',
+                '-metadata:s:v:0', 'rotate=0',
+                '-movflags', '+faststart',
+            ]
 
-        if audio_stream:
-            cmd.extend(['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k'])
-        else:
-            cmd.extend(['-an'])
+            if audio_stream:
+                cmd_local.extend(['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k'])
+            else:
+                cmd_local.extend(['-an'])
 
-        cmd.append(fixed_path)
+            cmd_local.append(output_path)
+            return cmd_local
+
+        cmd = _build_transcode_cmd(safe_filter, fixed_path)
 
         try:
             target_desc = f"{target_w}x{target_h}" if target_w and target_h else 'auto-even'
@@ -832,26 +855,7 @@ class Downloader:
                             target_h,
                         )
                         retry_path = base + '.tgfix2.mp4'
-                        retry_cmd = [
-                            self.ffmpeg_path or 'ffmpeg', '-y',
-                            '-noautorotate',
-                            '-i', file_path,
-                            '-map', '0:v:0',
-                            '-c:v', 'libx264',
-                            '-preset', 'veryfast',
-                            '-crf', '20',
-                            '-vf', locked_filter,
-                            '-pix_fmt', 'yuv420p',
-                            '-profile:v', 'high',
-                            '-metadata:s:v:0', 'rotate=0',
-                            '-movflags', '+faststart',
-                        ]
-
-                        if audio_stream:
-                            retry_cmd.extend(['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k'])
-                        else:
-                            retry_cmd.extend(['-an'])
-                        retry_cmd.append(retry_path)
+                        retry_cmd = _build_transcode_cmd(locked_filter, retry_path)
 
                         self.log(
                             f"检测到转码后比例偏差({ratio_drift * 100:.2f}%)，启用二次比例锁定转码({lock_w}x{lock_h})...",
@@ -882,6 +886,39 @@ class Downloader:
             if ffmpeg_err:
                 tail = '\n'.join(ffmpeg_err.splitlines()[-10:])
                 self.log(f"兼容性转码失败，ffmpeg 输出(末尾): {tail}", "warning")
+
+            # Fallback ladder for difficult sources (AV1/HDR/4K): simplify params and progressively cap size.
+            fallback_profiles = [
+                ('简化参数重试', 0, 'superfast', '22'),
+                ('降级到 2160 长边', 2160, 'superfast', '23'),
+                ('降级到 1080 长边', 1080, 'veryfast', '23'),
+            ]
+
+            for label, cap_side, preset, crf in fallback_profiles:
+                fallback_filter, cap_w, cap_h = _build_capped_filter(cap_side, rotate_filter, effective_w, effective_h)
+                if fallback_filter == safe_filter and preset == 'veryfast' and str(crf) == '20':
+                    continue
+
+                suffix = f"cap{cap_side}" if cap_side else 'retry'
+                fallback_path = base + f'.tgfix_{suffix}.mp4'
+                fallback_cmd = _build_transcode_cmd(fallback_filter, fallback_path, preset=preset, crf=crf)
+                try:
+                    self.log(
+                        f"兼容性转码开始保底重试: {label} ({cap_w}x{cap_h}, preset={preset}, crf={crf})",
+                        "warning",
+                    )
+                    subprocess.run(fallback_cmd, check=True, capture_output=True, text=True)
+                    if os.path.exists(fallback_path) and os.path.getsize(fallback_path) > 0:
+                        self.log(f"兼容性保底转码成功: {os.path.basename(fallback_path)}", "success")
+                        return fallback_path
+                except subprocess.CalledProcessError as fallback_err:
+                    fallback_text = (fallback_err.stderr or fallback_err.stdout or '').strip()
+                    if fallback_text:
+                        tail = '\n'.join(fallback_text.splitlines()[-8:])
+                        self.log(f"兼容性保底转码失败({label})，ffmpeg 输出(末尾): {tail}", "warning")
+                except Exception as fallback_err:
+                    self.log(f"兼容性保底转码失败({label}): {fallback_err}", "warning")
+
             self.log(f"兼容性转码失败，继续使用原文件: {e}", "warning")
             return file_path
         except Exception as e:
