@@ -335,6 +335,10 @@ async def main():
                 types.KeyboardButtonCallback("通用: 均衡高清", data=b'dl_general_balanced_hd'),
             ],
             [
+                types.KeyboardButtonCallback("通用: 快速1080p", data=b'dl_general_fast_compatible'),
+                types.KeyboardButtonCallback("通用: 超清优先", data=b'dl_general_ultra_quality'),
+            ],
+            [
                 types.KeyboardButtonCallback("设置下载目录", data=b'dl_set_path'),
                 types.KeyboardButtonCallback("刷新设置", data=b'dl_settings'),
             ],
@@ -649,6 +653,28 @@ async def main():
         downloader_cfg['quality_mode'] = 'balanced_hd'
         if save_runtime_config(cfg):
             await event.answer("通用模式已设为均衡高清")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_general_fast_compatible'))
+    async def download_set_general_fast_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['quality_mode'] = 'fast_compatible'
+        if save_runtime_config(cfg):
+            await event.answer("通用模式已设为快速1080p")
+            await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
+        else:
+            await event.answer("保存失败", alert=True)
+
+    @client.on(events.CallbackQuery(data=b'dl_general_ultra_quality'))
+    async def download_set_general_ultra_handler(event):
+        cfg = load_config()
+        downloader_cfg = ensure_downloader_config(cfg)
+        downloader_cfg['quality_mode'] = 'ultra_quality'
+        if save_runtime_config(cfg):
+            await event.answer("通用模式已设为超清优先")
             await event.respond(build_download_settings_text(cfg), buttons=build_download_settings_buttons())
         else:
             await event.answer("保存失败", alert=True)
@@ -1030,11 +1056,34 @@ async def main():
                 )
                 
                 if filename and os.path.exists(filename):
-                     await msg.edit(f"✅ **下载完成**\n`{os.path.basename(filename)}`\n正在上传...")
+                     download_meta = downloader.get_last_download_metadata()
+                     source_url = (download_meta.get('source_url') or url or '').strip()
+                     source_title = (download_meta.get('title') or '').strip()
+                     source_resolution = (download_meta.get('resolution') or '').strip()
+
+                     lines = [
+                         "✅ **下载完成**",
+                         f"文件: `{os.path.basename(filename)}`",
+                     ]
+                     if source_url:
+                         lines.append(f"原链接: {source_url}")
+                     if source_title:
+                         lines.append(f"标题: {source_title}")
+                     if source_resolution:
+                         lines.append(f"分辨率: {source_resolution}")
+                     lines.append("正在上传...")
+
+                     await msg.edit("\n".join(lines))
+
+                     upload_caption_parts = ["下载完成"]
+                     if source_title:
+                         upload_caption_parts.append(f"标题: {source_title}")
+                     if source_resolution:
+                         upload_caption_parts.append(f"分辨率: {source_resolution}")
                      await client.send_file(
                          event.chat_id,
                          filename,
-                         caption="下载完成",
+                         caption="\n".join(upload_caption_parts),
                          force_document=False,
                          supports_streaming=True,
                          part_size_kb=512,

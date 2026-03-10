@@ -97,6 +97,55 @@ def get_extension_from_mime(mime_type: str) -> str:
     return ''
 
 
+def _extract_first_url_from_text(text: str) -> str:
+    if not text:
+        return ''
+    m = REAL_URL_RE.search(text)
+    return (m.group(0).strip() if m else '')
+
+
+def _extract_video_resolution_text(msg) -> str:
+    document = _get_primary_document(msg)
+
+    def _fmt(w, h):
+        try:
+            iw = int(w)
+            ih = int(h)
+            if iw > 0 and ih > 0:
+                return f"{iw}x{ih}"
+        except Exception:
+            pass
+        return ''
+
+    if getattr(msg, 'video', None):
+        w = getattr(msg.video, 'w', None) or getattr(msg.video, 'width', None)
+        h = getattr(msg.video, 'h', None) or getattr(msg.video, 'height', None)
+        txt = _fmt(w, h)
+        if txt:
+            return txt
+
+    if document:
+        for attr in getattr(document, 'attributes', []) or []:
+            if attr.__class__.__name__ == 'DocumentAttributeVideo':
+                txt = _fmt(getattr(attr, 'w', None), getattr(attr, 'h', None))
+                if txt:
+                    return txt
+
+    return ''
+
+
+def _extract_title_for_download(msg, original_filename: str) -> str:
+    title = (getattr(msg, 'message', None) or '').strip()
+    if title:
+        title = re.sub(r'\s+', ' ', title)
+        return title[:120]
+
+    if original_filename:
+        return os.path.splitext(os.path.basename(original_filename))[0][:120]
+
+    return ''
+
+
 def create_progress_callback(file_path: str, media_type: str):
     """创建下载进度回调函数，用于大文件下载 - 单行更新进度"""
     last_log_time = [0]
@@ -1732,7 +1781,18 @@ async def new_message_handler(event):
                         log_message(f"检测到同名文件，改用防覆盖路径: {os.path.basename(safe_file_path)}")
                     file_path = safe_file_path
                     size_info = f" (预计 {expected_size / (1024*1024):.1f}MB)" if expected_size > 0 else ""
-                    log_message(f"开始下载 {media_type_detected}{size_info} 到 {file_path}...")
+                    source_url = _extract_first_url_from_text(msg.message or "")
+                    source_title = _extract_title_for_download(msg, original_filename or "")
+                    source_resolution = _extract_video_resolution_text(msg)
+                    details = []
+                    if source_url:
+                        details.append(f"原链接: {source_url}")
+                    if source_title:
+                        details.append(f"标题: {source_title}")
+                    if source_resolution:
+                        details.append(f"分辨率: {source_resolution}")
+                    detail_text = f" | {' | '.join(details)}" if details else ""
+                    log_message(f"开始下载 {media_type_detected}{size_info} 到 {file_path}...{detail_text}")
 
                     while True:
                         can_download, risk_reason, retry_after = _check_download_risk_controls(
@@ -1771,14 +1831,22 @@ async def new_message_handler(event):
                             if downloaded_file:
                                 # 验证文件完整性
                                 actual_size = os.path.getsize(downloaded_file) if os.path.exists(downloaded_file) else 0
+                                completion_details = []
+                                if source_url:
+                                    completion_details.append(f"原链接: {source_url}")
+                                if source_title:
+                                    completion_details.append(f"标题: {source_title}")
+                                if source_resolution:
+                                    completion_details.append(f"分辨率: {source_resolution}")
+                                completion_detail_text = f" | {' | '.join(completion_details)}" if completion_details else ""
                                 if expected_size > 0 and actual_size > 0:
                                     size_diff_percent = abs(actual_size - expected_size) / expected_size * 100
                                     if size_diff_percent > 5:  # 大小差异超过5%
                                         log_message(f"警告: 下载文件大小异常 - 预期{expected_size/(1024*1024):.1f}MB，实际{actual_size/(1024*1024):.1f}MB (差异{size_diff_percent:.1f}%)")
                                     else:
-                                        log_message(f"{media_type_detected} 已成功下载到 {downloaded_file} ({actual_size/(1024*1024):.1f}MB)。")
+                                        log_message(f"{media_type_detected} 已成功下载到 {downloaded_file} ({actual_size/(1024*1024):.1f}MB)。{completion_detail_text}")
                                 else:
-                                    log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。")
+                                    log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。{completion_detail_text}")
                             else:
                                 log_message(f"{media_type_detected} 下载失败。")
                         except Exception as e:

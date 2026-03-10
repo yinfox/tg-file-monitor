@@ -40,6 +40,7 @@ class Downloader:
         self.last_cookies_supplied = False
         self.ffmpeg_path = None
         self.ffprobe_path = None
+        self.last_download_metadata = {}
 
     def _ensure_ffmpeg_tools(self):
         import shutil
@@ -122,6 +123,10 @@ class Downloader:
         self.download_logs = []
         self.js_runtime_missing = False
         self.last_cookies_supplied = False
+        self.last_download_metadata = {}
+
+    def get_last_download_metadata(self):
+        return dict(self.last_download_metadata or {})
 
     def get_last_error(self):
         return self.last_error_message
@@ -459,6 +464,9 @@ class Downloader:
     def _process_info(self, ydl, info):
         if info is None:
             return None
+
+        self.last_download_metadata = self._extract_download_metadata(info)
+
         filename = ydl.prepare_filename(info)
         if os.path.exists(filename):
             return filename
@@ -468,6 +476,54 @@ class Downloader:
             if os.path.exists(mp4_filename):
                 return mp4_filename
         return filename
+
+    def _extract_download_metadata(self, info):
+        if not isinstance(info, dict):
+            return {}
+
+        def _as_positive_int(value):
+            try:
+                iv = int(value)
+                return iv if iv > 0 else None
+            except Exception:
+                return None
+
+        title = str(info.get('title') or '').strip()
+        source_url = str(
+            info.get('webpage_url')
+            or info.get('original_url')
+            or info.get('url')
+            or ''
+        ).strip()
+
+        width = _as_positive_int(info.get('width'))
+        height = _as_positive_int(info.get('height'))
+
+        requested_formats = info.get('requested_formats')
+        if isinstance(requested_formats, list):
+            for fmt in requested_formats:
+                if not isinstance(fmt, dict):
+                    continue
+                f_w = _as_positive_int(fmt.get('width'))
+                f_h = _as_positive_int(fmt.get('height'))
+                vcodec = str(fmt.get('vcodec') or '').lower()
+                if f_w and f_h and vcodec not in ('none', ''):
+                    width = f_w
+                    height = f_h
+                    break
+
+        resolution = ''
+        if width and height:
+            resolution = f"{width}x{height}"
+        else:
+            format_note = str(info.get('format_note') or '').strip()
+            resolution = format_note if format_note else ''
+
+        return {
+            'title': title,
+            'source_url': source_url,
+            'resolution': resolution,
+        }
 
     def _probe_media_streams(self, file_path):
         """Use ffprobe to inspect media streams for Telegram compatibility decisions."""
@@ -573,6 +629,41 @@ class Downloader:
                 return False
             return low <= v <= high
 
+        def _display_ratio_from_dimensions(w, h, s_ratio):
+            if w <= 0 or h <= 0:
+                return None
+            ratio = float(w) / float(h)
+            if _is_reasonable_ratio(s_ratio):
+                ratio = ratio * float(s_ratio)
+            return ratio if _is_reasonable_ratio(ratio, low=0.2, high=5.0) else None
+
+        def _build_ratio_locked_filter(target_ratio, fallback_w, fallback_h):
+            safe_w = _round_even(fallback_w or width or 1280)
+            safe_h = _round_even(fallback_h or height or 720)
+
+            if not _is_reasonable_ratio(target_ratio, low=0.2, high=5.0):
+                return f"scale={safe_w}:{safe_h},setsar=1,setdar=iw/ih", safe_w, safe_h
+
+            by_width_h = _round_even(float(safe_w) / float(target_ratio))
+            by_height_w = _round_even(float(safe_h) * float(target_ratio))
+
+            cand1_w, cand1_h = safe_w, max(2, by_width_h)
+            cand2_w, cand2_h = max(2, by_height_w), safe_h
+
+            err1 = abs((float(cand1_w) / float(cand1_h)) - float(target_ratio))
+            err2 = abs((float(cand2_w) / float(cand2_h)) - float(target_ratio))
+
+            if err1 <= err2:
+                target_w_local, target_h_local = cand1_w, cand1_h
+            else:
+                target_w_local, target_h_local = cand2_w, cand2_h
+
+            return (
+                f"scale={target_w_local}:{target_h_local},setsar=1,setdar=iw/ih",
+                target_w_local,
+                target_h_local,
+            )
+
         def _build_safe_filter():
             # Build deterministic scale target in Python.
             # Important: do NOT trust DAR for scaling, because bad DAR metadata can permanently bake stretch.
@@ -611,6 +702,7 @@ class Downloader:
             return file_path
 
         safe_filter, target_w, target_h = _build_safe_filter()
+        source_display_ratio = _display_ratio_from_dimensions(width, height, sar_ratio)
 
         base, _ = os.path.splitext(file_path)
         fixed_path = base + '.tgfix.mp4'
@@ -645,6 +737,58 @@ class Downloader:
             )
             subprocess.run(cmd, check=True, capture_output=True, text=True)
             if os.path.exists(fixed_path) and os.path.getsize(fixed_path) > 0:
+                fixed_probe = self._probe_media_streams(fixed_path)
+                if fixed_probe and source_display_ratio:
+                    out_w = int(fixed_probe.get('width') or 0)
+                    out_h = int(fixed_probe.get('height') or 0)
+                    out_sar = _parse_ratio(fixed_probe.get('sar'))
+                    fixed_display_ratio = _display_ratio_from_dimensions(out_w, out_h, out_sar)
+                    ratio_drift = None
+                    if fixed_display_ratio and source_display_ratio:
+                        ratio_drift = abs(fixed_display_ratio - source_display_ratio) / source_display_ratio
+
+                    if ratio_drift is not None and ratio_drift > 0.03:
+                        locked_filter, lock_w, lock_h = _build_ratio_locked_filter(
+                            source_display_ratio,
+                            target_w,
+                            target_h,
+                        )
+                        retry_path = base + '.tgfix2.mp4'
+                        retry_cmd = [
+                            self.ffmpeg_path or 'ffmpeg', '-y',
+                            '-i', file_path,
+                            '-map', '0:v:0',
+                            '-c:v', 'libx264',
+                            '-preset', 'veryfast',
+                            '-crf', '20',
+                            '-vf', locked_filter,
+                            '-pix_fmt', 'yuv420p',
+                            '-profile:v', 'high',
+                            '-level', '4.1',
+                            '-metadata:s:v:0', 'rotate=0',
+                            '-movflags', '+faststart',
+                        ]
+
+                        if audio_stream:
+                            retry_cmd.extend(['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k'])
+                        else:
+                            retry_cmd.extend(['-an'])
+                        retry_cmd.append(retry_path)
+
+                        self.log(
+                            f"检测到转码后比例偏差({ratio_drift * 100:.2f}%)，启用二次比例锁定转码({lock_w}x{lock_h})...",
+                            "warning",
+                        )
+
+                        try:
+                            subprocess.run(retry_cmd, check=True, capture_output=True, text=True)
+                            if os.path.exists(retry_path) and os.path.getsize(retry_path) > 0:
+                                self.log(f"二次比例锁定转码完成: {os.path.basename(retry_path)}", "success")
+                                return retry_path
+                            self.log("二次比例锁定未产出有效文件，回退首轮转码结果。", "warning")
+                        except Exception as retry_error:
+                            self.log(f"二次比例锁定转码失败，回退首轮转码结果: {retry_error}", "warning")
+
                 self.log(f"兼容性转码完成: {os.path.basename(fixed_path)}", "success")
                 return fixed_path
             self.log("兼容性转码未产出有效文件，继续使用原文件。", "warning")

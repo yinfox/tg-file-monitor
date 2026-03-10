@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.36-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.37-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.36 (2026-03-10) - 当前版本
+### v0.4.37 (2026-03-10) - 当前版本
+- ✅ 修复极少数视频拉伸残留：新增“转码后比例漂移检测”，超阈值自动执行二次比例锁定转码
+- ✅ 下载完成信息增强（Bot/监控）：新增输出原视频链接、视频标题、视频分辨率，便于追踪与复核
+
+### v0.4.36 (2026-03-10)
 - ✅ 修复 YouTube 仍有拉伸：兼容转码目标分辨率不再依据 `DAR` 计算，避免把异常显示比例烘焙进像素
 - ✅ 比例策略收敛：仅在 `SAR` 合理时按 `SAR` 修正宽度，否则回退编码宽高并统一 `setsar=1,setdar=iw/ih`
 
