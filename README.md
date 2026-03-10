@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.25-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.26-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.25 (2026-03-10) - 当前版本
+### v0.4.26 (2026-03-10) - 当前版本
+- ✅ YouTube 下载格式优化：优先 `H.264(avc1)+AAC(mp4a)` 并限制 `<=1080p`，降低 Telegram 兼容性问题
+- ✅ 修复“上传后只有声音无画面”高频场景：避免选择 AV1/VP9 等部分客户端兼容较差的视频流
+- ✅ 上传参数优化：启用 `supports_streaming` 并调整分片，改善上传与在线播放体验
+
+### v0.4.25 (2026-03-10)
 - ✅ 修复 Bot Token 切换后仍复用旧会话问题：启动前校验 `bot_session` 身份
 - ✅ 自动重建失配会话：当会话绑定用户账号或 Bot ID 与 token 不一致时，自动清理并重登
 - ✅ 避免 Telethon 忽略新 `bot_token`，确保 Bot 指令菜单与 `/start` 对应新 Bot 生效

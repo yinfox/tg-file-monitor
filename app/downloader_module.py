@@ -248,9 +248,13 @@ class Downloader:
         if node_path:
             js_runtimes_config['node'] = {'path': node_path}
 
-        # Strict max-quality policy: always prefer separate best video + best audio.
-        # This requires ffmpeg for merging streams.
-        format_spec = 'bestvideo*+bestaudio/best'
+        # Prefer Telegram-compatible H.264/AAC MP4 and cap to 1080p to reduce upload size/time.
+        # This avoids cases where AV1/VP9 streams upload successfully but Telegram clients only play audio.
+        format_spec = (
+            'bestvideo[height<=1080][vcodec^=avc1][ext=mp4]+bestaudio[acodec^=mp4a]/'
+            'bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/'
+            'best[height<=1080][ext=mp4]/best[height<=1080]'
+        )
         merge_format = 'mp4'
 
         if not has_ffmpeg:

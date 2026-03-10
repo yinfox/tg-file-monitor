@@ -803,7 +803,13 @@ async def main():
                 
                 if filename and os.path.exists(filename):
                      await msg.edit(f"✅ **下载完成**\n`{os.path.basename(filename)}`\n正在上传...")
-                     await client.send_file(event.chat_id, filename, caption="下载完成")
+                     await client.send_file(
+                         event.chat_id,
+                         filename,
+                         caption="下载完成",
+                         supports_streaming=True,
+                         part_size_kb=512,
+                     )
                      
                      # Cleanup: Delete status message AND user's original message
                      try:
