@@ -1046,6 +1046,7 @@ async def main():
                     youtube_quality_mode = resolve_youtube_quality_mode(config)
                     downloader.log(f"YouTube 下载启用画质覆盖: {youtube_quality_mode}", "info")
 
+                download_started_at = time.perf_counter()
                 filename = await downloader.download_task(
                     url,
                     default_path,
@@ -1054,17 +1055,24 @@ async def main():
                     proxy_url,
                     youtube_quality_mode,
                 )
+                download_elapsed = time.perf_counter() - download_started_at
                 
                 if filename and os.path.exists(filename):
+                    compat_elapsed = 0.0
+                    transcoded_for_upload = False
                     # Final guard: local files (or edge outputs) should still pass compatibility check.
                     try:
+                        original_filename = filename
+                        compat_started_at = time.perf_counter()
                         fixed_for_upload = await asyncio.get_running_loop().run_in_executor(
                             downloader.executor,
                             downloader._maybe_make_telegram_compatible,
                             filename,
                         )
+                        compat_elapsed = time.perf_counter() - compat_started_at
                         if fixed_for_upload and os.path.exists(fixed_for_upload):
                             filename = fixed_for_upload
+                            transcoded_for_upload = os.path.abspath(fixed_for_upload) != os.path.abspath(original_filename)
                     except Exception as _fix_err:
                         downloader.log(f"Upload compatibility precheck failed, fallback to original file: {_fix_err}", "warning")
 
@@ -1120,6 +1128,7 @@ async def main():
                     except Exception as attr_err:
                         downloader.log(f"Upload video attribute probe failed, fallback to auto attributes: {attr_err}", "warning")
 
+                    upload_started_at = time.perf_counter()
                     await client.send_file(
                         event.chat_id,
                         filename,
@@ -1128,6 +1137,14 @@ async def main():
                         force_document=False,
                         supports_streaming=True,
                         part_size_kb=512,
+                    )
+                    upload_elapsed = time.perf_counter() - upload_started_at
+
+                    downloader.log(
+                        f"任务耗时统计: download={download_elapsed:.2f}s, compat={compat_elapsed:.2f}s, "
+                        f"upload={upload_elapsed:.2f}s, transcoded={transcoded_for_upload}, "
+                        f"file={os.path.basename(filename)}",
+                        "info",
                     )
 
                     # Cleanup: Delete status message AND user's original message
