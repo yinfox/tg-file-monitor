@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.35-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.36-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.35 (2026-03-10) - 当前版本
+### v0.4.36 (2026-03-10) - 当前版本
+- ✅ 修复 YouTube 仍有拉伸：兼容转码目标分辨率不再依据 `DAR` 计算，避免把异常显示比例烘焙进像素
+- ✅ 比例策略收敛：仅在 `SAR` 合理时按 `SAR` 修正宽度，否则回退编码宽高并统一 `setsar=1,setdar=iw/ih`
+
+### v0.4.35 (2026-03-10)
 - ✅ 修复 Bot 交互下载链路：从 `download_video` 切换为 `download_task`，确保兼容转码逻辑会执行
 - ✅ 修复“部分视频仍拉伸”根因：机器人模式此前未触发 `_maybe_make_telegram_compatible` 导致旧样本漏修
 

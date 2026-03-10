@@ -564,15 +564,22 @@ class Downloader:
                 v += 1
             return v
 
+        def _is_reasonable_ratio(value, *, low=0.25, high=4.0):
+            if value is None:
+                return False
+            try:
+                v = float(value)
+            except Exception:
+                return False
+            return low <= v <= high
+
         def _build_safe_filter():
-            # Build a deterministic scale target in Python to avoid unstable ffmpeg expression on bad SAR metadata.
+            # Build deterministic scale target in Python.
+            # Important: do NOT trust DAR for scaling, because bad DAR metadata can permanently bake stretch.
             if width <= 0 or height <= 0:
                 return "scale='trunc(iw/2)*2':'trunc(ih/2)*2',setsar=1,setdar=iw/ih", None, None
 
-            if dar_ratio and dar_ratio > 0:
-                display_w = float(height) * dar_ratio
-                display_h = float(height)
-            elif sar_ratio and sar_ratio > 0:
+            if _is_reasonable_ratio(sar_ratio) and abs(float(sar_ratio) - 1.0) > 0.01:
                 display_w = float(width) * sar_ratio
                 display_h = float(height)
             else:
