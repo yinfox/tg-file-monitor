@@ -134,6 +134,29 @@ def normalize_upload_mode(mode: str, default: str = 'transcode') -> str:
     return normalized if normalized in allowed else default
 
 
+def is_streaming_compatible_media(probe: Optional[dict]) -> bool:
+    if not isinstance(probe, dict):
+        return False
+    video_stream = probe.get('video_stream')
+    if not isinstance(video_stream, dict):
+        return False
+
+    vcodec = (probe.get('vcodec') or '').lower()
+    pix_fmt = (probe.get('pix_fmt') or '').lower()
+    rotation = int(probe.get('rotation') or 0) % 360
+    sar = str(probe.get('sar') or '').strip()
+
+    if vcodec != 'h264':
+        return False
+    if pix_fmt not in ('yuv420p', 'yuvj420p'):
+        return False
+    if rotation != 0:
+        return False
+    if sar and sar not in ('1:1', 'N/A', 'unknown', '0:1'):
+        return False
+    return True
+
+
 def acquire_single_instance_lock():
     """Ensure only one bot_monitor process can run at a time."""
     os.makedirs(CONFIG_DIR, exist_ok=True)
@@ -1193,16 +1216,19 @@ async def main():
                         upload_caption_parts.append(f"分辨率: {source_resolution}")
 
                     upload_attributes = None
+                    final_probe = None
+                    force_document_upload = False
+                    supports_streaming_upload = True
                     try:
-                        probe = downloader._probe_media_streams(filename)
-                        if probe and probe.get('video_stream'):
-                            probe_w = int(probe.get('width') or 0)
-                            probe_h = int(probe.get('height') or 0)
-                            probe_rot = int(probe.get('rotation') or 0) % 360
+                        final_probe = downloader._probe_media_streams(filename)
+                        if final_probe and final_probe.get('video_stream'):
+                            probe_w = int(final_probe.get('width') or 0)
+                            probe_h = int(final_probe.get('height') or 0)
+                            probe_rot = int(final_probe.get('rotation') or 0) % 360
                             if probe_rot in (90, 270):
                                 probe_w, probe_h = probe_h, probe_w
 
-                            stream_duration = (probe.get('video_stream') or {}).get('duration')
+                            stream_duration = (final_probe.get('video_stream') or {}).get('duration')
                             duration_seconds = int(round(float(stream_duration or 0))) if stream_duration else 0
                             if duration_seconds <= 0:
                                 duration_seconds = 1
@@ -1216,8 +1242,19 @@ async def main():
                                         supports_streaming=True,
                                     )
                                 ]
+
+                            if not is_streaming_compatible_media(final_probe):
+                                force_document_upload = True
+                                supports_streaming_upload = False
+                                upload_attributes = None
                     except Exception as attr_err:
                         downloader.log(f"Upload video attribute probe failed, fallback to auto attributes: {attr_err}", "warning")
+
+                    if force_document_upload:
+                        downloader.log(
+                            f"检测到原码可能不兼容 Telegram 流媒体播放(vcodec={(final_probe or {}).get('vcodec')}, pix_fmt={(final_probe or {}).get('pix_fmt')})，改为文件发送避免只有声音无画面。",
+                            "warning",
+                        )
 
                     upload_started_at = time.perf_counter()
                     try:
@@ -1226,8 +1263,8 @@ async def main():
                             filename,
                             caption="\n".join(upload_caption_parts),
                             attributes=upload_attributes,
-                            force_document=False,
-                            supports_streaming=True,
+                            force_document=force_document_upload,
+                            supports_streaming=supports_streaming_upload,
                             part_size_kb=part_size_kb,
                         )
                     except Exception as upload_err:
