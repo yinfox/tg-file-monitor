@@ -546,6 +546,37 @@ class Downloader:
             except Exception:
                 return None
 
+        def _round_even(value):
+            try:
+                v = int(round(float(value)))
+            except Exception:
+                v = 0
+            if v < 2:
+                v = 2
+            if v % 2 != 0:
+                v += 1
+            return v
+
+        def _build_safe_filter():
+            # Build a deterministic scale target in Python to avoid unstable ffmpeg expression on bad SAR metadata.
+            if width <= 0 or height <= 0:
+                return "scale='trunc(iw/2)*2':'trunc(ih/2)*2',setsar=1,setdar=iw/ih", None, None
+
+            if dar_ratio and dar_ratio > 0:
+                display_w = float(height) * dar_ratio
+                display_h = float(height)
+            elif sar_ratio and sar_ratio > 0:
+                display_w = float(width) * sar_ratio
+                display_h = float(height)
+            else:
+                display_w = float(width)
+                display_h = float(height)
+
+            target_w = _round_even(display_w)
+            target_h = _round_even(display_h)
+            filt = f"scale={target_w}:{target_h},setsar=1,setdar=iw/ih"
+            return filt, target_w, target_h
+
         # Telegram clients are most stable with H.264 + yuv420p and square pixels in MP4.
         sar_ratio = _parse_ratio(sar)
         dar_ratio = _parse_ratio(dar)
@@ -565,6 +596,8 @@ class Downloader:
         if not needs_transcode:
             return file_path
 
+        safe_filter, target_w, target_h = _build_safe_filter()
+
         base, _ = os.path.splitext(file_path)
         fixed_path = base + '.tgfix.mp4'
 
@@ -575,9 +608,11 @@ class Downloader:
             '-c:v', 'libx264',
             '-preset', 'veryfast',
             '-crf', '20',
-            # Normalize to square pixels and clear odd DAR metadata that may stretch playback in Telegram.
-            '-vf', "scale='trunc(if(gte(sar,1),iw*sar,iw)/2)*2':'trunc(if(gte(sar,1),ih,ih/sar)/2)*2',setsar=1,setdar=iw/ih",
+            # Normalize dimensions and clear ratio metadata for stable Telegram playback.
+            '-vf', safe_filter,
             '-pix_fmt', 'yuv420p',
+            '-profile:v', 'high',
+            '-level', '4.1',
             '-movflags', '+faststart',
         ]
 
@@ -589,8 +624,9 @@ class Downloader:
         cmd.append(fixed_path)
 
         try:
+            target_desc = f"{target_w}x{target_h}" if target_w and target_h else 'auto-even'
             self.log(
-                f"检测到视频兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'}, sar={sar or 'unknown'}, dar={dar or 'unknown'})，开始转码为 Telegram 兼容格式...",
+                f"检测到视频兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'}, sar={sar or 'unknown'}, dar={dar or 'unknown'}, target={target_desc})，开始转码为 Telegram 兼容格式...",
                 "warning"
             )
             subprocess.run(cmd, check=True, capture_output=True, text=True)

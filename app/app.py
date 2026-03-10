@@ -27,7 +27,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.32"
+VERSION = "0.4.33"
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory

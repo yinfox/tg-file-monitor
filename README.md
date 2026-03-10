@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.32-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.33-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.32 (2026-03-10) - 当前版本
+### v0.4.33 (2026-03-10) - 当前版本
+- ✅ 修复仍有视频 `00:00/拉伸`：弃用脆弱的 `sar` 运行时表达式，改为 Python 预计算固定目标分辨率
+- ✅ 转码参数增强：新增 `profile=high`、`level=4.1`，提升 Telegram 侧识别稳定性
+- ✅ 转码日志新增 `target=宽x高`，便于复盘异常样本
+
+### v0.4.32 (2026-03-10)
 - ✅ 进一步修复视频拉伸：新增 `DAR(display_aspect_ratio)` 异常检测，避免漏判
 - ✅ 转码滤镜增强：`setsar=1,setdar=iw/ih`，并按 `sar` 双向归一化分辨率
 - ✅ 日志补充 `dar` 字段，便于追踪比例元数据异常
