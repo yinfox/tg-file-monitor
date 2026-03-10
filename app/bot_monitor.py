@@ -1115,22 +1115,57 @@ async def main():
                 if filename and os.path.exists(filename):
                     compat_elapsed = 0.0
                     transcoded_for_upload = False
+                    part_size_kb = 512
+                    max_upload_parts = 4000
+                    max_upload_bytes = part_size_kb * 1024 * max_upload_parts
+
+                    async def _run_compatibility_pass(current_file: str):
+                        started_at = time.perf_counter()
+                        fixed_path = await asyncio.get_running_loop().run_in_executor(
+                            downloader.executor,
+                            downloader._maybe_make_telegram_compatible,
+                            current_file,
+                        )
+                        elapsed = time.perf_counter() - started_at
+                        if fixed_path and os.path.exists(fixed_path):
+                            changed = os.path.abspath(fixed_path) != os.path.abspath(current_file)
+                            return fixed_path, elapsed, changed
+                        return current_file, elapsed, False
+
                     if use_transcode_upload:
                         # Final guard: local files (or edge outputs) should still pass compatibility check.
                         try:
-                            original_filename = filename
-                            compat_started_at = time.perf_counter()
-                            fixed_for_upload = await asyncio.get_running_loop().run_in_executor(
-                                downloader.executor,
-                                downloader._maybe_make_telegram_compatible,
-                                filename,
-                            )
-                            compat_elapsed = time.perf_counter() - compat_started_at
-                            if fixed_for_upload and os.path.exists(fixed_for_upload):
-                                filename = fixed_for_upload
-                                transcoded_for_upload = os.path.abspath(fixed_for_upload) != os.path.abspath(original_filename)
+                            filename, compat_elapsed, transcoded_for_upload = await _run_compatibility_pass(filename)
                         except Exception as _fix_err:
                             downloader.log(f"Upload compatibility precheck failed, fallback to original file: {_fix_err}", "warning")
+
+                    try:
+                        file_size_bytes = os.path.getsize(filename)
+                    except Exception:
+                        file_size_bytes = 0
+
+                    if file_size_bytes > max_upload_bytes and not use_transcode_upload:
+                        downloader.log(
+                            f"原码文件过大({file_size_bytes} bytes)，超过 Telegram 分片上限，尝试先转码压缩...",
+                            "warning",
+                        )
+                        try:
+                            filename, extra_compat_elapsed, changed = await _run_compatibility_pass(filename)
+                            compat_elapsed += extra_compat_elapsed
+                            transcoded_for_upload = transcoded_for_upload or changed
+                            file_size_bytes = os.path.getsize(filename)
+                        except Exception as _oversize_fix_err:
+                            downloader.log(f"超限转码尝试失败: {_oversize_fix_err}", "warning")
+
+                    if file_size_bytes > max_upload_bytes:
+                        size_gb = file_size_bytes / (1024 * 1024 * 1024)
+                        limit_gb = max_upload_bytes / (1024 * 1024 * 1024)
+                        await msg.edit(
+                            "❌ **上传失败（文件过大）**\n"
+                            f"当前文件大小约 `{size_gb:.2f} GB`，超过当前可上传上限约 `{limit_gb:.2f} GB`。\n"
+                            "建议切换到较低画质（如 1080p）或启用兼容转码后重试。"
+                        )
+                        return
 
                     download_meta = downloader.get_last_download_metadata()
                     source_url = (download_meta.get('source_url') or url or '').strip()
@@ -1185,15 +1220,28 @@ async def main():
                         downloader.log(f"Upload video attribute probe failed, fallback to auto attributes: {attr_err}", "warning")
 
                     upload_started_at = time.perf_counter()
-                    await client.send_file(
-                        event.chat_id,
-                        filename,
-                        caption="\n".join(upload_caption_parts),
-                        attributes=upload_attributes,
-                        force_document=False,
-                        supports_streaming=True,
-                        part_size_kb=512,
-                    )
+                    try:
+                        await client.send_file(
+                            event.chat_id,
+                            filename,
+                            caption="\n".join(upload_caption_parts),
+                            attributes=upload_attributes,
+                            force_document=False,
+                            supports_streaming=True,
+                            part_size_kb=part_size_kb,
+                        )
+                    except Exception as upload_err:
+                        err_text = str(upload_err)
+                        if 'SaveBigFilePartRequest' in err_text or 'number of file parts is invalid' in err_text.lower():
+                            size_gb = (os.path.getsize(filename) / (1024 * 1024 * 1024)) if os.path.exists(filename) else 0
+                            await msg.edit(
+                                "❌ **上传失败（文件过大）**\n"
+                                f"当前文件大小约 `{size_gb:.2f} GB`，超出当前分片上传限制。\n"
+                                "请降低下载画质（建议 1080p）后重试。"
+                            )
+                            downloader.log(f"上传失败(分片上限): {upload_err}", "warning")
+                            return
+                        raise
                     upload_elapsed = time.perf_counter() - upload_started_at
 
                     downloader.log(
