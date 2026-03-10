@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.37-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.38-orange.svg)](.)
 
 </div>
 
@@ -229,7 +229,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.37 (2026-03-10) - 当前版本
+### v0.4.38 (2026-03-10) - 当前版本
+- ✅ 修复固定样本 Shorts 拉伸：新增旋转元数据(`rotate/displaymatrix`)识别，非 0 角度强制进入兼容转码
+- ✅ 转码滤镜新增旋转矫正（`transpose/hflip+vflip`）并统一清零 `rotate=0`，避免 Telegram 侧按错误方向渲染
+
+### v0.4.37 (2026-03-10)
 - ✅ 修复极少数视频拉伸残留：新增“转码后比例漂移检测”，超阈值自动执行二次比例锁定转码
 - ✅ 下载完成信息增强（Bot/监控）：新增输出原视频链接、视频标题、视频分辨率，便于追踪与复核
 

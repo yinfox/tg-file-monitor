@@ -560,11 +560,38 @@ class Downloader:
                 'dar': (video_stream or {}).get('display_aspect_ratio'),
                 'width': (video_stream or {}).get('width'),
                 'height': (video_stream or {}).get('height'),
+                'rotation': self._extract_rotation_degrees(video_stream),
                 'acodec': (audio_stream or {}).get('codec_name'),
             }
         except Exception as e:
             self.log(f"ffprobe 分析失败，跳过兼容性转码: {e}", "warning")
             return None
+
+    def _extract_rotation_degrees(self, video_stream):
+        if not isinstance(video_stream, dict):
+            return 0
+
+        def _to_int(v):
+            try:
+                return int(round(float(v)))
+            except Exception:
+                return 0
+
+        tags = video_stream.get('tags') or {}
+        if isinstance(tags, dict) and 'rotate' in tags:
+            deg = _to_int(tags.get('rotate'))
+            if deg:
+                return deg
+
+        for side_data in video_stream.get('side_data_list') or []:
+            if not isinstance(side_data, dict):
+                continue
+            if 'rotation' in side_data:
+                deg = _to_int(side_data.get('rotation'))
+                if deg:
+                    return deg
+
+        return 0
 
     def _maybe_make_telegram_compatible(self, file_path):
         """Transcode to Telegram-friendly H.264/AAC MP4 when stream codec is likely incompatible."""
@@ -583,6 +610,7 @@ class Downloader:
         dar = str(probe.get('dar') or '').strip()
         width = int(probe.get('width') or 0)
         height = int(probe.get('height') or 0)
+        rotation_degrees = int(probe.get('rotation') or 0)
 
         if not video_stream:
             self.log("检测到文件无视频流，无法修复为可播放视频。", "warning")
@@ -629,6 +657,22 @@ class Downloader:
                 return False
             return low <= v <= high
 
+        def _normalized_rotation_deg(value):
+            try:
+                return int(value) % 360
+            except Exception:
+                return 0
+
+        def _rotation_filter_and_dimensions(w, h, rot):
+            rot_n = _normalized_rotation_deg(rot)
+            if rot_n == 90:
+                return 'transpose=clock', h, w
+            if rot_n == 270:
+                return 'transpose=cclock', h, w
+            if rot_n == 180:
+                return 'hflip,vflip', w, h
+            return '', w, h
+
         def _display_ratio_from_dimensions(w, h, s_ratio):
             if w <= 0 or h <= 0:
                 return None
@@ -664,28 +708,43 @@ class Downloader:
                 target_h_local,
             )
 
-        def _build_safe_filter():
+        def _build_safe_filter(rotate_filter='', src_w=0, src_h=0):
             # Build deterministic scale target in Python.
             # Important: do NOT trust DAR for scaling, because bad DAR metadata can permanently bake stretch.
-            if width <= 0 or height <= 0:
-                return "scale='trunc(iw/2)*2':'trunc(ih/2)*2',setsar=1,setdar=iw/ih", None, None
+            filter_parts = []
+            if rotate_filter:
+                filter_parts.append(rotate_filter)
+
+            if src_w <= 0 or src_h <= 0:
+                filter_parts.append("scale='trunc(iw/2)*2':'trunc(ih/2)*2'")
+                filter_parts.append('setsar=1')
+                filter_parts.append('setdar=iw/ih')
+                return ','.join(filter_parts), None, None
 
             if _is_reasonable_ratio(sar_ratio) and abs(float(sar_ratio) - 1.0) > 0.01:
-                display_w = float(width) * sar_ratio
-                display_h = float(height)
+                display_w = float(src_w) * sar_ratio
+                display_h = float(src_h)
             else:
-                display_w = float(width)
-                display_h = float(height)
+                display_w = float(src_w)
+                display_h = float(src_h)
 
             target_w = _round_even(display_w)
             target_h = _round_even(display_h)
-            filt = f"scale={target_w}:{target_h},setsar=1,setdar=iw/ih"
+            filter_parts.append(f"scale={target_w}:{target_h}")
+            filter_parts.append('setsar=1')
+            filter_parts.append('setdar=iw/ih')
+            filt = ','.join(filter_parts)
             return filt, target_w, target_h
 
         # Telegram clients are most stable with H.264 + yuv420p and square pixels in MP4.
         sar_ratio = _parse_ratio(sar)
         dar_ratio = _parse_ratio(dar)
-        coded_ratio = (float(width) / float(height)) if width > 0 and height > 0 else None
+        rotate_filter, effective_w, effective_h = _rotation_filter_and_dimensions(
+            width,
+            height,
+            rotation_degrees,
+        )
+        coded_ratio = (float(effective_w) / float(effective_h)) if effective_w > 0 and effective_h > 0 else None
 
         sar_is_non_square = bool(sar_ratio and abs(sar_ratio - 1.0) > 0.01)
         dar_mismatch_coded = bool(
@@ -697,12 +756,13 @@ class Downloader:
             or (pix_fmt not in ('yuv420p', 'yuvj420p'))
             or sar_is_non_square
             or dar_mismatch_coded
+            or (_normalized_rotation_deg(rotation_degrees) != 0)
         )
         if not needs_transcode:
             return file_path
 
-        safe_filter, target_w, target_h = _build_safe_filter()
-        source_display_ratio = _display_ratio_from_dimensions(width, height, sar_ratio)
+        safe_filter, target_w, target_h = _build_safe_filter(rotate_filter, effective_w, effective_h)
+        source_display_ratio = _display_ratio_from_dimensions(effective_w, effective_h, sar_ratio)
 
         base, _ = os.path.splitext(file_path)
         fixed_path = base + '.tgfix.mp4'
@@ -719,6 +779,7 @@ class Downloader:
             '-pix_fmt', 'yuv420p',
             '-profile:v', 'high',
             '-level', '4.1',
+            '-metadata:s:v:0', 'rotate=0',
             '-movflags', '+faststart',
         ]
 
@@ -732,7 +793,7 @@ class Downloader:
         try:
             target_desc = f"{target_w}x{target_h}" if target_w and target_h else 'auto-even'
             self.log(
-                f"检测到视频兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'}, sar={sar or 'unknown'}, dar={dar or 'unknown'}, target={target_desc})，开始转码为 Telegram 兼容格式...",
+                f"检测到视频兼容性风险(vcodec={vcodec or 'unknown'}, pix_fmt={pix_fmt or 'unknown'}, sar={sar or 'unknown'}, dar={dar or 'unknown'}, rotate={rotation_degrees}, target={target_desc})，开始转码为 Telegram 兼容格式...",
                 "warning"
             )
             subprocess.run(cmd, check=True, capture_output=True, text=True)
