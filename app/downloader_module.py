@@ -700,9 +700,19 @@ class Downloader:
                 ratio = ratio * float(s_ratio)
             return ratio if _is_reasonable_ratio(ratio, low=0.2, high=5.0) else None
 
+        def _cap_dimensions_for_telegram(w, h, max_long_side=1920):
+            if not w or not h:
+                return w, h
+            long_side = max(w, h)
+            if long_side <= max_long_side:
+                return w, h
+            scale_ratio = float(max_long_side) / float(long_side)
+            return _round_even(float(w) * scale_ratio), _round_even(float(h) * scale_ratio)
+
         def _build_ratio_locked_filter(target_ratio, fallback_w, fallback_h):
             safe_w = _round_even(fallback_w or width or 1280)
             safe_h = _round_even(fallback_h or height or 720)
+            safe_w, safe_h = _cap_dimensions_for_telegram(safe_w, safe_h)
 
             if not _is_reasonable_ratio(target_ratio, low=0.2, high=5.0):
                 return f"scale={safe_w}:{safe_h},setsar=1", safe_w, safe_h
@@ -748,6 +758,7 @@ class Downloader:
 
             target_w = _round_even(display_w)
             target_h = _round_even(display_h)
+            target_w, target_h = _cap_dimensions_for_telegram(target_w, target_h)
             filter_parts.append(f"scale={target_w}:{target_h}")
             filter_parts.append('setsar=1')
             filt = ','.join(filter_parts)
