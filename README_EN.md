@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.18-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.62-orange.svg)](.)
 
 </div>
 
@@ -154,6 +154,19 @@ Try:
 - Frontend: Bootstrap 5, JavaScript
 - Config storage: JSON
 - Deployment: Docker, Docker Compose
+
+## 📊 Release History
+
+### v0.4.62 (2026-03-11) - Current
+- Added configurable movie premiere age removal in Drama Calendar settings (default: 365 days, `-1` to disable)
+- Added TMDB-based auto-removal for over-age movie titles from Maoyan source
+
+### v0.4.61 (2026-03-11)
+- Fixed manual Preview/Apply action handling on Drama Calendar page (resolved form action conflict)
+
+### v0.4.60 (2026-03-11)
+- Improved dedup: previously monitored titles are no longer appended repeatedly
+- Improved TMDB observability logs: enabled state, cache hit, outbound request, and skip reasons
 
 ## 📄 License
 

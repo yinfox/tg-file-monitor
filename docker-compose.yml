@@ -1,13 +1,40 @@
-version: '3.8'
-
 services:
-  telegram_file_monitor:
+  telegram-file-monitor:
+    # 镜像名称：建议发布时固定版本号（例如 0.4.62），避免 latest 漂移导致不可预期变更。
     image: y1nf0x/tg-file-monitor:latest
+    # 容器名：便于 docker logs / docker exec / docker restart 快速定位。
+    container_name: tg-file-monitor
     ports:
+      # Web 管理端口映射：宿主机 5001 -> 容器 5001。
+      # 若与宿主机端口冲突，可改为 "15001:5001"。
       - "5001:5001"
     volumes:
-      - ./config:/app/config
-      - ./downloads:/app/downloads # Mount downloads directory so files are visible on VPS
-      - /CloudNAS:/CloudNAS # Mount VPS CloudNAS path into container for local move/copy targets
-    # Be cautious with telegram_monitor.session as it contains sensitive data.
+      # 配置目录持久化：包含 config.json、会话文件、运行日志等关键状态。
+      # 强烈建议定期备份此目录。
+      - /data/docker_app/tg-file-monitor/config:/app/config
+
+      # 下载目录：机器人/监控下载的媒体文件会落在这里。
+      # 建议放到大容量磁盘，避免系统盘被占满。
+      - /downloads:/app/downloads
+
+      # （可选）应用日志目录：用于额外日志持久化，便于排障与审计。
+      - /data/docker_app/tg-file-monitor/logs:/app/logs
+
+      # 业务上传目录：按你的工作流映射，供程序读取/写入上传任务文件。
+      - /upload:/app/upload
+
+      # 云盘/共享盘挂载：用于文件转存、同步或二次处理。
+      - /CloudNAS:/CloudNAS
+
+      # 外部系统目录挂载：例如其他容器的配置或数据目录。
+      # 注意宿主机路径权限（读写）与数据安全边界。
+      #此为调用tgto123的db目录，可以供此程序调用tgto123的数据库文件，进行数据交互
+      - /data/docker_app/tgto123/db:/app/tgto123/db
+
+    environment:
+      # 时区设置：影响日志时间、定时任务触发时间等。
+      # 如需统一 UTC，可改为 TZ=UTC。
+      - TZ=Asia/Shanghai
+
+    # 重启策略：Docker 或宿主机重启后自动拉起；手动 stop 后不会强制拉起。
     restart: unless-stopped

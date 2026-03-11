@@ -1,0 +1,273 @@
+{% extends "base.html" %}
+
+{% block title %}追剧日历正则{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-md-10 col-lg-8 mx-auto">
+        <h3 class="mb-3"><i class="bi bi-calendar3 me-2"></i>追剧日历正则同步</h3>
+
+        <div class="card shadow-sm border-primary">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0 small"><i class="bi bi-sliders me-2"></i>配置</h5>
+            </div>
+            <div class="card-body p-3">
+                <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-3">
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_source">数据源</label>
+                        <select class="form-select form-select-sm" id="drama_source" name="drama_source">
+                            <option value="calendar" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'calendar' %}selected{% endif %}>追剧日历（blog.922928.de）</option>
+                            <option value="maoyan" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'maoyan' %}selected{% endif %}>猫眼票房（piaofang.maoyan.com）</option>
+                            <option value="all" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'all' %}selected{% endif %}>全部（追剧日历 + 猫眼）</option>
+                        </select>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_home_url">首页 URL</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_home_url" name="drama_home_url"
+                            value="{{ config.get('drama_calendar', {}).get('home_url', 'https://blog.922928.de/') }}"
+                            placeholder="https://blog.922928.de/">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_maoyan_url">猫眼票房 URL</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_maoyan_url" name="drama_maoyan_url"
+                            value="{{ config.get('drama_calendar', {}).get('maoyan_url', 'https://piaofang.maoyan.com/box-office?ver=normal') }}"
+                            placeholder="https://piaofang.maoyan.com/box-office?ver=normal">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_maoyan_top_n">猫眼前N名（仅猫眼来源生效）</label>
+                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_maoyan_top_n" name="drama_maoyan_top_n"
+                            value="{{ config.get('drama_calendar', {}).get('maoyan_top_n', 0) }}"
+                            placeholder="0 表示不限制">
+                        <div class="form-text">填写 0 表示提取全部；填写 10 表示只提取前 10 名。</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="drama_include_maoyan_web_heat" name="drama_include_maoyan_web_heat"
+                                {% if config.get('drama_calendar', {}).get('include_maoyan_web_heat', True) %}checked{% endif %}>
+                            <label class="form-check-label small" for="drama_include_maoyan_web_heat">
+                                同时监控猫眼网播热度电视剧榜
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_maoyan_web_heat_url">猫眼网播热度 URL</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_maoyan_web_heat_url" name="drama_maoyan_web_heat_url"
+                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_heat_url', 'https://piaofang.maoyan.com/web-heat') }}"
+                            placeholder="https://piaofang.maoyan.com/web-heat">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_maoyan_web_heat_top_n">网播热度前N名（0表示不限制）</label>
+                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_maoyan_web_heat_top_n" name="drama_maoyan_web_heat_top_n"
+                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_heat_top_n', 0) }}"
+                            placeholder="0 表示不限制">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_remove_finished_after_days">完结后移除天数（仅追剧日历生效）</label>
+                        <input type="number" min="-1" step="1" class="form-control form-control-sm" id="drama_remove_finished_after_days" name="drama_remove_finished_after_days"
+                            value="{{ config.get('drama_calendar', {}).get('remove_finished_after_days', -1) }}"
+                            placeholder="-1 表示不移除">
+                        <div class="form-text">-1 不移除；0 立即移除；例如 14 表示完结满 14 天后自动从白名单正则中去除。</div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_remove_movie_premiere_after_days">电影首映超期移除天数（仅猫眼来源生效）</label>
+                        <input type="number" min="-1" step="1" class="form-control form-control-sm" id="drama_remove_movie_premiere_after_days" name="drama_remove_movie_premiere_after_days"
+                            value="{{ config.get('drama_calendar', {}).get('remove_movie_premiere_after_days', 365) }}"
+                            placeholder="365">
+                        <div class="form-text">默认 365；-1 表示关闭电影首映日期自动剔除。</div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_post_url">指定文章 URL（可选）</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_post_url" name="drama_post_url"
+                            value="{{ config.get('drama_calendar', {}).get('post_url', '') }}"
+                            placeholder="留空则自动抓最新追剧日历">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_line_keywords">筛选关键词（逗号分隔）</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_line_keywords" name="drama_line_keywords"
+                            value="{{ config.get('drama_calendar', {}).get('line_keywords', '上线,开播') }}"
+                            placeholder="上线,开播">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_env_files">目标 .env 路径（逗号或换行分隔）</label>
+                        <textarea class="form-control form-control-sm" id="drama_env_files" name="drama_env_files" rows="4"
+                            placeholder="/opt/docker/a/.env\n/opt/docker/b/.env">{{ config.get('drama_calendar', {}).get('env_files', '') }}</textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small" for="drama_env_key">写入变量名</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_env_key" name="drama_env_key"
+                            value="{{ config.get('drama_calendar', {}).get('env_key', 'DRAMA_CALENDAR_REGEX') }}"
+                            placeholder="DRAMA_CALENDAR_REGEX">
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="drama_backup_before_write" name="drama_backup_before_write"
+                                {% if config.get('drama_calendar', {}).get('backup_before_write', True) %}checked{% endif %}>
+                            <label class="form-check-label small" for="drama_backup_before_write">
+                                写入前自动备份已有 .env（生成 .bak_时间戳 文件）
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="drama_append_to_whitelist" name="drama_append_to_whitelist"
+                                {% if config.get('drama_calendar', {}).get('append_to_whitelist', True) %}checked{% endif %}>
+                            <label class="form-check-label small" for="drama_append_to_whitelist">
+                                写入到关键词白名单时使用追加模式（不覆盖原有值）
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="drama_managed_scope_source_only" name="drama_managed_scope_source_only"
+                                {% if config.get('drama_calendar', {}).get('managed_scope_source_only', True) %}checked{% endif %}>
+                            <label class="form-check-label small" for="drama_managed_scope_source_only">
+                                仅替换同数据源自动写入值（追剧/猫眼互不覆盖）
+                            </label>
+                            <div class="form-text">建议开启。关闭后会按同一变量名统一替换自动写入值。</div>
+                        </div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_finish_detect_mode">完结判定方式</label>
+                        <select class="form-select form-select-sm" id="drama_finish_detect_mode" name="drama_finish_detect_mode">
+                            <option value="keyword" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'keyword' %}selected{% endif %}>仅关键词（本地）</option>
+                            <option value="tmdb" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'tmdb' %}selected{% endif %}>仅 TMDB（联网）</option>
+                            <option value="hybrid" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'hybrid' %}selected{% endif %}>混合（关键词 + TMDB）</option>
+                        </select>
+                        <div class="form-text">推荐“混合”，兼顾速度和准确性。</div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_tmdb_api_key">TMDB API Key（可选）</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_tmdb_api_key" name="drama_tmdb_api_key"
+                            value="{{ config.get('drama_calendar', {}).get('tmdb_api_key', '') }}"
+                            placeholder="留空则尝试读取环境变量 TMDB_API_KEY">
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label small" for="drama_tmdb_language">TMDB 语言</label>
+                            <input type="text" class="form-control form-control-sm" id="drama_tmdb_language" name="drama_tmdb_language"
+                                value="{{ config.get('drama_calendar', {}).get('tmdb_language', 'zh-CN') }}" placeholder="zh-CN">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small" for="drama_tmdb_region">TMDB 地区</label>
+                            <input type="text" class="form-control form-control-sm" id="drama_tmdb_region" name="drama_tmdb_region"
+                                value="{{ config.get('drama_calendar', {}).get('tmdb_region', 'CN') }}" placeholder="CN">
+                        </div>
+                    </div>
+
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label small" for="drama_tmdb_year_tolerance">TMDB 年份容差</label>
+                            <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_tmdb_year_tolerance" name="drama_tmdb_year_tolerance"
+                                value="{{ config.get('drama_calendar', {}).get('tmdb_year_tolerance', 2) }}" placeholder="2">
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label small" for="drama_tmdb_min_score">TMDB 最低置信分</label>
+                            <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_tmdb_min_score" name="drama_tmdb_min_score"
+                                value="{{ config.get('drama_calendar', {}).get('tmdb_min_score', 70) }}" placeholder="70">
+                        </div>
+                        <div class="form-text">分数越高越保守。推荐：70~85。</div>
+                    </div>
+
+                    <hr>
+                    <div class="mb-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="drama_auto_sync_enabled" name="drama_auto_sync_enabled"
+                                {% if config.get('drama_calendar', {}).get('auto_sync_enabled', False) %}checked{% endif %}>
+                            <label class="form-check-label small" for="drama_auto_sync_enabled">
+                                开启定时自动抓取并写入
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small" for="drama_auto_sync_interval_minutes">自动抓取间隔（分钟）</label>
+                        <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_auto_sync_interval_minutes" name="drama_auto_sync_interval_minutes"
+                            value="{{ config.get('drama_calendar', {}).get('auto_sync_interval_minutes', 60) }}"
+                            placeholder="60">
+                        <div class="form-text">留空 Cron 时按该间隔执行。</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label small" for="drama_auto_sync_cron_expr">Cron 表达式（可选，优先于间隔）</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_auto_sync_cron_expr" name="drama_auto_sync_cron_expr"
+                            value="{{ config.get('drama_calendar', {}).get('auto_sync_cron_expr', '') }}"
+                            placeholder="例如：0 */4 * * *">
+                        <div class="form-text">标准 5 段：分 时 日 月 周。示例：<code>0 8 * * *</code>（每天 08:00），<code>0 */6 * * *</code>（每6小时）。</div>
+                    </div>
+
+                    <div class="alert alert-light border small py-2" role="alert">
+                        <div>调度状态：
+                            {% if scheduler_state.get('enabled') %}
+                                {% if scheduler_state.get('running') %}
+                                    <span class="badge bg-info text-dark">执行中</span>
+                                {% else %}
+                                    <span class="badge bg-success">已启用</span>
+                                {% endif %}
+                            {% else %}
+                                <span class="badge bg-secondary">未启用</span>
+                            {% endif %}
+                        </div>
+                        <div class="mt-1">下次执行：{{ scheduler_state.get('next_run_at', '未启用') or '未启用' }}</div>
+                        <div>调度模式：{{ 'Cron' if scheduler_state.get('schedule_mode') == 'cron' else '间隔分钟' }}</div>
+                        <div>上次执行：{{ scheduler_state.get('last_run_at', '') or '暂无' }}</div>
+                        <div>上次结果：
+                            {% if scheduler_state.get('last_status') == 'success' %}
+                                <span class="text-success">成功</span>
+                            {% elif scheduler_state.get('last_status') == 'error' %}
+                                <span class="text-danger">失败</span>
+                            {% else %}
+                                <span class="text-muted">暂无</span>
+                            {% endif %}
+                        </div>
+                        {% if scheduler_state.get('last_message') %}
+                        <div class="text-break">摘要：{{ scheduler_state.get('last_message') }}</div>
+                        {% endif %}
+                    </div>
+
+                    <div class="d-grid gap-2 mt-2">
+                        <button type="submit" name="action" value="update_drama_calendar_settings" class="btn btn-outline-primary btn-sm w-100">保存追剧配置</button>
+
+                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-info btn-sm w-100"
+                            onclick="document.getElementById('run_mode').value='preview';">
+                            <i class="bi bi-search me-1"></i>预览提取（不写入）
+                        </button>
+
+                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-primary btn-sm w-100"
+                            onclick="document.getElementById('run_mode').value='apply'; return confirm('确认把提取后的正则写入目标 .env 吗？');">
+                            <i class="bi bi-download me-1"></i>执行写入 .env
+                        </button>
+                    </div>
+                    <input type="hidden" id="run_mode" name="run_mode" value="preview">
+                </form>
+
+                <div class="d-grid mt-2">
+                    <a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-secondary btn-sm">
+                        <i class="bi bi-journal-text me-1"></i>查看追剧日志
+                    </a>
+                </div>
+
+                <div class="form-text mt-2">执行结果会在页面顶部显示，建议先预览再写入。</div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

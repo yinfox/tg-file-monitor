@@ -5,6 +5,7 @@ yt-dlp
 nest_asyncio
 emoji
 requests
+croniter
 imageio-ffmpeg
 p115client>=0.0.7
 p115cipher>=0.0.4

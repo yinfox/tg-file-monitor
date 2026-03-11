@@ -11,12 +11,14 @@ import logging
 import uuid
 import time
 import re
+import datetime
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError
 from werkzeug.security import generate_password_hash, check_password_hash
 from functools import wraps
 from dotenv import load_dotenv
+from croniter import croniter
 
 # Add current directory to path so we can import modules from app/
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -27,13 +29,16 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.54"
+VERSION = "0.4.62"
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
 # --- Configuration Management ---
 CONFIG_DIR = 'config' # Define the config directory
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
 DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
+DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
 
 # Load environment variables from config/.env
 try:
@@ -74,6 +79,31 @@ def load_config():
             "duplicate_cooldown_seconds": 300,
             "max_single_file_size_mb": 4096,
             "min_free_space_gb": 5
+        },
+        "drama_calendar": {
+            "source": "calendar",
+            "home_url": "https://blog.922928.de/",
+            "post_url": "",
+            "maoyan_url": "https://piaofang.maoyan.com/box-office?ver=normal",
+            "maoyan_top_n": 0,
+            "include_maoyan_web_heat": True,
+            "maoyan_web_heat_url": "https://piaofang.maoyan.com/web-heat",
+            "maoyan_web_heat_top_n": 0,
+            "remove_movie_premiere_after_days": 365,
+            "remove_finished_after_days": -1,
+            "line_keywords": "上线,开播",
+            "env_files": "",
+            "env_key": "DRAMA_CALENDAR_REGEX",
+            "backup_before_write": True,
+            "append_to_whitelist": True,
+            "managed_scope_source_only": True,
+            "auto_sync_enabled": False,
+            "auto_sync_interval_minutes": 60,
+            "auto_sync_cron_expr": "",
+            "finish_detect_mode": "hybrid",
+            "tmdb_api_key": "",
+            "tmdb_language": "zh-CN",
+            "tmdb_region": "CN"
         }
     }
     if not os.path.exists(CONFIG_FILE):
@@ -96,6 +126,12 @@ def load_config():
                     merged_risk = default_config["download_risk_control"].copy()
                     merged_risk.update(config.get("download_risk_control") or {})
                     config["download_risk_control"] = merged_risk
+                if "drama_calendar" not in config or not isinstance(config.get("drama_calendar"), dict):
+                    config["drama_calendar"] = default_config["drama_calendar"].copy()
+                else:
+                    merged_drama = default_config["drama_calendar"].copy()
+                    merged_drama.update(config.get("drama_calendar") or {})
+                    config["drama_calendar"] = merged_drama
         except json.JSONDecodeError:
             flash(f"错误: 无法解析 {CONFIG_FILE}。请检查文件格式。", "error")
             config = default_config
@@ -135,6 +171,298 @@ def save_config(config):
     """Saves configuration to config.json."""
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
+
+
+def _parse_env_files(raw_env_files: str):
+    if not raw_env_files:
+        return []
+    result = []
+    for p in re.split(r'[\n,]+', raw_env_files):
+        item = (p or '').strip()
+        if item:
+            result.append(item)
+    return result
+
+
+def _append_drama_calendar_log(lines):
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(DRAMA_CALENDAR_LOG_FILE, 'a', encoding='utf-8') as f:
+            for line in (lines or []):
+                f.write(str(line).rstrip('\n') + '\n')
+    except Exception:
+        pass
+
+
+def _read_drama_calendar_log_lines(max_lines: int = 2000):
+    try:
+        if not os.path.exists(DRAMA_CALENDAR_LOG_FILE):
+            return []
+        with open(DRAMA_CALENDAR_LOG_FILE, 'r', encoding='utf-8') as f:
+            lines = [ln.rstrip('\n') for ln in f.readlines()]
+        if len(lines) > max_lines:
+            return lines[-max_lines:]
+        return lines
+    except Exception:
+        return []
+
+
+def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: str = 'manual'):
+    if not os.path.exists(DRAMA_CALENDAR_SCRIPT):
+        return False, "", f"脚本不存在: {DRAMA_CALENDAR_SCRIPT}"
+
+    env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
+    if not env_files_list:
+        return False, "", "请先在追剧日历配置中填写至少一个 .env 路径。"
+
+    cmd = [
+        sys.executable,
+        DRAMA_CALENDAR_SCRIPT,
+        '--source', (drama_cfg.get('source') or 'calendar').strip(),
+        '--home-url', (drama_cfg.get('home_url') or 'https://blog.922928.de/').strip(),
+        '--maoyan-url', (drama_cfg.get('maoyan_url') or 'https://piaofang.maoyan.com/box-office?ver=normal').strip(),
+        '--maoyan-top-n', str(int(drama_cfg.get('maoyan_top_n', 0) or 0)),
+        '--maoyan-web-heat-url', (drama_cfg.get('maoyan_web_heat_url') or 'https://piaofang.maoyan.com/web-heat').strip(),
+        '--maoyan-web-heat-top-n', str(int(drama_cfg.get('maoyan_web_heat_top_n', 0) or 0)),
+        '--remove-movie-premiere-after-days', str(int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)),
+        '--remove-finished-after-days', str(int(drama_cfg.get('remove_finished_after_days', -1) if drama_cfg.get('remove_finished_after_days', -1) is not None else -1)),
+        '--finish-detect-mode', (drama_cfg.get('finish_detect_mode') or 'hybrid').strip(),
+        '--line-keywords', (drama_cfg.get('line_keywords') or '上线,开播').strip(),
+        '--env-files', ','.join(env_files_list),
+        '--env-key', (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip(),
+        '--managed-scope', ('source' if bool(drama_cfg.get('managed_scope_source_only', True)) else 'key'),
+    ]
+
+    tmdb_api_key = (drama_cfg.get('tmdb_api_key') or os.environ.get('TMDB_API_KEY') or '').strip()
+    if tmdb_api_key:
+        cmd.extend(['--tmdb-api-key', tmdb_api_key])
+    tmdb_language = (drama_cfg.get('tmdb_language') or 'zh-CN').strip() or 'zh-CN'
+    tmdb_region = (drama_cfg.get('tmdb_region') or 'CN').strip() or 'CN'
+    try:
+        tmdb_year_tolerance = max(0, int(drama_cfg.get('tmdb_year_tolerance', 2) or 2))
+    except Exception:
+        tmdb_year_tolerance = 2
+    try:
+        tmdb_min_score = max(1, int(drama_cfg.get('tmdb_min_score', 70) or 70))
+    except Exception:
+        tmdb_min_score = 70
+    cmd.extend(['--tmdb-language', tmdb_language, '--tmdb-region', tmdb_region])
+    cmd.extend(['--tmdb-year-tolerance', str(tmdb_year_tolerance), '--tmdb-min-score', str(tmdb_min_score)])
+
+    post_url = (drama_cfg.get('post_url') or '').strip()
+    if post_url:
+        cmd.extend(['--post-url', post_url])
+    if bool(drama_cfg.get('include_maoyan_web_heat', True)):
+        cmd.append('--include-maoyan-web-heat')
+    if (not dry_run) and bool(drama_cfg.get('backup_before_write', False)):
+        cmd.append('--backup')
+    if bool(drama_cfg.get('append_to_whitelist', True)):
+        cmd.append('--append')
+    if dry_run:
+        cmd.append('--dry-run')
+
+    started_at = time.strftime('%Y-%m-%d %H:%M:%S')
+    source = (drama_cfg.get('source') or 'calendar').strip()
+    run_label = '预览' if dry_run else '写入'
+    _append_drama_calendar_log([
+        f"[{started_at}] [INFO] [DRAMA] 开始执行 ({run_label}) trigger={trigger} source={source} env_files={len(env_files_list)}",
+    ])
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True,
+            timeout=180,
+            check=False,
+        )
+        finished_at = time.strftime('%Y-%m-%d %H:%M:%S')
+        level = 'INFO' if proc.returncode == 0 else 'ERROR'
+        summary = f"[{finished_at}] [{level}] [DRAMA] 执行结束 exit={proc.returncode} trigger={trigger} mode={run_label}"
+        log_lines = [summary]
+        out_lines = [ln for ln in (proc.stdout or '').splitlines() if ln.strip()]
+        err_lines = [ln for ln in (proc.stderr or '').splitlines() if ln.strip()]
+        for ln in out_lines[:120]:
+            log_lines.append(f"[{finished_at}] [INFO] [DRAMA][OUT] {ln}")
+        for ln in err_lines[:120]:
+            log_lines.append(f"[{finished_at}] [ERROR] [DRAMA][ERR] {ln}")
+        _append_drama_calendar_log(log_lines)
+        return proc.returncode == 0, proc.stdout or '', proc.stderr or ''
+    except subprocess.TimeoutExpired:
+        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        _append_drama_calendar_log([
+            f"[{ts}] [ERROR] [DRAMA] 执行超时 (180s) trigger={trigger} mode={run_label}",
+        ])
+        return False, '', '执行超时（180秒），请检查网络连通性后重试。'
+    except Exception as e:
+        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        _append_drama_calendar_log([
+            f"[{ts}] [ERROR] [DRAMA] 执行异常 trigger={trigger} mode={run_label}: {e}",
+        ])
+        return False, '', f'执行异常: {e}'
+
+
+_DRAMA_SCHEDULER_STOP_EVENT = threading.Event()
+_DRAMA_SCHEDULER_THREAD = None
+_DRAMA_SCHEDULER_LOCK = threading.Lock()
+_DRAMA_SCHEDULER_STATE = {
+    'enabled': False,
+    'running': False,
+    'next_run_at': '未启用',
+    'last_run_at': '',
+    'last_status': '',
+    'last_message': '',
+    'schedule_mode': 'interval',
+}
+
+
+def _format_scheduler_ts(ts: float) -> str:
+    if not ts or ts <= 0:
+        return ''
+    return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(ts))
+
+
+def _set_drama_scheduler_state(**kwargs):
+    with _DRAMA_SCHEDULER_LOCK:
+        _DRAMA_SCHEDULER_STATE.update(kwargs)
+
+
+def get_drama_scheduler_state() -> dict:
+    with _DRAMA_SCHEDULER_LOCK:
+        return dict(_DRAMA_SCHEDULER_STATE)
+
+
+def _normalize_cron_expr(expr: str) -> str:
+    return (expr or '').strip()
+
+
+def _cron_expr_valid(expr: str) -> bool:
+    e = _normalize_cron_expr(expr)
+    if not e:
+        return False
+    try:
+        return bool(croniter.is_valid(e))
+    except Exception:
+        return False
+
+
+def _next_run_by_cron(expr: str, now_ts: float) -> float:
+    base_dt = datetime.datetime.fromtimestamp(now_ts)
+    it = croniter(_normalize_cron_expr(expr), base_dt)
+    return float(it.get_next(float))
+
+
+def _drama_scheduler_loop():
+    next_run_ts = 0.0
+    last_signature = None
+
+    while not _DRAMA_SCHEDULER_STOP_EVENT.is_set():
+        config = load_config()
+        cfg = config.get('drama_calendar', {}) if isinstance(config, dict) else {}
+        enabled = bool(cfg.get('auto_sync_enabled', False))
+        try:
+            interval_minutes = int(cfg.get('auto_sync_interval_minutes', 60) or 60)
+        except Exception:
+            interval_minutes = 60
+        interval_minutes = max(1, interval_minutes)
+        cron_expr = _normalize_cron_expr(str(cfg.get('auto_sync_cron_expr', '') or ''))
+        use_cron = bool(cron_expr)
+
+        signature = (
+            enabled,
+            interval_minutes,
+            cron_expr,
+            str(cfg.get('source', 'calendar')),
+            str(cfg.get('env_key', 'DRAMA_CALENDAR_REGEX')),
+            str(cfg.get('env_files', '')),
+            bool(cfg.get('include_maoyan_web_heat', True)),
+            int(cfg.get('maoyan_top_n', 0) or 0),
+            int(cfg.get('maoyan_web_heat_top_n', 0) or 0),
+        )
+
+        if signature != last_signature:
+            last_signature = signature
+            if enabled:
+                next_run_ts = time.time() + 5
+
+        if not enabled:
+            _set_drama_scheduler_state(enabled=False, running=False, next_run_at='未启用', schedule_mode='interval')
+            _DRAMA_SCHEDULER_STOP_EVENT.wait(2)
+            continue
+
+        if use_cron and not _cron_expr_valid(cron_expr):
+            _set_drama_scheduler_state(
+                enabled=True,
+                running=False,
+                schedule_mode='cron',
+                last_status='error',
+                last_message=f'Cron 表达式无效: {cron_expr}',
+                next_run_at='Cron 表达式无效',
+            )
+            _DRAMA_SCHEDULER_STOP_EVENT.wait(5)
+            continue
+
+        now = time.time()
+        if next_run_ts <= 0:
+            if use_cron:
+                next_run_ts = _next_run_by_cron(cron_expr, now)
+            else:
+                next_run_ts = now + 5
+
+        if now < next_run_ts:
+            _set_drama_scheduler_state(
+                enabled=True,
+                running=False,
+                schedule_mode=('cron' if use_cron else 'interval'),
+                next_run_at=_format_scheduler_ts(next_run_ts),
+            )
+            _DRAMA_SCHEDULER_STOP_EVENT.wait(min(5, max(1, int(next_run_ts - now))))
+            continue
+
+        _set_drama_scheduler_state(enabled=True, running=True)
+        ok, out, err = _run_drama_calendar_update(cfg, dry_run=False, trigger='scheduler')
+        output_lines = [ln for ln in (out or '').splitlines() if ln.strip()]
+        err_lines = [ln for ln in (err or '').splitlines() if ln.strip()]
+        if ok:
+            ok_lines = [ln for ln in output_lines if ln.startswith('[OK]')]
+            summary_lines = ok_lines if ok_lines else output_lines[:4]
+            summary = ' | '.join(summary_lines) if summary_lines else '自动执行成功'
+            status = 'success'
+        else:
+            summary_out = ' | '.join(output_lines[:3]) if output_lines else ''
+            summary_err = ' | '.join(err_lines[:3]) if err_lines else '未知错误'
+            summary = (summary_out + ' ' + summary_err).strip()
+            status = 'error'
+
+        if use_cron:
+            next_run_ts = _next_run_by_cron(cron_expr, time.time())
+        else:
+            next_run_ts = time.time() + interval_minutes * 60
+        _set_drama_scheduler_state(
+            enabled=True,
+            running=False,
+            last_run_at=_format_scheduler_ts(time.time()),
+            last_status=status,
+            last_message=summary,
+            schedule_mode=('cron' if use_cron else 'interval'),
+            next_run_at=_format_scheduler_ts(next_run_ts),
+        )
+
+    _set_drama_scheduler_state(running=False, next_run_at='已停止')
+
+
+def start_drama_scheduler():
+    global _DRAMA_SCHEDULER_THREAD
+    if _DRAMA_SCHEDULER_THREAD and _DRAMA_SCHEDULER_THREAD.is_alive():
+        return
+    _DRAMA_SCHEDULER_STOP_EVENT.clear()
+    _DRAMA_SCHEDULER_THREAD = threading.Thread(
+        target=_drama_scheduler_loop,
+        name='drama-calendar-scheduler',
+        daemon=True,
+    )
+    _DRAMA_SCHEDULER_THREAD.start()
 
 
 def load_download_risk_stats():
@@ -620,6 +948,7 @@ def manage_config():
     config = load_config()
     if request.method == 'POST':
         action = request.form.get('action')
+        should_restart_monitor = True
         if action == 'add':
             source_channel = request.form['source_channel']
             target_users = request.form['target_users']
@@ -875,13 +1204,123 @@ def manage_config():
                     flash("未找到匹配的待移动频道。", "warning")
 
         # After config changes, restart monitor if it was running
-        if get_monitor_status() == "运行中":
+        if should_restart_monitor and get_monitor_status() == "运行中":
             stop_monitor_process()
             start_monitor_process()
 
         return redirect(url_for('manage_config'))
 
     return render_template('config.html', config=config)
+
+
+@app.route('/drama_calendar', methods=['GET', 'POST'])
+@login_required
+def drama_calendar_settings():
+    config = load_config()
+    if request.method == 'POST':
+        action_values = request.form.getlist('action')
+        action = (action_values[-1] if action_values else request.form.get('action') or '').strip()
+
+        def _drama_cfg_from_form(base: dict) -> dict:
+            drama = dict(base or {})
+            source = (request.form.get('drama_source') or 'calendar').strip() or 'calendar'
+            if source not in ('calendar', 'maoyan', 'all'):
+                source = 'calendar'
+            drama['source'] = source
+            drama['home_url'] = (request.form.get('drama_home_url') or '').strip() or 'https://blog.922928.de/'
+            drama['post_url'] = (request.form.get('drama_post_url') or '').strip()
+            drama['maoyan_url'] = (request.form.get('drama_maoyan_url') or '').strip() or 'https://piaofang.maoyan.com/box-office?ver=normal'
+            try:
+                drama['maoyan_top_n'] = max(0, int((request.form.get('drama_maoyan_top_n') or '0').strip() or 0))
+            except Exception:
+                drama['maoyan_top_n'] = 0
+            drama['include_maoyan_web_heat'] = request.form.get('drama_include_maoyan_web_heat') == 'on'
+            drama['maoyan_web_heat_url'] = (request.form.get('drama_maoyan_web_heat_url') or '').strip() or 'https://piaofang.maoyan.com/web-heat'
+            try:
+                drama['maoyan_web_heat_top_n'] = max(0, int((request.form.get('drama_maoyan_web_heat_top_n') or '0').strip() or 0))
+            except Exception:
+                drama['maoyan_web_heat_top_n'] = 0
+            try:
+                drama['remove_movie_premiere_after_days'] = int((request.form.get('drama_remove_movie_premiere_after_days') or '365').strip() or 365)
+            except Exception:
+                drama['remove_movie_premiere_after_days'] = 365
+            try:
+                drama['remove_finished_after_days'] = int((request.form.get('drama_remove_finished_after_days') or '-1').strip() or -1)
+            except Exception:
+                drama['remove_finished_after_days'] = -1
+            drama['line_keywords'] = (request.form.get('drama_line_keywords') or '').strip() or '上线,开播'
+            drama['env_files'] = (request.form.get('drama_env_files') or '').strip()
+            drama['env_key'] = (request.form.get('drama_env_key') or '').strip() or 'DRAMA_CALENDAR_REGEX'
+            drama['backup_before_write'] = request.form.get('drama_backup_before_write') == 'on'
+            drama['append_to_whitelist'] = request.form.get('drama_append_to_whitelist') == 'on'
+            drama['managed_scope_source_only'] = request.form.get('drama_managed_scope_source_only') == 'on'
+            finish_mode = (request.form.get('drama_finish_detect_mode') or 'hybrid').strip().lower()
+            if finish_mode not in ('keyword', 'tmdb', 'hybrid'):
+                finish_mode = 'hybrid'
+            drama['finish_detect_mode'] = finish_mode
+            drama['tmdb_api_key'] = (request.form.get('drama_tmdb_api_key') or '').strip()
+            drama['tmdb_language'] = (request.form.get('drama_tmdb_language') or '').strip() or 'zh-CN'
+            drama['tmdb_region'] = (request.form.get('drama_tmdb_region') or '').strip() or 'CN'
+            try:
+                drama['tmdb_year_tolerance'] = max(0, int((request.form.get('drama_tmdb_year_tolerance') or '2').strip() or 2))
+            except Exception:
+                drama['tmdb_year_tolerance'] = 2
+            try:
+                drama['tmdb_min_score'] = max(1, int((request.form.get('drama_tmdb_min_score') or '70').strip() or 70))
+            except Exception:
+                drama['tmdb_min_score'] = 70
+            drama['auto_sync_enabled'] = request.form.get('drama_auto_sync_enabled') == 'on'
+            try:
+                drama['auto_sync_interval_minutes'] = max(1, int((request.form.get('drama_auto_sync_interval_minutes') or '60').strip() or 60))
+            except Exception:
+                drama['auto_sync_interval_minutes'] = 60
+            cron_expr = (request.form.get('drama_auto_sync_cron_expr') or '').strip()
+            if cron_expr and not _cron_expr_valid(cron_expr):
+                flash('Cron 表达式无效，已自动改为按分钟间隔执行。', 'warning')
+                cron_expr = ''
+            drama['auto_sync_cron_expr'] = cron_expr
+            return drama
+
+        if action == 'update_drama_calendar_settings':
+            drama = _drama_cfg_from_form(config.get('drama_calendar', {}))
+            config['drama_calendar'] = drama
+            save_config(config)
+            auto_tip = '已开启' if bool(drama.get('auto_sync_enabled')) else '未开启'
+            if drama.get('auto_sync_cron_expr'):
+                plan_tip = f"Cron: {drama.get('auto_sync_cron_expr')}"
+            else:
+                plan_tip = f"间隔 {int(drama.get('auto_sync_interval_minutes', 60) or 60)} 分钟"
+            flash(f'追剧日历配置已保存。自动抓取：{auto_tip}（{plan_tip}）', 'success')
+
+        elif action == 'run_drama_calendar':
+            drama_cfg = config.get('drama_calendar', {})
+            if request.form.get('drama_source') is not None:
+                drama_cfg = _drama_cfg_from_form(drama_cfg)
+                config['drama_calendar'] = drama_cfg
+                save_config(config)
+            run_mode = (request.form.get('run_mode') or 'preview').strip().lower()
+            dry_run = run_mode != 'apply'
+            ok, out, err = _run_drama_calendar_update(drama_cfg, dry_run=dry_run, trigger='manual')
+            output_lines = [ln for ln in (out or '').splitlines() if ln.strip()]
+            err_lines = [ln for ln in (err or '').splitlines() if ln.strip()]
+
+            if ok:
+                label = '预览成功' if dry_run else '写入成功'
+                if dry_run:
+                    summary = ' | '.join(output_lines[:6]) if output_lines else '无输出'
+                else:
+                    ok_lines = [ln for ln in output_lines if ln.startswith('[OK]')]
+                    summary_lines = ok_lines if ok_lines else output_lines[:6]
+                    summary = ' | '.join(summary_lines) if summary_lines else '无输出'
+                flash(f'{label}：{summary}', 'success')
+            else:
+                summary_out = ' | '.join(output_lines[:4]) if output_lines else ''
+                summary_err = ' | '.join(err_lines[:4]) if err_lines else '未知错误'
+                flash(f'追剧日历执行失败：{summary_out} {summary_err}'.strip(), 'error')
+
+        return redirect(url_for('drama_calendar_settings'))
+
+    return render_template('drama_calendar.html', config=config, scheduler_state=get_drama_scheduler_state())
 
 @app.route('/monitor_action', methods=['POST'])
 @login_required
@@ -901,6 +1340,15 @@ def monitor_log():
     colored_log_lines = [colorize_log_line(line) for line in log_lines]
     log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无日志。"
     return render_template('log.html', log_output=log_output)
+
+
+@app.route('/drama_calendar_log')
+@login_required
+def drama_calendar_log():
+    log_lines = _read_drama_calendar_log_lines()
+    colored_log_lines = [colorize_log_line(line) for line in log_lines]
+    log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无追剧日志。"
+    return render_template('drama_calendar_log.html', log_output=log_output)
 
 @app.route('/file_config', methods=['GET', 'POST'])
 @login_required
@@ -1101,6 +1549,19 @@ def clear_monitor_log():
     flash("Telegram 监控日志已清除。", "info")
     return redirect(url_for('monitor_log'))
 
+
+@app.route('/clear_drama_calendar_log', methods=['POST'])
+@login_required
+def clear_drama_calendar_log():
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(DRAMA_CALENDAR_LOG_FILE, 'w', encoding='utf-8') as f:
+            f.write('')
+        flash("追剧日志已清除。", "info")
+    except Exception:
+        flash("追剧日志清除失败。", "error")
+    return redirect(url_for('drama_calendar_log'))
+
 @app.route('/clear_file_monitor_log', methods=['POST'])
 @login_required
 def clear_file_monitor_log():
@@ -1128,6 +1589,20 @@ def download_monitor_log():
         tg_monitor_mgr.log_file_path,
         as_attachment=True,
         download_name=f"telegram_monitor_{time.strftime('%Y%m%d_%H%M%S')}.log",
+        mimetype='text/plain'
+    )
+
+
+@app.route('/download_drama_calendar_log')
+@login_required
+def download_drama_calendar_log():
+    if not os.path.exists(DRAMA_CALENDAR_LOG_FILE):
+        flash("暂无追剧日志可下载。", "warning")
+        return redirect(url_for('drama_calendar_log'))
+    return send_file(
+        DRAMA_CALENDAR_LOG_FILE,
+        as_attachment=True,
+        download_name=f"drama_calendar_{time.strftime('%Y%m%d_%H%M%S')}.log",
         mimetype='text/plain'
     )
 
@@ -1454,5 +1929,6 @@ if __name__ == "__main__":
         start_monitor_process()
         start_file_monitor_process()
         start_bot_monitor_process()
+        start_drama_scheduler()
 
     app.run(host="0.0.0.0", port=5001, debug=debug_mode, use_reloader=debug_mode)

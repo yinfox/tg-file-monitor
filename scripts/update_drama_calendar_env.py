@@ -1,0 +1,1484 @@
+#!/usr/bin/env python3
+import argparse
+import datetime
+import html
+import json
+import os
+import re
+import shutil
+import sys
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from urllib.parse import urljoin
+
+import requests
+
+HOME_URL = "https://blog.922928.de/"
+MAOYAN_BOX_OFFICE_URL = "https://piaofang.maoyan.com/box-office?ver=normal"
+MAOYAN_WEB_HEAT_URL = "https://piaofang.maoyan.com/web-heat"
+DEFAULT_STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "drama_calendar_state.json")
+DEFAULT_TMDB_CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "tmdb_tv_status_cache.json")
+FINISH_KEYWORDS = ("完结", "收官", "大结局")
+FINISH_EXCLUDE_KEYWORDS = (
+    "未完结",
+    "未收官",
+    "未大结局",
+    "即将完结",
+    "即将收官",
+    "将完结",
+    "将收官",
+)
+TMDB_FINISHED_STATUSES = {"ended", "canceled", "cancelled"}
+TMDB_MIN_CONFIDENCE_SCORE = 70
+
+
+def parse_date_from_post_url(post_url: str) -> Optional[datetime.date]:
+    if not post_url:
+        return None
+    m = re.search(r"/(\d{4})-(\d{2})-(\d{2})-", post_url)
+    if not m:
+        return None
+    try:
+        return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
+def parse_date_from_line(line: str, fallback_year: int) -> Optional[datetime.date]:
+    if not line:
+        return None
+
+    m = re.search(r"(20\d{2})[./-](\d{1,2})[./-](\d{1,2})", line)
+    if m:
+        try:
+            return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        except Exception:
+            pass
+
+    m = re.search(r"(\d{1,2})月(\d{1,2})日", line)
+    if m:
+        try:
+            return datetime.date(int(fallback_year), int(m.group(1)), int(m.group(2)))
+        except Exception:
+            pass
+
+    return None
+
+
+def _normalize_title_for_match(title: str) -> str:
+    t = (title or "").strip().lower()
+    t = re.sub(r"[\s\-_:：·\.\,，。\(\)\[\]【】]+", "", t)
+    return t
+
+
+def _load_tmdb_cache(cache_file: str) -> Dict[str, Any]:
+    if not cache_file or not os.path.exists(cache_file):
+        return {"items": {}}
+    try:
+        with open(cache_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("items"), dict):
+            return data
+    except Exception:
+        pass
+    return {"items": {}}
+
+
+def _save_tmdb_cache(cache_file: str, data: Dict[str, Any]) -> None:
+    os.makedirs(os.path.dirname(cache_file) or ".", exist_ok=True)
+    with open(cache_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _tmdb_pick_best_result(
+    title: str,
+    results: Sequence[Dict[str, Any]],
+    *,
+    preferred_region: str,
+    reference_year: Optional[int],
+    year_tolerance: int,
+) -> Tuple[Optional[Dict[str, Any]], int, str]:
+    if not results:
+        return None, 0, "no_results"
+    norm_title = _normalize_title_for_match(title)
+    pref_region = (preferred_region or "").strip().upper()
+    year_tol = max(0, int(year_tolerance or 0))
+
+    def _score(item: Dict[str, Any]) -> Tuple[int, str]:
+        name = str(item.get("name") or item.get("original_name") or "")
+        norm_name = _normalize_title_for_match(name)
+        if not norm_name:
+            return 0, "empty_name"
+
+        score = 0
+        reasons: List[str] = []
+        if norm_name == norm_title:
+            score += 120
+            reasons.append("exact_title")
+        elif norm_title and norm_title in norm_name:
+            score += 80
+            reasons.append("title_contains")
+        elif norm_name and norm_name in norm_title:
+            score += 70
+            reasons.append("title_contained")
+        else:
+            score += 10
+            reasons.append("weak_title")
+
+        origin_countries = item.get("origin_country") if isinstance(item.get("origin_country"), list) else []
+        origin_countries = [str(c).upper() for c in origin_countries if str(c).strip()]
+        if pref_region and pref_region in origin_countries:
+            score += 20
+            reasons.append("region_match")
+
+        candidate_date = _parse_iso_date(str(item.get("first_air_date") or item.get("release_date") or ""))
+        if reference_year and isinstance(candidate_date, datetime.date):
+            diff = abs(candidate_date.year - int(reference_year))
+            if diff == 0:
+                score += 35
+                reasons.append("year_exact")
+            elif diff == 1:
+                score += 25
+                reasons.append("year_close")
+            elif diff <= year_tol:
+                score += 15
+                reasons.append("year_tolerated")
+            else:
+                score -= 25
+                reasons.append("year_far")
+
+        popularity = float(item.get("popularity") or 0)
+        if popularity > 0:
+            score += min(10, int(popularity // 5))
+
+        return score, "+".join(reasons)
+
+    ranked_with_score: List[Tuple[Dict[str, Any], int, str]] = []
+    for r in results:
+        s, reason = _score(r)
+        ranked_with_score.append((r, s, reason))
+    ranked_with_score.sort(key=lambda x: x[1], reverse=True)
+    if not ranked_with_score:
+        return None, 0, "not_ranked"
+    best, best_score, best_reason = ranked_with_score[0]
+    return best, best_score, best_reason
+
+
+def _parse_iso_date(value: str) -> Optional[datetime.date]:
+    if not value:
+        return None
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", str(value).strip())
+    if not m:
+        return None
+    try:
+        return datetime.date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    except Exception:
+        return None
+
+
+def _tmdb_fetch_finish_state(
+    title: str,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    reference_year: Optional[int],
+    year_tolerance: int,
+    min_confidence_score: int,
+) -> Tuple[Optional[bool], Optional[datetime.date], str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
+        "Accept": "application/json",
+    }
+    search_resp = requests.get(
+        "https://api.themoviedb.org/3/search/tv",
+        params={
+            "api_key": api_key,
+            "query": title,
+            "language": language,
+            "region": region,
+            "include_adult": "false",
+        },
+        headers=headers,
+        timeout=timeout,
+    )
+    search_resp.raise_for_status()
+    payload = search_resp.json() if search_resp.content else {}
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or not results:
+        return None, None, "tmdb_no_match"
+
+    picked, score, score_reason = _tmdb_pick_best_result(
+        title,
+        results,
+        preferred_region=region,
+        reference_year=reference_year,
+        year_tolerance=year_tolerance,
+    )
+    if not picked or not picked.get("id"):
+        return None, None, "tmdb_no_match"
+    if score < int(min_confidence_score or TMDB_MIN_CONFIDENCE_SCORE):
+        return None, None, f"tmdb_low_confidence(score={score},reason={score_reason})"
+
+    tv_id = int(picked.get("id"))
+    detail_resp = requests.get(
+        f"https://api.themoviedb.org/3/tv/{tv_id}",
+        params={
+            "api_key": api_key,
+            "language": language,
+        },
+        headers=headers,
+        timeout=timeout,
+    )
+    detail_resp.raise_for_status()
+    detail = detail_resp.json() if detail_resp.content else {}
+    status_raw = str(detail.get("status") or "").strip().lower()
+    last_air_date = _parse_iso_date(str(detail.get("last_air_date") or ""))
+    is_finished = status_raw in TMDB_FINISHED_STATUSES
+    return is_finished, last_air_date, f"tmdb_status={status_raw or 'unknown'},score={score},reason={score_reason}"
+
+
+def _resolve_tmdb_finish_state(
+    title: str,
+    *,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    cache: Dict[str, Any],
+    cache_ttl_hours: int,
+    reference_year: Optional[int],
+    year_tolerance: int,
+    min_confidence_score: int,
+) -> Tuple[Optional[bool], Optional[datetime.date], str]:
+    cache_items = cache.setdefault("items", {})
+    cache_key = f"{language}|{region}|{reference_year or 0}|{title}"
+    now_ts = datetime.datetime.now().timestamp()
+    ttl_seconds = max(1, int(cache_ttl_hours)) * 3600
+
+    hit = cache_items.get(cache_key)
+    if isinstance(hit, dict):
+        ts = float(hit.get("ts") or 0)
+        if ts > 0 and (now_ts - ts) < ttl_seconds:
+            cached_finished = hit.get("finished")
+            cached_date = _parse_iso_date(str(hit.get("finished_date") or ""))
+            cached_note = str(hit.get("note") or "tmdb_cache")
+            if isinstance(cached_finished, bool) or cached_finished is None:
+                print(f"[INFO] TMDB 缓存命中: title={title} result={cached_finished} date={(cached_date.isoformat() if isinstance(cached_date, datetime.date) else '')}")
+                return cached_finished, cached_date, cached_note
+
+    print(f"[INFO] TMDB 发起请求: title={title} language={language} region={region} ref_year={reference_year or 0}")
+    finished, finished_date, note = _tmdb_fetch_finish_state(
+        title,
+        api_key=api_key,
+        language=language,
+        region=region,
+        timeout=timeout,
+        reference_year=reference_year,
+        year_tolerance=year_tolerance,
+        min_confidence_score=min_confidence_score,
+    )
+
+    cache_items[cache_key] = {
+        "ts": now_ts,
+        "finished": finished,
+        "finished_date": (finished_date.isoformat() if isinstance(finished_date, datetime.date) else ""),
+        "note": note,
+    }
+    return finished, finished_date, note
+
+
+def _tmdb_fetch_movie_release_date(
+    title: str,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    reference_year: Optional[int],
+    year_tolerance: int,
+    min_confidence_score: int,
+) -> Tuple[Optional[datetime.date], str]:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
+        "Accept": "application/json",
+    }
+    search_resp = requests.get(
+        "https://api.themoviedb.org/3/search/movie",
+        params={
+            "api_key": api_key,
+            "query": title,
+            "language": language,
+            "region": region,
+            "include_adult": "false",
+        },
+        headers=headers,
+        timeout=timeout,
+    )
+    search_resp.raise_for_status()
+    payload = search_resp.json() if search_resp.content else {}
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or not results:
+        return None, "tmdb_movie_no_match"
+
+    picked, score, score_reason = _tmdb_pick_best_result(
+        title,
+        results,
+        preferred_region=region,
+        reference_year=reference_year,
+        year_tolerance=year_tolerance,
+    )
+    if not picked or not picked.get("id"):
+        return None, "tmdb_movie_no_match"
+    if score < int(min_confidence_score or TMDB_MIN_CONFIDENCE_SCORE):
+        return None, f"tmdb_movie_low_confidence(score={score},reason={score_reason})"
+
+    movie_id = int(picked.get("id"))
+    detail_resp = requests.get(
+        f"https://api.themoviedb.org/3/movie/{movie_id}",
+        params={
+            "api_key": api_key,
+            "language": language,
+        },
+        headers=headers,
+        timeout=timeout,
+    )
+    detail_resp.raise_for_status()
+    detail = detail_resp.json() if detail_resp.content else {}
+    release_date = _parse_iso_date(str(detail.get("release_date") or ""))
+    return release_date, f"tmdb_movie_release(score={score},reason={score_reason})"
+
+
+def _resolve_tmdb_movie_release_date(
+    title: str,
+    *,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    cache: Dict[str, Any],
+    cache_ttl_hours: int,
+    reference_year: Optional[int],
+    year_tolerance: int,
+    min_confidence_score: int,
+) -> Tuple[Optional[datetime.date], str]:
+    cache_items = cache.setdefault("items", {})
+    cache_key = f"movie|{language}|{region}|{reference_year or 0}|{title}"
+    now_ts = datetime.datetime.now().timestamp()
+    ttl_seconds = max(1, int(cache_ttl_hours)) * 3600
+
+    hit = cache_items.get(cache_key)
+    if isinstance(hit, dict):
+        ts = float(hit.get("ts") or 0)
+        if ts > 0 and (now_ts - ts) < ttl_seconds:
+            cached_date = _parse_iso_date(str(hit.get("release_date") or ""))
+            cached_note = str(hit.get("note") or "tmdb_movie_cache")
+            print(f"[INFO] TMDB 电影缓存命中: title={title} release={(cached_date.isoformat() if isinstance(cached_date, datetime.date) else '')}")
+            return cached_date, cached_note
+
+    print(f"[INFO] TMDB 电影发起请求: title={title} language={language} region={region} ref_year={reference_year or 0}")
+    release_date, note = _tmdb_fetch_movie_release_date(
+        title,
+        api_key=api_key,
+        language=language,
+        region=region,
+        timeout=timeout,
+        reference_year=reference_year,
+        year_tolerance=year_tolerance,
+        min_confidence_score=min_confidence_score,
+    )
+
+    cache_items[cache_key] = {
+        "ts": now_ts,
+        "release_date": (release_date.isoformat() if isinstance(release_date, datetime.date) else ""),
+        "note": note,
+    }
+    return release_date, note
+
+
+def fetch_text(url: str, timeout: int = 20) -> str:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    }
+    resp = requests.get(url, headers=headers, timeout=timeout)
+    resp.raise_for_status()
+    resp.encoding = resp.apparent_encoding or resp.encoding or "utf-8"
+    return resp.text
+
+
+def find_latest_calendar_post_url(home_html: str, home_url: str = HOME_URL) -> str:
+    # 优先匹配标题中带“追剧日历”的文章链接。
+    pattern = re.compile(
+        r'<a[^>]+href=["\'](?P<href>[^"\']+)["\'][^>]*>(?P<title>.*?)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    seen: Set[str] = set()
+    for m in pattern.finditer(home_html):
+        raw_title = strip_html(m.group("title"))
+        if "追剧日历" not in raw_title:
+            continue
+
+        href = (m.group("href") or "").strip()
+        if not href:
+            continue
+        if href.lower().startswith("javascript:"):
+            continue
+
+        full_url = urljoin(home_url, href)
+        parsed_path = re.sub(r"https?://[^/]+", "", full_url)
+        if not re.search(r"/\d{4}-\d{2}-\d{2}-", parsed_path):
+            continue
+        if full_url in seen:
+            continue
+        seen.add(full_url)
+        return full_url
+
+    raise RuntimeError("未在首页找到包含“追剧日历”的文章链接")
+
+
+def strip_html(raw_html: str) -> str:
+    if not raw_html:
+        return ""
+
+    text = raw_html
+    text = re.sub(r"<\s*br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</\s*(p|div|li|h[1-6]|tr|section|article)\s*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<script[\s\S]*?</script>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<style[\s\S]*?</style>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = html.unescape(text)
+    text = text.replace("\u3000", " ")
+    return text
+
+
+def extract_titles_from_text(text: str, include_keywords: Sequence[str]) -> Tuple[List[str], List[str]]:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    target_lines: List[str] = []
+    titles: List[str] = []
+    seen_titles: Set[str] = set()
+
+    for line in lines:
+        if not any(kw in line for kw in include_keywords):
+            continue
+
+        target_lines.append(line)
+        for title in re.findall(r"《([^》]+)》", line):
+            cleaned = title.strip()
+            if not cleaned:
+                continue
+            if cleaned in seen_titles:
+                continue
+            seen_titles.add(cleaned)
+            titles.append(cleaned)
+
+    return titles, target_lines
+
+
+def extract_calendar_title_states(
+    text: str,
+    include_keywords: Sequence[str],
+    post_date: Optional[datetime.date],
+    finish_keywords: Sequence[str],
+    finish_exclude_keywords: Sequence[str],
+) -> Tuple[List[str], List[str], Dict[str, Dict[str, object]]]:
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    target_lines: List[str] = []
+    title_states: Dict[str, Dict[str, object]] = {}
+
+    fallback_year = (post_date.year if post_date else datetime.date.today().year)
+    fallback_finish_date = post_date
+
+    def _contains_any(line_text: str, words: Sequence[str]) -> bool:
+        return any(w and (w in line_text) for w in words)
+
+    def _line_marks_finished(line_text: str) -> bool:
+        if not _contains_any(line_text, finish_keywords):
+            return False
+        if _contains_any(line_text, finish_exclude_keywords):
+            return False
+        return True
+
+    for line in lines:
+        has_include_kw = any(kw in line for kw in include_keywords)
+        has_finish_kw = _line_marks_finished(line)
+        if not has_include_kw and not has_finish_kw:
+            continue
+
+        line_titles = [t.strip() for t in re.findall(r"《([^》]+)》", line) if t.strip()]
+        if not line_titles:
+            continue
+
+        if has_include_kw:
+            target_lines.append(line)
+
+        include_line_date = parse_date_from_line(line, fallback_year) or post_date
+
+        finished_date = parse_date_from_line(line, fallback_year) or fallback_finish_date
+
+        for title in line_titles:
+            state = title_states.get(title)
+            if not state:
+                state = {
+                    "finished": False,
+                    "finished_date": None,
+                    "seen_in_include_line": False,
+                    "reference_date": None,
+                }
+                title_states[title] = state
+
+            if has_include_kw:
+                state["seen_in_include_line"] = True
+                if include_line_date:
+                    existing_ref = state.get("reference_date")
+                    if isinstance(existing_ref, datetime.date):
+                        if include_line_date > existing_ref:
+                            state["reference_date"] = include_line_date
+                    else:
+                        state["reference_date"] = include_line_date
+
+            if has_finish_kw:
+                state["finished"] = True
+                if finished_date:
+                    existing = state.get("finished_date")
+                    if isinstance(existing, datetime.date):
+                        if finished_date > existing:
+                            state["finished_date"] = finished_date
+                    else:
+                        state["finished_date"] = finished_date
+
+    ordered_titles: List[str] = []
+    seen: Set[str] = set()
+    for line in lines:
+        for title in re.findall(r"《([^》]+)》", line):
+            cleaned = title.strip()
+            if not cleaned or cleaned in seen:
+                continue
+            st = title_states.get(cleaned)
+            if st and bool(st.get("seen_in_include_line")):
+                ordered_titles.append(cleaned)
+                seen.add(cleaned)
+
+    return ordered_titles, target_lines, title_states
+
+
+def extract_maoyan_movie_names(raw_html: str) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+
+    # 1) Prefer structured fields if present.
+    for m in re.findall(r'"movieName"\s*:\s*"(.*?)"', raw_html, flags=re.IGNORECASE):
+        name = html.unescape(m).strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+
+    # 2) Fallback from visible text lines, e.g. "飞驰人生3 上映23天..."
+    plain = strip_html(raw_html)
+    for line in [ln.strip() for ln in plain.splitlines() if ln.strip()]:
+        mm = re.match(r'^(.+?)\s+上映\d+天', line)
+        if not mm:
+            continue
+        name = mm.group(1).strip().strip('|').strip()
+        if not name:
+            continue
+        # Skip obvious non-title rows.
+        if name in {"票房排名", "今天", "票房", "排片", "上映日历", "影库", "影院"}:
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+
+    return names
+
+
+def extract_maoyan_web_heat_names(raw_html: str) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+
+    blocked_names = {
+        "网播热度", "电视剧", "热播", "电影", "综艺", "动漫", "纪录片",
+        "今日", "昨日", "排名", "热度", "趋势", "全部", "更多",
+    }
+
+    for m in re.findall(r'"name"\s*:\s*"(.*?)"', raw_html, flags=re.IGNORECASE):
+        name = html.unescape(m).strip()
+        if not name or name in seen or name in blocked_names:
+            continue
+        if len(name) <= 1:
+            continue
+        if re.fullmatch(r"\d+", name):
+            continue
+        seen.add(name)
+        names.append(name)
+
+    return names
+
+
+def merge_unique(primary: Sequence[str], secondary: Sequence[str]) -> List[str]:
+    result: List[str] = []
+    seen: Set[str] = set()
+    for item in list(primary) + list(secondary):
+        s = (item or "").strip()
+        if not s or s in seen:
+            continue
+        seen.add(s)
+        result.append(s)
+    return result
+
+
+def dedupe_titles_normalized(items: Sequence[str]) -> List[str]:
+    result: List[str] = []
+    seen_norm: Set[str] = set()
+    for item in items:
+        s = (item or "").strip()
+        if not s:
+            continue
+        norm = _normalize_title_for_match(s)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        result.append(s)
+    return result
+
+
+def _extract_env_value_by_key(env_content: str, key: str) -> str:
+    for line in (env_content or "").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        left, raw_v = line.split("=", 1)
+        if left.strip() == key:
+            return _strip_quotes(raw_v)
+    return ""
+
+
+def _extract_titles_from_regex_value(regex_value: str) -> List[str]:
+    if not regex_value:
+        return []
+    found: List[str] = []
+    seen: Set[str] = set()
+    for token in re.findall(r"\^\(\?=\.\*(.*?)\)\.\*\$", regex_value):
+        # 将 re.escape 产生的反斜杠恢复为原始字符。
+        title = re.sub(r"\\(.)", r"\1", token).strip()
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        found.append(title)
+    return found
+
+
+def _collect_existing_monitored_titles(env_files: Sequence[str], env_key: str) -> Set[str]:
+    existing_norm: Set[str] = set()
+    for env_path in env_files:
+        if not env_path or not os.path.exists(env_path):
+            continue
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                env_content = f.read()
+        except Exception:
+            continue
+        value = _extract_env_value_by_key(env_content, env_key)
+        if not value:
+            continue
+        for title in _extract_titles_from_regex_value(value):
+            norm = _normalize_title_for_match(title)
+            if norm:
+                existing_norm.add(norm)
+    return existing_norm
+
+
+def apply_top_n(items: List[str], top_n: int) -> List[str]:
+    if top_n <= 0:
+        return items
+    return items[:top_n]
+
+
+def _remove_finished_titles_by_tmdb(
+    titles: Sequence[str],
+    *,
+    remove_days: int,
+    tmdb_enabled: bool,
+    finish_detect_mode: str,
+    tmdb_api_key: str,
+    tmdb_language: str,
+    tmdb_region: str,
+    tmdb_timeout: int,
+    tmdb_cache: Dict[str, Any],
+    tmdb_cache_ttl_hours: int,
+    tmdb_year_tolerance: int,
+    tmdb_min_score: int,
+    tmdb_marked_finished_titles: List[str],
+) -> Tuple[List[str], List[Tuple[str, int]], bool]:
+    if remove_days < 0:
+        return list(titles), [], False
+
+    today = datetime.date.today()
+    kept: List[str] = []
+    removed: List[Tuple[str, int]] = []
+    cache_dirty = False
+
+    for title in titles:
+        finished = False
+        finish_date: Optional[datetime.date] = None
+
+        if tmdb_enabled and finish_detect_mode in ("tmdb", "hybrid"):
+            try:
+                tmdb_finished, tmdb_date, tmdb_note = _resolve_tmdb_finish_state(
+                    title,
+                    api_key=tmdb_api_key,
+                    language=tmdb_language,
+                    region=tmdb_region,
+                    timeout=tmdb_timeout,
+                    cache=tmdb_cache,
+                    cache_ttl_hours=tmdb_cache_ttl_hours,
+                    reference_year=None,
+                    year_tolerance=tmdb_year_tolerance,
+                    min_confidence_score=tmdb_min_score,
+                )
+                cache_dirty = True
+                if tmdb_finished is True:
+                    finished = True
+                    finish_date = tmdb_date
+                    tmdb_marked_finished_titles.append(f"{title} ({tmdb_note})")
+            except Exception as e:
+                print(f"[WARN] TMDB 查询失败，title={title}: {e}")
+
+        if not finished:
+            kept.append(title)
+            continue
+
+        if not isinstance(finish_date, datetime.date):
+            kept.append(title)
+            continue
+
+        age_days = (today - finish_date).days
+        if age_days >= remove_days:
+            removed.append((title, age_days))
+            continue
+        kept.append(title)
+
+    return kept, removed, cache_dirty
+
+
+def _remove_old_movie_titles_by_tmdb(
+    titles: Sequence[str],
+    *,
+    older_than_days: int,
+    tmdb_api_key: str,
+    tmdb_language: str,
+    tmdb_region: str,
+    tmdb_timeout: int,
+    tmdb_cache: Dict[str, Any],
+    tmdb_cache_ttl_hours: int,
+    tmdb_year_tolerance: int,
+    tmdb_min_score: int,
+) -> Tuple[List[str], List[Tuple[str, int]], bool]:
+    if older_than_days < 0:
+        return list(titles), [], False
+    if not tmdb_api_key:
+        print("[WARN] 未提供 TMDB_API_KEY，无法执行电影首映日期剔除")
+        return list(titles), [], False
+
+    today = datetime.date.today()
+    kept: List[str] = []
+    removed: List[Tuple[str, int]] = []
+    cache_dirty = False
+
+    for title in titles:
+        try:
+            release_date, note = _resolve_tmdb_movie_release_date(
+                title,
+                api_key=tmdb_api_key,
+                language=tmdb_language,
+                region=tmdb_region,
+                timeout=tmdb_timeout,
+                cache=tmdb_cache,
+                cache_ttl_hours=tmdb_cache_ttl_hours,
+                reference_year=None,
+                year_tolerance=tmdb_year_tolerance,
+                min_confidence_score=tmdb_min_score,
+            )
+            cache_dirty = True
+        except Exception as e:
+            print(f"[WARN] TMDB 电影首映日期查询失败，title={title}: {e}")
+            kept.append(title)
+            continue
+
+        if not isinstance(release_date, datetime.date):
+            kept.append(title)
+            continue
+
+        age_days = (today - release_date).days
+        if age_days >= older_than_days:
+            removed.append((title, age_days))
+            print(f"[INFO] 电影首映超期剔除: {title} ({note}, age_days={age_days})")
+            continue
+        kept.append(title)
+
+    return kept, removed, cache_dirty
+
+
+def build_regex_from_titles(titles: Sequence[str]) -> str:
+    if not titles:
+        return ""
+
+    escaped = [re.escape(t) for t in titles]
+    escaped.sort(key=len, reverse=True)
+    # Keep legacy style for compatibility with existing ENV_FILTER_115 rules.
+    return "|".join([f"^(?=.*{item}).*$" for item in escaped])
+
+
+def _load_state(state_file: str) -> Dict[str, object]:
+    if not state_file or not os.path.exists(state_file):
+        return {"records": []}
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get("records"), list):
+            return data
+    except Exception:
+        pass
+    return {"records": []}
+
+
+def _save_state(state_file: str, data: Dict[str, object]) -> None:
+    os.makedirs(os.path.dirname(state_file) or ".", exist_ok=True)
+    with open(state_file, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _remove_value_from_csv(existing: str, value: str) -> str:
+    items = [x.strip() for x in (existing or "").split(",") if x.strip()]
+    kept = [x for x in items if x != value]
+    return ",".join(kept)
+
+
+def _replace_managed_append_value(
+    env_content: str,
+    key: str,
+    source_tag: str,
+    env_path: str,
+    new_value: str,
+    state_file: str,
+    managed_scope: str,
+) -> str:
+    state = _load_state(state_file)
+    records = state.get("records") if isinstance(state, dict) else None
+    if not isinstance(records, list):
+        records = []
+
+    old_values: List[str] = []
+    new_records: List[Dict[str, str]] = []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        rec_env = str(rec.get("env_path") or "")
+        rec_key = str(rec.get("key") or "")
+        rec_source = str(rec.get("source") or "")
+        rec_value = str(rec.get("value") or "")
+        should_replace = False
+        if managed_scope == "key":
+            should_replace = (rec_env == env_path and rec_key == key)
+        else:
+            should_replace = (rec_env == env_path and rec_key == key and rec_source == source_tag)
+
+        if should_replace:
+            if rec_value:
+                old_values.append(rec_value)
+            continue
+        new_records.append(rec)
+
+    lines = env_content.splitlines()
+    replaced_lines: List[str] = []
+    found_key = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in line:
+            replaced_lines.append(line)
+            continue
+        left, raw_v = line.split("=", 1)
+        if left.strip() != key:
+            replaced_lines.append(line)
+            continue
+        found_key = True
+        quote_style = _detect_quote_style(raw_v)
+        current = _strip_quotes(raw_v)
+        for old in old_values:
+            current = _remove_value_from_csv(current, old)
+        if current:
+            merged = current if new_value in [x.strip() for x in current.split(",") if x.strip()] else f"{current},{new_value}"
+        else:
+            merged = new_value
+        replaced_lines.append(f"{left}={_format_env_value(merged, quote_style)}")
+
+    if not found_key:
+        if replaced_lines and replaced_lines[-1].strip() != "":
+            replaced_lines.append("")
+        replaced_lines.append(f'{key}="{new_value}"')
+
+    new_records.append(
+        {
+            "env_path": env_path,
+            "key": key,
+            "source": source_tag,
+            "value": new_value,
+            "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    )
+    state["records"] = new_records
+    _save_state(state_file, state)
+
+    return "\n".join(replaced_lines) + "\n"
+
+
+def update_env_content(env_content: str, key: str, value: str) -> str:
+    lines = env_content.splitlines()
+    updated = False
+    new_lines: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in line:
+            new_lines.append(line)
+            continue
+
+        left, raw_v = line.split("=", 1)
+        if left.strip() == key:
+            quote_style = _detect_quote_style(raw_v)
+            new_lines.append(f"{left}={_format_env_value(value, quote_style)}")
+            updated = True
+        else:
+            new_lines.append(line)
+
+    if not updated:
+        if new_lines and new_lines[-1].strip() != "":
+            new_lines.append("")
+        new_lines.append(f'{key}="{value}"')
+
+    return "\n".join(new_lines) + "\n"
+
+
+def _strip_quotes(v: str) -> str:
+    v = (v or '').strip()
+    if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+        return v[1:-1]
+    return v
+
+
+def _detect_quote_style(v: str) -> str:
+    s = (v or '').strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return 'double'
+    if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
+        return 'single'
+    return 'bare'
+
+
+def _format_env_value(value: str, style: str) -> str:
+    if style == 'single':
+        safe = (value or '').replace("'", "'\\''")
+        return f"'{safe}'"
+    if style == 'bare':
+        return value or ''
+    safe = (value or '').replace('"', '\\"')
+    return f'"{safe}"'
+
+
+def update_env_content_append(env_content: str, key: str, value: str) -> str:
+    lines = env_content.splitlines()
+    updated = False
+    new_lines: List[str] = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in line:
+            new_lines.append(line)
+            continue
+
+        left, raw_v = line.split("=", 1)
+        if left.strip() == key:
+            quote_style = _detect_quote_style(raw_v)
+            existing = _strip_quotes(raw_v)
+            if not existing:
+                merged = value
+            elif value in [x.strip() for x in existing.split(',') if x.strip()] or value in existing:
+                merged = existing
+            else:
+                merged = f"{existing},{value}"
+            new_lines.append(f"{left}={_format_env_value(merged, quote_style)}")
+            updated = True
+        else:
+            new_lines.append(line)
+
+    if not updated:
+        if new_lines and new_lines[-1].strip() != "":
+            new_lines.append("")
+        new_lines.append(f'{key}="{value}"')
+
+    return "\n".join(new_lines) + "\n"
+
+
+def _make_backup_if_needed(env_path: str) -> str:
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = f"{env_path}.bak_{ts}"
+    shutil.copy2(env_path, backup_path)
+    return backup_path
+
+
+def _extract_env_key_from_line(line: str) -> Optional[str]:
+    stripped = (line or "").strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    if "=" not in stripped:
+        return None
+
+    left = stripped.split("=", 1)[0].strip()
+    if left.startswith("export "):
+        left = left[len("export "):].strip()
+    if not left:
+        return None
+    return left
+
+
+def _collect_non_target_env_keys(env_content: str, target_key: str) -> Set[str]:
+    keys: Set[str] = set()
+    for line in (env_content or "").splitlines():
+        k = _extract_env_key_from_line(line)
+        if not k:
+            continue
+        if k == target_key:
+            continue
+        keys.add(k)
+    return keys
+
+
+def write_env_file(
+    env_path: str,
+    key: str,
+    value: str,
+    dry_run: bool,
+    backup: bool,
+    append_mode: bool,
+    source_tag: str,
+    state_file: str,
+    managed_scope: str,
+    require_existing: bool,
+) -> None:
+    original = ""
+    env_exists = os.path.exists(env_path)
+    if require_existing and not env_exists:
+        raise RuntimeError(f"目标 .env 不存在，已阻止写入: {env_path}")
+    if os.path.exists(env_path):
+        with open(env_path, "r", encoding="utf-8") as f:
+            original = f.read()
+
+    if dry_run:
+        print(f"[DRY-RUN] 将更新 {env_path}: {key}=\"{value}\"")
+        return
+
+    if append_mode:
+        updated = _replace_managed_append_value(
+            env_content=original,
+            key=key,
+            source_tag=source_tag,
+            env_path=env_path,
+            new_value=value,
+            state_file=state_file,
+            managed_scope=managed_scope,
+        )
+    else:
+        updated = update_env_content(original, key, value)
+
+    # 防误清空保护：任何情况下都不允许非目标键数量下降。
+    before_non_target_keys = _collect_non_target_env_keys(original, key)
+    after_non_target_keys = _collect_non_target_env_keys(updated, key)
+    lost_keys = sorted(before_non_target_keys - after_non_target_keys)
+    if lost_keys:
+        preview = ", ".join(lost_keys[:8])
+        if len(lost_keys) > 8:
+            preview += ", ..."
+        raise RuntimeError(
+            "检测到写入将导致其他环境变量丢失，已中止写入。"
+            f" 丢失键: {preview}"
+        )
+
+    os.makedirs(os.path.dirname(env_path) or ".", exist_ok=True)
+    if env_exists:
+        emergency_backup = f"{env_path}.autosnap_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        shutil.copy2(env_path, emergency_backup)
+        print(f"[INFO] 已创建应急快照: {emergency_backup}")
+    if backup and env_exists:
+        backup_path = _make_backup_if_needed(env_path)
+        print(f"[INFO] 已备份: {backup_path}")
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    print(f"[OK] 已写入 {os.path.abspath(env_path)}: {key}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="抓取追剧日历/票房影片并更新一个或多个 .env 的正则变量")
+    parser.add_argument(
+        "--source",
+        default="calendar",
+        choices=["calendar", "maoyan", "all"],
+        help="数据源：calendar(追剧日历) / maoyan(猫眼票房) / all(两者合并)",
+    )
+    parser.add_argument("--home-url", default=HOME_URL, help="博客首页 URL")
+    parser.add_argument("--post-url", default="", help="指定文章 URL（不传则自动取最新追剧日历）")
+    parser.add_argument("--maoyan-url", default=MAOYAN_BOX_OFFICE_URL, help="猫眼票房 URL")
+    parser.add_argument("--maoyan-top-n", type=int, default=0, help="猫眼票房仅提取前N名，0表示不限制")
+    parser.add_argument("--include-maoyan-web-heat", action="store_true", help="猫眼来源时同时抓取网播热度榜")
+    parser.add_argument("--maoyan-web-heat-url", default=MAOYAN_WEB_HEAT_URL, help="猫眼网播热度 URL")
+    parser.add_argument("--maoyan-web-heat-top-n", type=int, default=0, help="猫眼网播热度仅提取前N名，0表示不限制")
+    parser.add_argument("--remove-movie-premiere-after-days", type=int, default=365, help="仅猫眼来源生效：电影首映超过多少天后移除；-1表示不移除，默认365")
+    parser.add_argument("--remove-finished-after-days", type=int, default=-1, help="仅对追剧日历生效：完结多少天后从结果中移除；-1表示不移除")
+    parser.add_argument(
+        "--finish-keywords",
+        default=",".join(FINISH_KEYWORDS),
+        help="用于判定完结的关键词，逗号分隔（默认：完结,收官,大结局）",
+    )
+    parser.add_argument(
+        "--finish-exclude-keywords",
+        default=",".join(FINISH_EXCLUDE_KEYWORDS),
+        help="完结判定排除词（命中则不视为完结），逗号分隔",
+    )
+    parser.add_argument(
+        "--finish-detect-mode",
+        default="hybrid",
+        choices=["keyword", "tmdb", "hybrid"],
+        help="完结判定方式：keyword(仅关键词) / tmdb(仅TMDB) / hybrid(关键词+TMDB)",
+    )
+    parser.add_argument("--tmdb-api-key", default="", help="TMDB API Key（不传则尝试读取环境变量 TMDB_API_KEY）")
+    parser.add_argument("--tmdb-language", default="zh-CN", help="TMDB 查询语言，默认 zh-CN")
+    parser.add_argument("--tmdb-region", default="CN", help="TMDB 查询地区，默认 CN")
+    parser.add_argument("--tmdb-timeout", type=int, default=15, help="TMDB 请求超时秒数")
+    parser.add_argument("--tmdb-cache-file", default=DEFAULT_TMDB_CACHE_FILE, help="TMDB 缓存文件路径")
+    parser.add_argument("--tmdb-cache-ttl-hours", type=int, default=24, help="TMDB 缓存有效时长（小时）")
+    parser.add_argument("--tmdb-year-tolerance", type=int, default=2, help="TMDB 同名剧年份容差（年）")
+    parser.add_argument("--tmdb-min-score", type=int, default=TMDB_MIN_CONFIDENCE_SCORE, help="TMDB 匹配最低置信分，低于该分不判完结")
+    parser.add_argument("--state-file", default=DEFAULT_STATE_FILE, help="追加模式状态文件，用于替换旧的自动生成值")
+    parser.add_argument(
+        "--managed-scope",
+        default="source",
+        choices=["source", "key"],
+        help="追加替换范围：source=仅替换同数据源写入值；key=替换同变量下全部自动值",
+    )
+    parser.add_argument(
+        "--line-keywords",
+        default="上线,开播",
+        help="用于筛选行的关键词，逗号分隔（默认：上线,开播）",
+    )
+    parser.add_argument(
+        "--env-files",
+        required=True,
+        help="目标 .env 文件路径，多个用逗号分隔",
+    )
+    parser.add_argument(
+        "--env-key",
+        default="DRAMA_CALENDAR_REGEX",
+        help="写入到 .env 的变量名（默认：DRAMA_CALENDAR_REGEX）",
+    )
+    parser.add_argument("--backup", action="store_true", help="写入前备份已存在的 .env 文件")
+    parser.add_argument("--append", action="store_true", help="将结果追加到目标变量（适用于关键词白名单）")
+    parser.add_argument("--allow-create-env", action="store_true", help="允许自动创建不存在的 .env 文件（默认禁止）")
+    parser.add_argument("--dry-run", action="store_true", help="仅打印结果，不落盘")
+    args = parser.parse_args()
+
+    include_keywords = [k.strip() for k in args.line_keywords.split(",") if k.strip()]
+    if not include_keywords:
+        print("[ERROR] line-keywords 不能为空", file=sys.stderr)
+        return 2
+
+    finish_keywords = [k.strip() for k in str(args.finish_keywords or '').split(',') if k.strip()]
+    if not finish_keywords:
+        finish_keywords = list(FINISH_KEYWORDS)
+    finish_exclude_keywords = [k.strip() for k in str(args.finish_exclude_keywords or '').split(',') if k.strip()]
+    if not finish_exclude_keywords:
+        finish_exclude_keywords = list(FINISH_EXCLUDE_KEYWORDS)
+
+    env_files = [p.strip() for p in args.env_files.split(",") if p.strip()]
+    if not env_files:
+        print("[ERROR] env-files 不能为空", file=sys.stderr)
+        return 2
+
+    try:
+        source_url = ""
+        target_lines: List[str] = []
+        removed_finished_titles: List[Tuple[str, int]] = []
+        tmdb_marked_finished_titles: List[str] = []
+        calendar_titles: List[str] = []
+        maoyan_titles: List[str] = []
+        calendar_source_url = ""
+        maoyan_source_url = ""
+
+        finish_detect_mode = (args.finish_detect_mode or "hybrid").strip().lower()
+        tmdb_api_key = (args.tmdb_api_key or os.environ.get("TMDB_API_KEY") or "").strip()
+        tmdb_language = (args.tmdb_language or "zh-CN").strip() or "zh-CN"
+        tmdb_region = (args.tmdb_region or "CN").strip() or "CN"
+        tmdb_timeout = max(5, int(args.tmdb_timeout or 15))
+        tmdb_year_tolerance = max(0, int(args.tmdb_year_tolerance or 2))
+        tmdb_min_score = max(1, int(args.tmdb_min_score or TMDB_MIN_CONFIDENCE_SCORE))
+        tmdb_cache = _load_tmdb_cache(args.tmdb_cache_file)
+        tmdb_cache_dirty = False
+        tmdb_enabled = bool(tmdb_api_key) and finish_detect_mode in ("tmdb", "hybrid")
+        tmdb_movie_enabled = bool(tmdb_api_key)
+
+        if finish_detect_mode in ("tmdb", "hybrid"):
+            if tmdb_enabled:
+                print(
+                    f"[INFO] TMDB 已启用: mode={finish_detect_mode} language={tmdb_language} region={tmdb_region} "
+                    f"cache_ttl_hours={int(args.tmdb_cache_ttl_hours or 24)}"
+                )
+            else:
+                reason = "未提供 TMDB_API_KEY" if not tmdb_api_key else "finish-detect-mode 非 tmdb/hybrid"
+                print(f"[INFO] TMDB 未启用: {reason}")
+
+        if finish_detect_mode in ("tmdb", "hybrid") and not tmdb_api_key:
+            print("[WARN] 未提供 TMDB_API_KEY，完结判定将回退为关键词模式")
+            if finish_detect_mode == "tmdb":
+                finish_detect_mode = "keyword"
+
+        if args.source in ("calendar", "all"):
+            home_html = fetch_text(args.home_url)
+            post_url = args.post_url.strip() or find_latest_calendar_post_url(home_html, args.home_url)
+            post_html = fetch_text(post_url)
+
+            text = strip_html(post_html)
+            post_date = parse_date_from_post_url(post_url)
+            titles, target_lines, title_states = extract_calendar_title_states(
+                text,
+                include_keywords,
+                post_date,
+                finish_keywords,
+                finish_exclude_keywords,
+            )
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0:
+                today = datetime.date.today()
+                kept_titles: List[str] = []
+                for title in titles:
+                    state = title_states.get(title, {})
+                    finished_by_keyword = bool(state.get("finished", False))
+                    finished = finished_by_keyword
+                    finish_date = state.get("finished_date") if isinstance(state.get("finished_date"), datetime.date) else None
+                    ref_date = state.get("reference_date") if isinstance(state.get("reference_date"), datetime.date) else None
+                    reference_year = ref_date.year if isinstance(ref_date, datetime.date) else None
+
+                    if ((not finished) or (finished and not isinstance(finish_date, datetime.date))) and tmdb_enabled:
+                        try:
+                            tmdb_finished, tmdb_date, tmdb_note = _resolve_tmdb_finish_state(
+                                title,
+                                api_key=tmdb_api_key,
+                                language=tmdb_language,
+                                region=tmdb_region,
+                                timeout=tmdb_timeout,
+                                cache=tmdb_cache,
+                                cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                                reference_year=reference_year,
+                                year_tolerance=tmdb_year_tolerance,
+                                min_confidence_score=tmdb_min_score,
+                            )
+                            tmdb_cache_dirty = True
+                            if tmdb_finished is True and finish_detect_mode in ("tmdb", "hybrid"):
+                                finished = True
+                                if isinstance(tmdb_date, datetime.date):
+                                    finish_date = tmdb_date
+                                tmdb_marked_finished_titles.append(f"{title} ({tmdb_note})")
+                        except Exception as e:
+                            print(f"[WARN] TMDB 查询失败，title={title}: {e}")
+
+                    if not finished:
+                        kept_titles.append(title)
+                        continue
+
+                    if not isinstance(finish_date, datetime.date):
+                        kept_titles.append(title)
+                        continue
+
+                    age_days = (today - finish_date).days
+                    if age_days >= remove_days:
+                        removed_finished_titles.append((title, age_days))
+                        continue
+
+                    kept_titles.append(title)
+                titles = kept_titles
+            else:
+                if finish_detect_mode in ("tmdb", "hybrid"):
+                    print("[INFO] 已关闭完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            calendar_titles = titles
+            calendar_source_url = post_url
+
+        if tmdb_cache_dirty:
+            try:
+                _save_tmdb_cache(args.tmdb_cache_file, tmdb_cache)
+            except Exception as e:
+                print(f"[WARN] TMDB 缓存写入失败: {e}")
+
+        if args.source in ("maoyan", "all"):
+            maoyan_url = (args.maoyan_url or MAOYAN_BOX_OFFICE_URL).strip()
+            maoyan_html = fetch_text(maoyan_url)
+            box_titles = extract_maoyan_movie_names(maoyan_html)
+            box_titles = apply_top_n(box_titles, int(args.maoyan_top_n or 0))
+            titles = list(box_titles)
+
+            web_heat_titles: List[str] = []
+            if bool(args.include_maoyan_web_heat):
+                web_heat_url = (args.maoyan_web_heat_url or MAOYAN_WEB_HEAT_URL).strip()
+                web_heat_html = fetch_text(web_heat_url)
+                web_heat_titles = extract_maoyan_web_heat_names(web_heat_html)
+                web_heat_titles = apply_top_n(web_heat_titles, int(args.maoyan_web_heat_top_n or 0))
+                titles = merge_unique(titles, web_heat_titles)
+
+            maoyan_titles = titles
+            maoyan_source_url = maoyan_url
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0:
+                maoyan_titles, removed_from_maoyan, maoyan_cache_dirty = _remove_finished_titles_by_tmdb(
+                    maoyan_titles,
+                    remove_days=remove_days,
+                    tmdb_enabled=tmdb_enabled,
+                    finish_detect_mode=finish_detect_mode,
+                    tmdb_api_key=tmdb_api_key,
+                    tmdb_language=tmdb_language,
+                    tmdb_region=tmdb_region,
+                    tmdb_timeout=tmdb_timeout,
+                    tmdb_cache=tmdb_cache,
+                    tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                    tmdb_year_tolerance=tmdb_year_tolerance,
+                    tmdb_min_score=tmdb_min_score,
+                    tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                )
+                if maoyan_cache_dirty:
+                    tmdb_cache_dirty = True
+                if removed_from_maoyan:
+                    removed_finished_titles.extend(removed_from_maoyan)
+            else:
+                if finish_detect_mode in ("tmdb", "hybrid"):
+                    print("[INFO] 猫眼来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            movie_remove_days = int(args.remove_movie_premiere_after_days if args.remove_movie_premiere_after_days is not None else 365)
+            if movie_remove_days >= 0:
+                if tmdb_movie_enabled:
+                    maoyan_titles, removed_old_movies, movie_cache_dirty = _remove_old_movie_titles_by_tmdb(
+                        maoyan_titles,
+                        older_than_days=movie_remove_days,
+                        tmdb_api_key=tmdb_api_key,
+                        tmdb_language=tmdb_language,
+                        tmdb_region=tmdb_region,
+                        tmdb_timeout=tmdb_timeout,
+                        tmdb_cache=tmdb_cache,
+                        tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                        tmdb_year_tolerance=tmdb_year_tolerance,
+                        tmdb_min_score=tmdb_min_score,
+                    )
+                    if movie_cache_dirty:
+                        tmdb_cache_dirty = True
+                    if removed_old_movies:
+                        print(f"[INFO] 已移除超期电影: {len(removed_old_movies)} (阈值={movie_remove_days}天)")
+                        for name, days in removed_old_movies[:30]:
+                            print(f"  - {name} (首映已 {days} 天)")
+                else:
+                    print("[WARN] 猫眼电影首映日期剔除已启用，但未提供 TMDB_API_KEY，已跳过")
+            else:
+                print("[INFO] 已关闭电影首映日期剔除(remove_movie_premiere_after_days=-1)")
+
+        if args.source == "calendar":
+            titles = calendar_titles
+            source_url = calendar_source_url
+        elif args.source == "maoyan":
+            titles = maoyan_titles
+            source_url = maoyan_source_url
+        else:
+            titles = merge_unique(calendar_titles, maoyan_titles)
+            source_url = f"calendar={calendar_source_url}; maoyan={maoyan_source_url}"
+
+        titles = dedupe_titles_normalized(titles)
+
+        skipped_existing_titles: List[str] = []
+        if bool(args.append):
+            existing_monitored_norm = _collect_existing_monitored_titles(env_files, args.env_key)
+            if existing_monitored_norm:
+                filtered: List[str] = []
+                for title in titles:
+                    norm = _normalize_title_for_match(title)
+                    if norm and norm in existing_monitored_norm:
+                        skipped_existing_titles.append(title)
+                        continue
+                    filtered.append(title)
+                titles = filtered
+
+        regex = build_regex_from_titles(titles)
+
+        print(f"[INFO] 数据源: {args.source}")
+        print(f"[INFO] 来源链接: {source_url}")
+        if args.source in ("calendar", "all"):
+            print(f"[INFO] 关键词: {','.join(include_keywords)}")
+            print(f"[INFO] 命中行数: {len(target_lines)}")
+            print(f"[INFO] 完结判定词: {','.join(finish_keywords)}")
+            print(f"[INFO] 完结排除词: {','.join(finish_exclude_keywords)}")
+            print(f"[INFO] 完结判定模式: {finish_detect_mode}")
+            print(f"[INFO] 完结移除天数: {int(args.remove_finished_after_days or -1)}")
+            if tmdb_enabled:
+                print(f"[INFO] TMDB 语言/地区: {tmdb_language}/{tmdb_region}")
+                print(f"[INFO] TMDB 年份容差/最低分: {tmdb_year_tolerance}/{tmdb_min_score}")
+        if args.source in ("maoyan", "all"):
+            print(f"[INFO] 猫眼提取前N: {int(args.maoyan_top_n or 0) if int(args.maoyan_top_n or 0) > 0 else '不限制'}")
+            print(f"[INFO] 同步网播热度: {'是' if bool(args.include_maoyan_web_heat) else '否'}")
+            print(f"[INFO] 电影首映剔除阈值: {int(args.remove_movie_premiere_after_days if args.remove_movie_premiere_after_days is not None else 365)} 天")
+            if bool(args.include_maoyan_web_heat):
+                print(f"[INFO] 网播热度链接: {(args.maoyan_web_heat_url or MAOYAN_WEB_HEAT_URL).strip()}")
+                print(f"[INFO] 网播热度前N: {int(args.maoyan_web_heat_top_n or 0) if int(args.maoyan_web_heat_top_n or 0) > 0 else '不限制'}")
+        print(f"[INFO] 提取剧名数: {len(titles)}")
+        if skipped_existing_titles:
+            print(f"[INFO] 已跳过历史已监控剧名: {len(skipped_existing_titles)}")
+            for item in skipped_existing_titles[:20]:
+                print(f"  - {item}")
+
+        if removed_finished_titles:
+            print(f"[INFO] 已移除完结剧: {len(removed_finished_titles)}")
+            for name, days in removed_finished_titles:
+                print(f"  - {name} (完结已 {days} 天)")
+        if tmdb_marked_finished_titles:
+            print(f"[INFO] TMDB 补充判定为完结: {len(tmdb_marked_finished_titles)}")
+            for item in tmdb_marked_finished_titles[:20]:
+                print(f"  - {item}")
+
+        if not titles:
+            print("[WARN] 未提取到任何剧名，不更新 .env", file=sys.stderr)
+            return 1
+
+        for t in titles:
+            print(f"  - {t}")
+
+        print(f"[INFO] 生成正则: {regex}")
+
+        for env_path in env_files:
+            write_env_file(
+                env_path,
+                args.env_key,
+                regex,
+                dry_run=args.dry_run,
+                backup=args.backup,
+                append_mode=args.append,
+                source_tag=args.source,
+                state_file=(args.state_file or DEFAULT_STATE_FILE),
+                managed_scope=(args.managed_scope or "source"),
+                require_existing=(not bool(args.allow_create_env)),
+            )
+
+        return 0
+    except requests.RequestException as e:
+        print(f"[ERROR] 网络请求失败: {e}", file=sys.stderr)
+        return 1
+    except Exception as e:
+        print(f"[ERROR] 执行失败: {e}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -232,6 +232,10 @@
                 href="{{ url_for('manage_file_config') }}">
                 <i class="bi bi-folder2-open"></i>文件同步策略
             </a>
+            <a class="nav-link {% if request.endpoint == 'drama_calendar_settings' %}active{% endif %}"
+                href="{{ url_for('drama_calendar_settings') }}">
+                <i class="bi bi-calendar3"></i>追剧日历正则
+            </a>
 
             <div class="px-3 py-2 small text-uppercase opacity-50 fw-bold mt-2"
                 style="font-size: 0.65rem; letter-spacing: 0.05em;">运行状态</div>
@@ -242,6 +246,10 @@
             <a class="nav-link {% if request.endpoint == 'file_monitor_log' %}active{% endif %}"
                 href="{{ url_for('file_monitor_log') }}">
                 <i class="bi bi-journal-text"></i>同步日志
+            </a>
+            <a class="nav-link {% if request.endpoint == 'drama_calendar_log' %}active{% endif %}"
+                href="{{ url_for('drama_calendar_log') }}">
+                <i class="bi bi-journal-check"></i>追剧日志
             </a>
 
             <div class="px-3 py-2 small text-uppercase opacity-50 fw-bold mt-2"

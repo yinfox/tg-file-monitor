@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.38-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.62-orange.svg)](.)
 
 </div>
 
@@ -63,6 +63,16 @@ python app/app.py
 ```bash
 docker compose up -d
 ```
+
+如果你要写入“另一个容器使用的 `.env` 文件”，请先把该 `.env` 所在宿主机目录挂载到本容器。
+
+当前示例已固定为：
+
+```yaml
+- /data/docker_app/tgto123/db:/external-env
+```
+
+重启后，在“追剧日历正则”页面里填写目标 `.env` 时应写容器内路径：`/external-env/user.env`。
 
 ## 🖥️ VPS 部署建议
 
@@ -136,6 +146,76 @@ tg-file-monitor/
 ```
 
 ## 🔧 高级配置
+
+### 📺 追剧日历转正则并写入 Docker `.env`
+
+新增脚本：`scripts/update_drama_calendar_env.py`
+
+功能：
+- 自动抓取 `https://blog.922928.de/` 最新“追剧日历”文章
+- 仅处理包含“上线”或“开播”的行
+- 提取 `《剧名》` 中的剧名并生成正则
+- 写入一个或多个 Docker 使用的 `.env` 文件变量（默认变量名：`DRAMA_CALENDAR_REGEX`）
+
+示例：
+
+```bash
+# 先预览（不写入）
+python scripts/update_drama_calendar_env.py \
+  --env-files /opt/docker/a/.env,/opt/docker/b/.env \
+  --dry-run
+
+# 确认后写入
+python scripts/update_drama_calendar_env.py \
+  --env-files /opt/docker/a/.env,/opt/docker/b/.env
+```
+
+可选参数：
+- `--source`：数据源，`calendar`(追剧日历) 或 `maoyan`(猫眼票房)
+- `--post-url`：手动指定某篇追剧日历文章
+- `--maoyan-url`：猫眼票房页面地址
+- `--maoyan-top-n`：猫眼仅提取前 N 名（0 表示不限制）
+- `--include-maoyan-web-heat`：猫眼来源时，同时抓取网播热度电视剧榜
+- `--maoyan-web-heat-url`：猫眼网播热度页面地址（默认 `https://piaofang.maoyan.com/web-heat`）
+- `--maoyan-web-heat-top-n`：网播热度仅提取前 N 名（0 表示不限制）
+- `--remove-finished-after-days`：仅追剧日历生效，完结 N 天后从生成结果中移除（`-1` 不移除，`0` 立即移除）
+- `--line-keywords`：行筛选关键词，默认 `上线,开播`
+- `--env-key`：写入 `.env` 的变量名，默认 `DRAMA_CALENDAR_REGEX`
+- `--backup`：写入前先备份原 `.env`（生成 `.bak_时间戳`）
+- `--append`：将结果追加到目标变量（适合关键词白名单变量）
+- `--managed-scope`：追加替换范围，`source`(默认，仅替换同数据源自动值) 或 `key`(同变量名下全部自动值)
+
+写入关键词白名单示例：
+
+```bash
+python scripts/update_drama_calendar_env.py \
+  --env-files /external-env/user.env \
+  --env-key KEYWORD_WHITELIST \
+  --append --backup
+
+# 追剧日历：完结满14天自动从白名单中移除
+python scripts/update_drama_calendar_env.py \
+  --source calendar \
+  --remove-finished-after-days 14 \
+  --env-files /external-env/user.env \
+  --env-key KEYWORD_WHITELIST \
+  --append --backup
+```
+
+写入猫眼票房影片名到白名单示例：
+
+```bash
+python scripts/update_drama_calendar_env.py \
+  --source maoyan \
+  --maoyan-url "https://piaofang.maoyan.com/box-office?ver=normal" \
+  --include-maoyan-web-heat \
+  --maoyan-web-heat-url "https://piaofang.maoyan.com/web-heat" \
+  --maoyan-top-n 10 \
+  --maoyan-web-heat-top-n 20 \
+  --env-files /external-env/user.env \
+  --env-key KEYWORD_WHITELIST \
+  --append --backup
+```
 
 ### 代理设置
 
@@ -229,7 +309,18 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.38 (2026-03-10) - 当前版本
+### v0.4.62 (2026-03-11) - 当前版本
+- ✅ 追剧页新增“电影首映超期移除天数”可配置项（默认 365，支持自定义，-1 关闭）
+- ✅ 猫眼来源支持按 TMDB 电影首映日期自动剔除超期电影
+
+### v0.4.61 (2026-03-11)
+- ✅ 修复追剧页手动“预览/写入”无日志问题（表单 action 解析冲突）
+
+### v0.4.60 (2026-03-11)
+- ✅ 追剧规则去重增强：历史已监控剧名不再重复写入
+- ✅ 增强 TMDB 可观测性：新增启用状态、缓存命中、发起请求与跳过原因日志
+
+### v0.4.38 (2026-03-10)
 - ✅ 修复固定样本 Shorts 拉伸：新增旋转元数据(`rotate/displaymatrix`)识别，非 0 角度强制进入兼容转码
 - ✅ 转码滤镜新增旋转矫正（`transpose/hflip+vflip`）并统一清零 `rotate=0`，避免 Telegram 侧按错误方向渲染
 
