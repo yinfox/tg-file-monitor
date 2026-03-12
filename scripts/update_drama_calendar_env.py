@@ -1398,6 +1398,7 @@ def main() -> int:
             source_url = f"calendar={calendar_source_url}; maoyan={maoyan_source_url}"
 
         titles = dedupe_titles_normalized(titles)
+        titles_before_append = len(titles)
 
         skipped_existing_titles: List[str] = []
         if bool(args.append):
@@ -1449,6 +1450,10 @@ def main() -> int:
                 print(f"  - {item}")
 
         if not titles:
+            # 有些场景并非抓取失败，而是“全部命中去重/剔除规则后无需更新”。
+            if titles_before_append > 0 or skipped_existing_titles or removed_finished_titles:
+                print("[INFO] 本次无新增剧名可写入，已跳过 .env 更新")
+                return 0
             print("[WARN] 未提取到任何剧名，不更新 .env", file=sys.stderr)
             return 1
 

@@ -29,7 +29,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.62"
+VERSION = "0.4.64"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
@@ -78,7 +78,12 @@ def load_config():
             "per_channel_max_downloads_per_minute": 6,
             "duplicate_cooldown_seconds": 300,
             "max_single_file_size_mb": 4096,
-            "min_free_space_gb": 5
+            "min_free_space_gb": 5,
+            "download_timeout_dynamic_enabled": True,
+            "download_timeout_base_seconds": 1800,
+            "download_timeout_max_seconds": 10800,
+            "download_timeout_buffer_seconds": 300,
+            "download_timeout_min_speed_mb_s": 1.0
         },
         "drama_calendar": {
             "source": "calendar",

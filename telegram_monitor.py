@@ -201,6 +201,11 @@ def load_config() -> dict:
             "duplicate_cooldown_seconds": 300,
             "max_single_file_size_mb": 4096,
             "min_free_space_gb": 5,
+            "download_timeout_dynamic_enabled": True,
+            "download_timeout_base_seconds": 1800,
+            "download_timeout_max_seconds": 10800,
+            "download_timeout_buffer_seconds": 300,
+            "download_timeout_min_speed_mb_s": 1.0,
         },
     }
 
@@ -377,6 +382,11 @@ def _get_download_risk_control_config() -> Dict[str, float]:
     duplicate_cooldown = int(risk_cfg.get('duplicate_cooldown_seconds', 300) or 0)
     max_single_file_size_mb = int(risk_cfg.get('max_single_file_size_mb', 4096) or 0)
     min_free_space_gb = float(risk_cfg.get('min_free_space_gb', 5) or 0)
+    timeout_dynamic_enabled = bool(risk_cfg.get('download_timeout_dynamic_enabled', True))
+    timeout_base_seconds = int(risk_cfg.get('download_timeout_base_seconds', 1800) or 0)
+    timeout_max_seconds = int(risk_cfg.get('download_timeout_max_seconds', 10800) or 0)
+    timeout_buffer_seconds = int(risk_cfg.get('download_timeout_buffer_seconds', 300) or 0)
+    timeout_min_speed_mb_s = float(risk_cfg.get('download_timeout_min_speed_mb_s', 1.0) or 0)
 
     return {
         'enabled': enabled,
@@ -384,7 +394,32 @@ def _get_download_risk_control_config() -> Dict[str, float]:
         'duplicate_cooldown_seconds': max(0, duplicate_cooldown),
         'max_single_file_size_mb': max(0, max_single_file_size_mb),
         'min_free_space_gb': max(0.0, min_free_space_gb),
+        'download_timeout_dynamic_enabled': timeout_dynamic_enabled,
+        'download_timeout_base_seconds': max(60, timeout_base_seconds),
+        'download_timeout_max_seconds': max(60, timeout_max_seconds),
+        'download_timeout_buffer_seconds': max(0, timeout_buffer_seconds),
+        'download_timeout_min_speed_mb_s': max(0.1, timeout_min_speed_mb_s),
     }
+
+
+def _compute_download_timeout_seconds(expected_size: int) -> int:
+    cfg = _get_download_risk_control_config()
+    base_timeout = int(cfg.get('download_timeout_base_seconds', 1800) or 1800)
+    max_timeout = int(cfg.get('download_timeout_max_seconds', 10800) or 10800)
+    buffer_seconds = int(cfg.get('download_timeout_buffer_seconds', 300) or 300)
+    min_speed_mb_s = float(cfg.get('download_timeout_min_speed_mb_s', 1.0) or 1.0)
+    dynamic_enabled = bool(cfg.get('download_timeout_dynamic_enabled', True))
+
+    if max_timeout < base_timeout:
+        max_timeout = base_timeout
+
+    if (not dynamic_enabled) or expected_size <= 0:
+        return max(60, min(base_timeout, max_timeout))
+
+    expected_seconds = int((expected_size / (1024 * 1024)) / min_speed_mb_s) + buffer_seconds
+    timeout = max(base_timeout, expected_seconds)
+    timeout = min(timeout, max_timeout)
+    return max(60, timeout)
 
 
 def _build_download_fingerprint(msg, restricted_channel_id: int) -> str:
@@ -1819,13 +1854,19 @@ async def new_message_handler(event):
                             progress_cb = None
                             if expected_size > 50 * 1024 * 1024:  # 50MB
                                 progress_cb = create_progress_callback(file_path, media_type_detected)
+                            download_timeout = _compute_download_timeout_seconds(expected_size)
+                            log_message(
+                                f"下载超时设置 [{media_type_detected}]: {download_timeout}s "
+                                f"(文件大小: {expected_size / (1024 * 1024):.1f}MB)"
+                            )
                             
                             downloaded_file = await reliable_action(
                                 f"下载 {media_type_detected} {msg.id}",
                                 client.download_media,
                                 download_target,
                                 file=file_path,
-                                progress_callback=progress_cb
+                                progress_callback=progress_cb,
+                                timeout=download_timeout,
                             )
                             
                             if downloaded_file:
