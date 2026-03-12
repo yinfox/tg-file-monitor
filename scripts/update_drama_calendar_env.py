@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import urljoin
 
@@ -16,6 +18,11 @@ HOME_URL = "https://blog.922928.de/"
 MAOYAN_BOX_OFFICE_URL = "https://piaofang.maoyan.com/box-office?ver=normal"
 MAOYAN_WEB_HEAT_URL = "https://piaofang.maoyan.com/web-heat"
 DOUBAN_AMERICAN_TV_URL = "https://m.douban.com/subject_collection/tv_american"
+DOUBAN_KOREAN_TV_URL = "https://m.douban.com/subject_collection/tv_korean"
+DOUBAN_JAPANESE_TV_URL = "https://m.douban.com/subject_collection/tv_japanese"
+DOUBAN_DOMESTIC_TV_URL = "https://m.douban.com/subject_collection/tv_domestic"
+DOUBAN_VARIETY_SHOW_URL = "https://m.douban.com/subject_collection/tv_variety_show"
+DOUBAN_ANIMATION_URL = "https://m.douban.com/subject_collection/tv_animation"
 DEFAULT_STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "drama_calendar_state.json")
 DEFAULT_TMDB_CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "tmdb_tv_status_cache.json")
 FINISH_KEYWORDS = ("完结", "收官", "大结局")
@@ -30,14 +37,57 @@ FINISH_EXCLUDE_KEYWORDS = (
 )
 TMDB_FINISHED_STATUSES = {"ended", "canceled", "cancelled"}
 TMDB_MIN_CONFIDENCE_SCORE = 70
+TMDB_MAX_WORKERS_DEFAULT = max(1, min(8, int(os.environ.get("DRAMA_TMDB_MAX_WORKERS", "6") or 6)))
+SOURCE_CHOICES = ("calendar", "maoyan", "douban", "douban_asia", "douban_domestic", "douban_variety", "douban_animation", "all")
+_TMDB_CACHE_LOCK = threading.Lock()
+
+
+def _normalize_sources(raw_sources: Sequence[str]) -> List[str]:
+    normalized: List[str] = []
+    seen: Set[str] = set()
+    for raw in raw_sources or []:
+        for item in str(raw or "").split(","):
+            source = item.strip()
+            if not source:
+                continue
+            if source not in SOURCE_CHOICES:
+                raise ValueError(f"不支持的数据源: {source}")
+            if source == "all":
+                return ["all"]
+            if source not in seen:
+                normalized.append(source)
+                seen.add(source)
+    return normalized or ["calendar"]
+
+
+def _normalize_douban_collection_url(raw_url: str, fallback_url: str = DOUBAN_AMERICAN_TV_URL) -> str:
+    text = (raw_url or "").strip()
+    if not text:
+        return fallback_url
+
+    url_matches = re.findall(r"https?://m\.douban\.com/subject_collection/[^,\s?#]+", text, flags=re.IGNORECASE)
+    if url_matches:
+        return url_matches[0]
+
+    slug_match = re.search(r"/subject_collection/([^,\s/?#]+)", text)
+    if slug_match:
+        return f"https://m.douban.com/subject_collection/{slug_match.group(1).strip()}"
+
+    return fallback_url
 
 
 def _clean_extracted_title(title: str) -> str:
     s = (title or "").strip()
     if not s:
         return ""
+    s = html.unescape(s)
+    s = s.replace("\u3000", " ")
     # 统一去掉尾部季数后缀：例如“极乐凶间 第二季” -> “极乐凶间”。
     s = re.sub(r"\s+第[一二三四五六七八九十百零两0-9]+季$", "", s).strip()
+    # 去掉常见装饰性括号和特殊符号，只保留中英文、数字与空格。
+    s = re.sub(r"[`~!@#$%^&*=|\\\\/;\"'<>,.?•…\-—_]", "", s)
+    s = re.sub(r"[！＠＃￥％……＆＊（）()［\[\]］【】｛{}｝「」『』《》〈〉〔〕〖〗“”‘’、，。；？～｜]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
     return s
 
 
@@ -260,12 +310,13 @@ def _resolve_tmdb_finish_state(
     year_tolerance: int,
     min_confidence_score: int,
 ) -> Tuple[Optional[bool], Optional[datetime.date], str]:
-    cache_items = cache.setdefault("items", {})
     cache_key = f"{language}|{region}|{reference_year or 0}|{title}"
     now_ts = datetime.datetime.now().timestamp()
     ttl_seconds = max(1, int(cache_ttl_hours)) * 3600
 
-    hit = cache_items.get(cache_key)
+    with _TMDB_CACHE_LOCK:
+        cache_items = cache.setdefault("items", {})
+        hit = cache_items.get(cache_key)
     if isinstance(hit, dict):
         ts = float(hit.get("ts") or 0)
         if ts > 0 and (now_ts - ts) < ttl_seconds:
@@ -288,12 +339,14 @@ def _resolve_tmdb_finish_state(
         min_confidence_score=min_confidence_score,
     )
 
-    cache_items[cache_key] = {
-        "ts": now_ts,
-        "finished": finished,
-        "finished_date": (finished_date.isoformat() if isinstance(finished_date, datetime.date) else ""),
-        "note": note,
-    }
+    with _TMDB_CACHE_LOCK:
+        cache_items = cache.setdefault("items", {})
+        cache_items[cache_key] = {
+            "ts": now_ts,
+            "finished": finished,
+            "finished_date": (finished_date.isoformat() if isinstance(finished_date, datetime.date) else ""),
+            "note": note,
+        }
     return finished, finished_date, note
 
 
@@ -370,12 +423,13 @@ def _resolve_tmdb_movie_release_date(
     year_tolerance: int,
     min_confidence_score: int,
 ) -> Tuple[Optional[datetime.date], str]:
-    cache_items = cache.setdefault("items", {})
     cache_key = f"movie|{language}|{region}|{reference_year or 0}|{title}"
     now_ts = datetime.datetime.now().timestamp()
     ttl_seconds = max(1, int(cache_ttl_hours)) * 3600
 
-    hit = cache_items.get(cache_key)
+    with _TMDB_CACHE_LOCK:
+        cache_items = cache.setdefault("items", {})
+        hit = cache_items.get(cache_key)
     if isinstance(hit, dict):
         ts = float(hit.get("ts") or 0)
         if ts > 0 and (now_ts - ts) < ttl_seconds:
@@ -396,12 +450,145 @@ def _resolve_tmdb_movie_release_date(
         min_confidence_score=min_confidence_score,
     )
 
-    cache_items[cache_key] = {
-        "ts": now_ts,
-        "release_date": (release_date.isoformat() if isinstance(release_date, datetime.date) else ""),
-        "note": note,
-    }
+    with _TMDB_CACHE_LOCK:
+        cache_items = cache.setdefault("items", {})
+        cache_items[cache_key] = {
+            "ts": now_ts,
+            "release_date": (release_date.isoformat() if isinstance(release_date, datetime.date) else ""),
+            "note": note,
+        }
     return release_date, note
+
+
+def _resolve_tmdb_finish_state_batch(
+    title_specs: Sequence[Tuple[str, Optional[int]]],
+    *,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    cache: Dict[str, Any],
+    cache_ttl_hours: int,
+    year_tolerance: int,
+    min_confidence_score: int,
+    max_workers: int,
+) -> Tuple[Dict[Tuple[str, int], Tuple[Optional[bool], Optional[datetime.date], str]], Dict[Tuple[str, int], Exception], bool]:
+    ordered_specs: List[Tuple[str, int]] = []
+    seen_specs: Set[Tuple[str, int]] = set()
+    for title, reference_year in title_specs:
+        key = (str(title or "").strip(), int(reference_year or 0))
+        if not key[0] or key in seen_specs:
+            continue
+        ordered_specs.append(key)
+        seen_specs.add(key)
+
+    if not ordered_specs:
+        return {}, {}, False
+
+    resolved: Dict[Tuple[str, int], Tuple[Optional[bool], Optional[datetime.date], str]] = {}
+    errors: Dict[Tuple[str, int], Exception] = {}
+    worker_count = max(1, min(int(max_workers or 1), len(ordered_specs)))
+
+    def _task(spec_key: Tuple[str, int]):
+        title, reference_year = spec_key
+        return spec_key, _resolve_tmdb_finish_state(
+            title,
+            api_key=api_key,
+            language=language,
+            region=region,
+            timeout=timeout,
+            cache=cache,
+            cache_ttl_hours=cache_ttl_hours,
+            reference_year=(reference_year or None),
+            year_tolerance=year_tolerance,
+            min_confidence_score=min_confidence_score,
+        )
+
+    if worker_count == 1:
+        for spec_key in ordered_specs:
+            try:
+                key, result = _task(spec_key)
+                resolved[key] = result
+            except Exception as e:
+                errors[spec_key] = e
+        return resolved, errors, True
+
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="tmdb-tv") as executor:
+        future_map = {executor.submit(_task, spec_key): spec_key for spec_key in ordered_specs}
+        for future in as_completed(future_map):
+            spec_key = future_map[future]
+            try:
+                key, result = future.result()
+                resolved[key] = result
+            except Exception as e:
+                errors[spec_key] = e
+
+    return resolved, errors, True
+
+
+def _resolve_tmdb_movie_release_date_batch(
+    titles: Sequence[str],
+    *,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    cache: Dict[str, Any],
+    cache_ttl_hours: int,
+    year_tolerance: int,
+    min_confidence_score: int,
+    max_workers: int,
+) -> Tuple[Dict[str, Tuple[Optional[datetime.date], str]], Dict[str, Exception], bool]:
+    ordered_titles: List[str] = []
+    seen_titles: Set[str] = set()
+    for title in titles:
+        normalized = str(title or "").strip()
+        if not normalized or normalized in seen_titles:
+            continue
+        ordered_titles.append(normalized)
+        seen_titles.add(normalized)
+
+    if not ordered_titles:
+        return {}, {}, False
+
+    resolved: Dict[str, Tuple[Optional[datetime.date], str]] = {}
+    errors: Dict[str, Exception] = {}
+    worker_count = max(1, min(int(max_workers or 1), len(ordered_titles)))
+
+    def _task(title: str):
+        return title, _resolve_tmdb_movie_release_date(
+            title,
+            api_key=api_key,
+            language=language,
+            region=region,
+            timeout=timeout,
+            cache=cache,
+            cache_ttl_hours=cache_ttl_hours,
+            reference_year=None,
+            year_tolerance=year_tolerance,
+            min_confidence_score=min_confidence_score,
+        )
+
+    if worker_count == 1:
+        for title in ordered_titles:
+            try:
+                key, result = _task(title)
+                resolved[key] = result
+            except Exception as e:
+                errors[title] = e
+        return resolved, errors, True
+
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="tmdb-movie") as executor:
+        future_map = {executor.submit(_task, title): title for title in ordered_titles}
+        for future in as_completed(future_map):
+            title = future_map[future]
+            try:
+                key, result = future.result()
+                resolved[key] = result
+            except Exception as e:
+                errors[title] = e
+
+    return resolved, errors, True
 
 
 def fetch_text(url: str, timeout: int = 20) -> str:
@@ -670,7 +857,8 @@ def extract_douban_collection_titles(raw_html: str) -> List[str]:
 
 
 def fetch_douban_collection_titles(douban_url: str, *, count: int, timeout: int = 20) -> List[str]:
-    m = re.search(r"/subject_collection/([^/?#]+)", douban_url or "")
+    douban_url = _normalize_douban_collection_url(douban_url or "", fallback_url=DOUBAN_AMERICAN_TV_URL)
+    m = re.search(r"/subject_collection/([^,\s/?#]+)", douban_url or "")
     if not m:
         raise RuntimeError(f"无效的豆瓣合集 URL: {douban_url}")
 
@@ -802,6 +990,7 @@ def _remove_finished_titles_by_tmdb(
     tmdb_year_tolerance: int,
     tmdb_min_score: int,
     tmdb_marked_finished_titles: List[str],
+    tmdb_max_workers: int,
 ) -> Tuple[List[str], List[Tuple[str, int]], bool]:
     if remove_days < 0:
         return list(titles), [], False
@@ -810,32 +999,36 @@ def _remove_finished_titles_by_tmdb(
     kept: List[str] = []
     removed: List[Tuple[str, int]] = []
     cache_dirty = False
+    batch_results: Dict[Tuple[str, int], Tuple[Optional[bool], Optional[datetime.date], str]] = {}
+    batch_errors: Dict[Tuple[str, int], Exception] = {}
+
+    if tmdb_enabled and finish_detect_mode in ("tmdb", "hybrid"):
+        batch_results, batch_errors, cache_dirty = _resolve_tmdb_finish_state_batch(
+            [(title, None) for title in titles],
+            api_key=tmdb_api_key,
+            language=tmdb_language,
+            region=tmdb_region,
+            timeout=tmdb_timeout,
+            cache=tmdb_cache,
+            cache_ttl_hours=tmdb_cache_ttl_hours,
+            year_tolerance=tmdb_year_tolerance,
+            min_confidence_score=tmdb_min_score,
+            max_workers=tmdb_max_workers,
+        )
 
     for title in titles:
         finished = False
         finish_date: Optional[datetime.date] = None
 
         if tmdb_enabled and finish_detect_mode in ("tmdb", "hybrid"):
-            try:
-                tmdb_finished, tmdb_date, tmdb_note = _resolve_tmdb_finish_state(
-                    title,
-                    api_key=tmdb_api_key,
-                    language=tmdb_language,
-                    region=tmdb_region,
-                    timeout=tmdb_timeout,
-                    cache=tmdb_cache,
-                    cache_ttl_hours=tmdb_cache_ttl_hours,
-                    reference_year=None,
-                    year_tolerance=tmdb_year_tolerance,
-                    min_confidence_score=tmdb_min_score,
-                )
-                cache_dirty = True
+            if (title, 0) in batch_errors:
+                print(f"[WARN] TMDB 查询失败，title={title}: {batch_errors[(title, 0)]}")
+            else:
+                tmdb_finished, tmdb_date, tmdb_note = batch_results.get((title, 0), (None, None, "tmdb_not_checked"))
                 if tmdb_finished is True:
                     finished = True
                     finish_date = tmdb_date
                     tmdb_marked_finished_titles.append(f"{title} ({tmdb_note})")
-            except Exception as e:
-                print(f"[WARN] TMDB 查询失败，title={title}: {e}")
 
         if not finished:
             kept.append(title)
@@ -866,6 +1059,7 @@ def _remove_old_movie_titles_by_tmdb(
     tmdb_cache_ttl_hours: int,
     tmdb_year_tolerance: int,
     tmdb_min_score: int,
+    tmdb_max_workers: int,
 ) -> Tuple[List[str], List[Tuple[str, int]], bool]:
     if older_than_days < 0:
         return list(titles), [], False
@@ -876,27 +1070,25 @@ def _remove_old_movie_titles_by_tmdb(
     today = datetime.date.today()
     kept: List[str] = []
     removed: List[Tuple[str, int]] = []
-    cache_dirty = False
+    release_results, release_errors, cache_dirty = _resolve_tmdb_movie_release_date_batch(
+        titles,
+        api_key=tmdb_api_key,
+        language=tmdb_language,
+        region=tmdb_region,
+        timeout=tmdb_timeout,
+        cache=tmdb_cache,
+        cache_ttl_hours=tmdb_cache_ttl_hours,
+        year_tolerance=tmdb_year_tolerance,
+        min_confidence_score=tmdb_min_score,
+        max_workers=tmdb_max_workers,
+    )
 
     for title in titles:
-        try:
-            release_date, note = _resolve_tmdb_movie_release_date(
-                title,
-                api_key=tmdb_api_key,
-                language=tmdb_language,
-                region=tmdb_region,
-                timeout=tmdb_timeout,
-                cache=tmdb_cache,
-                cache_ttl_hours=tmdb_cache_ttl_hours,
-                reference_year=None,
-                year_tolerance=tmdb_year_tolerance,
-                min_confidence_score=tmdb_min_score,
-            )
-            cache_dirty = True
-        except Exception as e:
-            print(f"[WARN] TMDB 电影首映日期查询失败，title={title}: {e}")
+        if title in release_errors:
+            print(f"[WARN] TMDB 电影首映日期查询失败，title={title}: {release_errors[title]}")
             kept.append(title)
             continue
+        release_date, note = release_results.get(title, (None, "tmdb_movie_not_checked"))
 
         if not isinstance(release_date, datetime.date):
             kept.append(title)
@@ -1213,9 +1405,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="抓取追剧日历/票房影片并更新一个或多个 .env 的正则变量")
     parser.add_argument(
         "--source",
-        default="calendar",
-        choices=["calendar", "maoyan", "douban", "all"],
-        help="数据源：calendar(追剧日历) / maoyan(猫眼票房) / douban(豆瓣热播美剧) / all(三者合并)",
+        action="append",
+        default=[],
+        help="数据源：支持重复传参或逗号分隔，如 --source calendar --source maoyan 或 --source calendar,maoyan；all 表示全部合并",
     )
     parser.add_argument("--home-url", default=HOME_URL, help="博客首页 URL")
     parser.add_argument("--post-url", default="", help="指定文章 URL（不传则自动取最新追剧日历）")
@@ -1252,6 +1444,7 @@ def main() -> int:
     parser.add_argument("--tmdb-cache-ttl-hours", type=int, default=24, help="TMDB 缓存有效时长（小时）")
     parser.add_argument("--tmdb-year-tolerance", type=int, default=2, help="TMDB 同名剧年份容差（年）")
     parser.add_argument("--tmdb-min-score", type=int, default=TMDB_MIN_CONFIDENCE_SCORE, help="TMDB 匹配最低置信分，低于该分不判完结")
+    parser.add_argument("--tmdb-max-workers", type=int, default=TMDB_MAX_WORKERS_DEFAULT, help="TMDB 并发查询数，默认 6，最大 8")
     parser.add_argument("--state-file", default=DEFAULT_STATE_FILE, help="追加模式状态文件，用于替换旧的自动生成值")
     parser.add_argument(
         "--managed-scope",
@@ -1279,6 +1472,10 @@ def main() -> int:
     parser.add_argument("--allow-create-env", action="store_true", help="允许自动创建不存在的 .env 文件（默认禁止）")
     parser.add_argument("--dry-run", action="store_true", help="仅打印结果，不落盘")
     args = parser.parse_args()
+    try:
+        args.source = _normalize_sources(args.source)
+    except ValueError as e:
+        parser.error(str(e))
 
     include_keywords = [k.strip() for k in args.line_keywords.split(",") if k.strip()]
     if not include_keywords:
@@ -1305,9 +1502,17 @@ def main() -> int:
         calendar_titles: List[str] = []
         maoyan_titles: List[str] = []
         douban_titles: List[str] = []
+        douban_asia_titles: List[str] = []
+        douban_domestic_titles: List[str] = []
+        douban_variety_titles: List[str] = []
+        douban_animation_titles: List[str] = []
         calendar_source_url = ""
         maoyan_source_url = ""
         douban_source_url = ""
+        douban_asia_source_url = ""
+        douban_domestic_source_url = ""
+        douban_variety_source_url = ""
+        douban_animation_source_url = ""
 
         finish_detect_mode = (args.finish_detect_mode or "hybrid").strip().lower()
         tmdb_api_key = (args.tmdb_api_key or os.environ.get("TMDB_API_KEY") or "").strip()
@@ -1316,6 +1521,7 @@ def main() -> int:
         tmdb_timeout = max(5, int(args.tmdb_timeout or 15))
         tmdb_year_tolerance = max(0, int(args.tmdb_year_tolerance or 2))
         tmdb_min_score = max(1, int(args.tmdb_min_score or TMDB_MIN_CONFIDENCE_SCORE))
+        tmdb_max_workers = max(1, min(8, int(args.tmdb_max_workers or TMDB_MAX_WORKERS_DEFAULT)))
         tmdb_cache = _load_tmdb_cache(args.tmdb_cache_file)
         tmdb_cache_dirty = False
         tmdb_enabled = bool(tmdb_api_key) and finish_detect_mode in ("tmdb", "hybrid")
@@ -1325,7 +1531,7 @@ def main() -> int:
             if tmdb_enabled:
                 print(
                     f"[INFO] TMDB 已启用: mode={finish_detect_mode} language={tmdb_language} region={tmdb_region} "
-                    f"cache_ttl_hours={int(args.tmdb_cache_ttl_hours or 24)}"
+                    f"cache_ttl_hours={int(args.tmdb_cache_ttl_hours or 24)} workers={tmdb_max_workers}"
                 )
             else:
                 reason = "未提供 TMDB_API_KEY" if not tmdb_api_key else "finish-detect-mode 非 tmdb/hybrid"
@@ -1336,7 +1542,10 @@ def main() -> int:
             if finish_detect_mode == "tmdb":
                 finish_detect_mode = "keyword"
 
-        if args.source in ("calendar", "all"):
+        selected_sources = set(args.source)
+        include_all_sources = "all" in selected_sources
+
+        if "calendar" in selected_sources or include_all_sources:
             home_html = fetch_text(args.home_url)
             post_url = args.post_url.strip() or find_latest_calendar_post_url(home_html, args.home_url)
             post_html = fetch_text(post_url)
@@ -1355,6 +1564,34 @@ def main() -> int:
             if remove_days >= 0:
                 today = datetime.date.today()
                 kept_titles: List[str] = []
+                batch_results: Dict[Tuple[str, int], Tuple[Optional[bool], Optional[datetime.date], str]] = {}
+                batch_errors: Dict[Tuple[str, int], Exception] = {}
+                title_specs = []
+                for title in titles:
+                    state = title_states.get(title, {})
+                    finished_by_keyword = bool(state.get("finished", False))
+                    finish_date = state.get("finished_date") if isinstance(state.get("finished_date"), datetime.date) else None
+                    ref_date = state.get("reference_date") if isinstance(state.get("reference_date"), datetime.date) else None
+                    reference_year = ref_date.year if isinstance(ref_date, datetime.date) else None
+                    if ((not finished_by_keyword) or (finished_by_keyword and not isinstance(finish_date, datetime.date))) and tmdb_enabled:
+                        title_specs.append((title, reference_year))
+
+                if title_specs:
+                    batch_results, batch_errors, batch_dirty = _resolve_tmdb_finish_state_batch(
+                        title_specs,
+                        api_key=tmdb_api_key,
+                        language=tmdb_language,
+                        region=tmdb_region,
+                        timeout=tmdb_timeout,
+                        cache=tmdb_cache,
+                        cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                        year_tolerance=tmdb_year_tolerance,
+                        min_confidence_score=tmdb_min_score,
+                        max_workers=tmdb_max_workers,
+                    )
+                    if batch_dirty:
+                        tmdb_cache_dirty = True
+
                 for title in titles:
                     state = title_states.get(title, {})
                     finished_by_keyword = bool(state.get("finished", False))
@@ -1364,27 +1601,16 @@ def main() -> int:
                     reference_year = ref_date.year if isinstance(ref_date, datetime.date) else None
 
                     if ((not finished) or (finished and not isinstance(finish_date, datetime.date))) and tmdb_enabled:
-                        try:
-                            tmdb_finished, tmdb_date, tmdb_note = _resolve_tmdb_finish_state(
-                                title,
-                                api_key=tmdb_api_key,
-                                language=tmdb_language,
-                                region=tmdb_region,
-                                timeout=tmdb_timeout,
-                                cache=tmdb_cache,
-                                cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
-                                reference_year=reference_year,
-                                year_tolerance=tmdb_year_tolerance,
-                                min_confidence_score=tmdb_min_score,
-                            )
-                            tmdb_cache_dirty = True
+                        batch_key = (title, int(reference_year or 0))
+                        if batch_key in batch_errors:
+                            print(f"[WARN] TMDB 查询失败，title={title}: {batch_errors[batch_key]}")
+                        else:
+                            tmdb_finished, tmdb_date, tmdb_note = batch_results.get(batch_key, (None, None, "tmdb_not_checked"))
                             if tmdb_finished is True and finish_detect_mode in ("tmdb", "hybrid"):
                                 finished = True
                                 if isinstance(tmdb_date, datetime.date):
                                     finish_date = tmdb_date
                                 tmdb_marked_finished_titles.append(f"{title} ({tmdb_note})")
-                        except Exception as e:
-                            print(f"[WARN] TMDB 查询失败，title={title}: {e}")
 
                     if not finished:
                         kept_titles.append(title)
@@ -1414,12 +1640,11 @@ def main() -> int:
             except Exception as e:
                 print(f"[WARN] TMDB 缓存写入失败: {e}")
 
-        if args.source in ("maoyan", "all"):
+        if "maoyan" in selected_sources or include_all_sources:
             maoyan_url = (args.maoyan_url or MAOYAN_BOX_OFFICE_URL).strip()
             maoyan_html = fetch_text(maoyan_url)
             box_titles = extract_maoyan_movie_names(maoyan_html)
             box_titles = apply_top_n(box_titles, int(args.maoyan_top_n or 0))
-            titles = list(box_titles)
 
             web_heat_titles: List[str] = []
             if bool(args.include_maoyan_web_heat):
@@ -1427,15 +1652,11 @@ def main() -> int:
                 web_heat_html = fetch_text(web_heat_url)
                 web_heat_titles = extract_maoyan_web_heat_names(web_heat_html)
                 web_heat_titles = apply_top_n(web_heat_titles, int(args.maoyan_web_heat_top_n or 0))
-                titles = merge_unique(titles, web_heat_titles)
-
-            maoyan_titles = titles
-            maoyan_source_url = maoyan_url
 
             remove_days = int(args.remove_finished_after_days or -1)
-            if remove_days >= 0:
-                maoyan_titles, removed_from_maoyan, maoyan_cache_dirty = _remove_finished_titles_by_tmdb(
-                    maoyan_titles,
+            if remove_days >= 0 and web_heat_titles:
+                web_heat_titles, removed_from_web_heat, maoyan_tv_cache_dirty = _remove_finished_titles_by_tmdb(
+                    web_heat_titles,
                     remove_days=remove_days,
                     tmdb_enabled=tmdb_enabled,
                     finish_detect_mode=finish_detect_mode,
@@ -1448,20 +1669,21 @@ def main() -> int:
                     tmdb_year_tolerance=tmdb_year_tolerance,
                     tmdb_min_score=tmdb_min_score,
                     tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                    tmdb_max_workers=tmdb_max_workers,
                 )
-                if maoyan_cache_dirty:
+                if maoyan_tv_cache_dirty:
                     tmdb_cache_dirty = True
-                if removed_from_maoyan:
-                    removed_finished_titles.extend(removed_from_maoyan)
+                if removed_from_web_heat:
+                    removed_finished_titles.extend(removed_from_web_heat)
             else:
-                if finish_detect_mode in ("tmdb", "hybrid"):
-                    print("[INFO] 猫眼来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+                if finish_detect_mode in ("tmdb", "hybrid") and web_heat_titles:
+                    print("[INFO] 猫眼网播热度未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
 
             movie_remove_days = int(args.remove_movie_premiere_after_days if args.remove_movie_premiere_after_days is not None else 365)
             if movie_remove_days >= 0:
                 if tmdb_movie_enabled:
-                    maoyan_titles, removed_old_movies, movie_cache_dirty = _remove_old_movie_titles_by_tmdb(
-                        maoyan_titles,
+                    box_titles, removed_old_movies, movie_cache_dirty = _remove_old_movie_titles_by_tmdb(
+                        box_titles,
                         older_than_days=movie_remove_days,
                         tmdb_api_key=tmdb_api_key,
                         tmdb_language=tmdb_language,
@@ -1471,6 +1693,7 @@ def main() -> int:
                         tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
                         tmdb_year_tolerance=tmdb_year_tolerance,
                         tmdb_min_score=tmdb_min_score,
+                        tmdb_max_workers=tmdb_max_workers,
                     )
                     if movie_cache_dirty:
                         tmdb_cache_dirty = True
@@ -1483,8 +1706,11 @@ def main() -> int:
             else:
                 print("[INFO] 已关闭电影首映日期剔除(remove_movie_premiere_after_days=-1)")
 
-        if args.source in ("douban", "all"):
-            douban_url = (args.douban_url or DOUBAN_AMERICAN_TV_URL).strip()
+            maoyan_titles = merge_unique(box_titles, web_heat_titles)
+            maoyan_source_url = maoyan_url
+
+        if "douban" in selected_sources or include_all_sources:
+            douban_url = _normalize_douban_collection_url((args.douban_url or DOUBAN_AMERICAN_TV_URL).strip(), fallback_url=DOUBAN_AMERICAN_TV_URL)
             req_count = int(args.douban_top_n or 0)
             if req_count <= 0:
                 req_count = 100
@@ -1507,6 +1733,7 @@ def main() -> int:
                     tmdb_year_tolerance=tmdb_year_tolerance,
                     tmdb_min_score=tmdb_min_score,
                     tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                    tmdb_max_workers=tmdb_max_workers,
                 )
                 if douban_cache_dirty:
                     tmdb_cache_dirty = True
@@ -1519,24 +1746,197 @@ def main() -> int:
 
             douban_source_url = douban_url
 
+        if "douban_asia" in selected_sources or include_all_sources:
+            req_count = int(args.douban_top_n or 0)
+            if req_count <= 0:
+                req_count = 100
+            korean_titles = fetch_douban_collection_titles(DOUBAN_KOREAN_TV_URL, count=req_count, timeout=20)
+            japanese_titles = fetch_douban_collection_titles(DOUBAN_JAPANESE_TV_URL, count=req_count, timeout=20)
+            titles = merge_unique(korean_titles, japanese_titles)
+            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0:
+                douban_asia_titles, removed_from_douban_asia, douban_asia_cache_dirty = _remove_finished_titles_by_tmdb(
+                    titles,
+                    remove_days=remove_days,
+                    tmdb_enabled=tmdb_enabled,
+                    finish_detect_mode=finish_detect_mode,
+                    tmdb_api_key=tmdb_api_key,
+                    tmdb_language=tmdb_language,
+                    tmdb_region=tmdb_region,
+                    tmdb_timeout=tmdb_timeout,
+                    tmdb_cache=tmdb_cache,
+                    tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                    tmdb_year_tolerance=tmdb_year_tolerance,
+                    tmdb_min_score=tmdb_min_score,
+                    tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                    tmdb_max_workers=tmdb_max_workers,
+                )
+                if douban_asia_cache_dirty:
+                    tmdb_cache_dirty = True
+                if removed_from_douban_asia:
+                    removed_finished_titles.extend(removed_from_douban_asia)
+            else:
+                douban_asia_titles = titles
+                if finish_detect_mode in ("tmdb", "hybrid"):
+                    print("[INFO] 豆瓣日韩来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            douban_asia_source_url = f"{DOUBAN_KOREAN_TV_URL},{DOUBAN_JAPANESE_TV_URL}"
+
+        if "douban_domestic" in selected_sources or include_all_sources:
+            req_count = int(args.douban_top_n or 0)
+            if req_count <= 0:
+                req_count = 100
+            titles = fetch_douban_collection_titles(DOUBAN_DOMESTIC_TV_URL, count=req_count, timeout=20)
+            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0:
+                douban_domestic_titles, removed_from_douban_domestic, douban_domestic_cache_dirty = _remove_finished_titles_by_tmdb(
+                    titles,
+                    remove_days=remove_days,
+                    tmdb_enabled=tmdb_enabled,
+                    finish_detect_mode=finish_detect_mode,
+                    tmdb_api_key=tmdb_api_key,
+                    tmdb_language=tmdb_language,
+                    tmdb_region=tmdb_region,
+                    tmdb_timeout=tmdb_timeout,
+                    tmdb_cache=tmdb_cache,
+                    tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                    tmdb_year_tolerance=tmdb_year_tolerance,
+                    tmdb_min_score=tmdb_min_score,
+                    tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                    tmdb_max_workers=tmdb_max_workers,
+                )
+                if douban_domestic_cache_dirty:
+                    tmdb_cache_dirty = True
+                if removed_from_douban_domestic:
+                    removed_finished_titles.extend(removed_from_douban_domestic)
+            else:
+                douban_domestic_titles = titles
+                if finish_detect_mode in ("tmdb", "hybrid"):
+                    print("[INFO] 豆瓣国产剧来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            douban_domestic_source_url = DOUBAN_DOMESTIC_TV_URL
+
+        if "douban_variety" in selected_sources or include_all_sources:
+            req_count = int(args.douban_top_n or 0)
+            if req_count <= 0:
+                req_count = 100
+            titles = fetch_douban_collection_titles(DOUBAN_VARIETY_SHOW_URL, count=req_count, timeout=20)
+            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0:
+                douban_variety_titles, removed_from_douban_variety, douban_variety_cache_dirty = _remove_finished_titles_by_tmdb(
+                    titles,
+                    remove_days=remove_days,
+                    tmdb_enabled=tmdb_enabled,
+                    finish_detect_mode=finish_detect_mode,
+                    tmdb_api_key=tmdb_api_key,
+                    tmdb_language=tmdb_language,
+                    tmdb_region=tmdb_region,
+                    tmdb_timeout=tmdb_timeout,
+                    tmdb_cache=tmdb_cache,
+                    tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                    tmdb_year_tolerance=tmdb_year_tolerance,
+                    tmdb_min_score=tmdb_min_score,
+                    tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                    tmdb_max_workers=tmdb_max_workers,
+                )
+                if douban_variety_cache_dirty:
+                    tmdb_cache_dirty = True
+                if removed_from_douban_variety:
+                    removed_finished_titles.extend(removed_from_douban_variety)
+            else:
+                douban_variety_titles = titles
+                if finish_detect_mode in ("tmdb", "hybrid"):
+                    print("[INFO] 豆瓣综艺来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            douban_variety_source_url = DOUBAN_VARIETY_SHOW_URL
+
+        if "douban_animation" in selected_sources or include_all_sources:
+            req_count = int(args.douban_top_n or 0)
+            if req_count <= 0:
+                req_count = 100
+            titles = fetch_douban_collection_titles(DOUBAN_ANIMATION_URL, count=req_count, timeout=20)
+            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0:
+                douban_animation_titles, removed_from_douban_animation, douban_animation_cache_dirty = _remove_finished_titles_by_tmdb(
+                    titles,
+                    remove_days=remove_days,
+                    tmdb_enabled=tmdb_enabled,
+                    finish_detect_mode=finish_detect_mode,
+                    tmdb_api_key=tmdb_api_key,
+                    tmdb_language=tmdb_language,
+                    tmdb_region=tmdb_region,
+                    tmdb_timeout=tmdb_timeout,
+                    tmdb_cache=tmdb_cache,
+                    tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                    tmdb_year_tolerance=tmdb_year_tolerance,
+                    tmdb_min_score=tmdb_min_score,
+                    tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                    tmdb_max_workers=tmdb_max_workers,
+                )
+                if douban_animation_cache_dirty:
+                    tmdb_cache_dirty = True
+                if removed_from_douban_animation:
+                    removed_finished_titles.extend(removed_from_douban_animation)
+            else:
+                douban_animation_titles = titles
+                if finish_detect_mode in ("tmdb", "hybrid"):
+                    print("[INFO] 豆瓣动漫来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            douban_animation_source_url = DOUBAN_ANIMATION_URL
+
         if tmdb_cache_dirty:
             try:
                 _save_tmdb_cache(args.tmdb_cache_file, tmdb_cache)
             except Exception as e:
                 print(f"[WARN] TMDB 缓存写入失败: {e}")
 
-        if args.source == "calendar":
+        if args.source == ["calendar"]:
             titles = calendar_titles
             source_url = calendar_source_url
-        elif args.source == "maoyan":
+        elif args.source == ["maoyan"]:
             titles = maoyan_titles
             source_url = maoyan_source_url
-        elif args.source == "douban":
+        elif args.source == ["douban"]:
             titles = douban_titles
             source_url = douban_source_url
+        elif args.source == ["douban_asia"]:
+            titles = douban_asia_titles
+            source_url = douban_asia_source_url
+        elif args.source == ["douban_domestic"]:
+            titles = douban_domestic_titles
+            source_url = douban_domestic_source_url
+        elif args.source == ["douban_variety"]:
+            titles = douban_variety_titles
+            source_url = douban_variety_source_url
+        elif args.source == ["douban_animation"]:
+            titles = douban_animation_titles
+            source_url = douban_animation_source_url
         else:
-            titles = merge_unique(merge_unique(calendar_titles, maoyan_titles), douban_titles)
-            source_url = f"calendar={calendar_source_url}; maoyan={maoyan_source_url}; douban={douban_source_url}"
+            source_results = {
+                "calendar": (calendar_titles, calendar_source_url),
+                "maoyan": (maoyan_titles, maoyan_source_url),
+                "douban": (douban_titles, douban_source_url),
+                "douban_asia": (douban_asia_titles, douban_asia_source_url),
+                "douban_domestic": (douban_domestic_titles, douban_domestic_source_url),
+                "douban_variety": (douban_variety_titles, douban_variety_source_url),
+                "douban_animation": (douban_animation_titles, douban_animation_source_url),
+            }
+            merge_order = [name for name in SOURCE_CHOICES if name != "all" and (include_all_sources or name in selected_sources)]
+            titles = []
+            source_url_parts: List[str] = []
+            for name in merge_order:
+                part_titles, part_url = source_results[name]
+                titles = merge_unique(titles, part_titles)
+                source_url_parts.append(f"{name}={part_url}")
+            source_url = "; ".join(source_url_parts)
 
         titles = dedupe_titles_normalized(titles)
         titles_before_append = len(titles)
@@ -1556,9 +1956,10 @@ def main() -> int:
 
         regex = build_regex_from_titles(titles)
 
-        print(f"[INFO] 数据源: {args.source}")
+        source_label = ",".join(args.source)
+        print(f"[INFO] 数据源: {source_label}")
         print(f"[INFO] 来源链接: {source_url}")
-        if args.source in ("calendar", "all"):
+        if "calendar" in selected_sources or include_all_sources:
             print(f"[INFO] 关键词: {','.join(include_keywords)}")
             print(f"[INFO] 命中行数: {len(target_lines)}")
             print(f"[INFO] 完结判定词: {','.join(finish_keywords)}")
@@ -1568,16 +1969,28 @@ def main() -> int:
             if tmdb_enabled:
                 print(f"[INFO] TMDB 语言/地区: {tmdb_language}/{tmdb_region}")
                 print(f"[INFO] TMDB 年份容差/最低分: {tmdb_year_tolerance}/{tmdb_min_score}")
-        if args.source in ("maoyan", "all"):
+        if "maoyan" in selected_sources or include_all_sources:
             print(f"[INFO] 猫眼提取前N: {int(args.maoyan_top_n or 0) if int(args.maoyan_top_n or 0) > 0 else '不限制'}")
             print(f"[INFO] 同步网播热度: {'是' if bool(args.include_maoyan_web_heat) else '否'}")
             print(f"[INFO] 电影首映剔除阈值: {int(args.remove_movie_premiere_after_days if args.remove_movie_premiere_after_days is not None else 365)} 天")
             if bool(args.include_maoyan_web_heat):
                 print(f"[INFO] 网播热度链接: {(args.maoyan_web_heat_url or MAOYAN_WEB_HEAT_URL).strip()}")
                 print(f"[INFO] 网播热度前N: {int(args.maoyan_web_heat_top_n or 0) if int(args.maoyan_web_heat_top_n or 0) > 0 else '不限制'}")
-        if args.source in ("douban", "all"):
+        if "douban" in selected_sources or include_all_sources:
             print(f"[INFO] 豆瓣链接: {(args.douban_url or DOUBAN_AMERICAN_TV_URL).strip()}")
             print(f"[INFO] 豆瓣前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+        if "douban_asia" in selected_sources or include_all_sources:
+            print(f"[INFO] 豆瓣日韩链接: {DOUBAN_KOREAN_TV_URL},{DOUBAN_JAPANESE_TV_URL}")
+            print(f"[INFO] 豆瓣日韩前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+        if "douban_domestic" in selected_sources or include_all_sources:
+            print(f"[INFO] 豆瓣国产剧链接: {DOUBAN_DOMESTIC_TV_URL}")
+            print(f"[INFO] 豆瓣国产剧前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+        if "douban_variety" in selected_sources or include_all_sources:
+            print(f"[INFO] 豆瓣综艺链接: {DOUBAN_VARIETY_SHOW_URL}")
+            print(f"[INFO] 豆瓣综艺前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+        if "douban_animation" in selected_sources or include_all_sources:
+            print(f"[INFO] 豆瓣动漫链接: {DOUBAN_ANIMATION_URL}")
+            print(f"[INFO] 豆瓣动漫前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
         print(f"[INFO] 提取剧名数: {len(titles)}")
         if skipped_existing_titles:
             print(f"[INFO] 已跳过历史已监控剧名: {len(skipped_existing_titles)}")
@@ -1614,7 +2027,7 @@ def main() -> int:
                 dry_run=args.dry_run,
                 backup=args.backup,
                 append_mode=args.append,
-                source_tag=args.source,
+                source_tag=source_label,
                 state_file=(args.state_file or DEFAULT_STATE_FILE),
                 managed_scope=(args.managed_scope or "source"),
                 require_existing=(not bool(args.allow_create_env)),

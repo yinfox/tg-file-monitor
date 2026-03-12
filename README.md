@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.65-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.66-orange.svg)](.)
 
 </div>
 
@@ -327,7 +327,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.64 (2026-03-12) - 当前版本
+### v0.4.66 (2026-03-12) - 当前版本
+- ✅ 追剧配置页重构：数据源支持多选、卡片选择、来源参数 Tabs、顶部调度状态卡与更紧凑布局
+- ✅ 追剧同步稳定性增强：修复 TMDB 电视剧/电影请求串线、自动纠正异常豆瓣合集 URL、增加任务并发保护与动态超时
+- ✅ 追剧摘要与日志增强：新增结构化顶部摘要、清空环境变量内容按钮，并让日志优先保留提取数/剔除数/写入结果等关键信息
+
+### v0.4.64 (2026-03-12)
 - ✅ 下载超时策略升级：支持按文件大小动态计算超时（含上限/缓冲），减少大文件误超时
 - ✅ 下载日志增强：新增“本次下载超时设置”输出，便于排查慢速链路
 
@@ -434,7 +439,7 @@ Web 界面 → 配置 → 代理配置
 - ✅ 监控日志体验优化：`telegram_monitor.py` 日志输出实时 `flush`
 - ✅ 新增发布脚本：`scripts/docker_release.sh`、`scripts/netcup_deploy.sh`
 
-### v0.4.18 (2026-03-08) - 当前版本
+### v0.4.18 (2026-03-08)
 - ✅ 下载风控优化：限频/冷却触发时进入队列等待并自动重试
 - ✅ 不再直接跳过可重试下载任务，避免消息丢下载
 - ✅ 不可重试场景（体积超限/磁盘不足）仍按策略跳过

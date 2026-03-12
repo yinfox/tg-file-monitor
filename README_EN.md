@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.65-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.66-orange.svg)](.)
 
 </div>
 
@@ -173,7 +173,12 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.64 (2026-03-12) - Current
+### v0.4.66 (2026-03-12) - Current
+- Reworked the Drama Calendar page with multi-select sources, source tabs, a compact layout, and a top-right scheduler status card
+- Fixed Drama Calendar TMDB routing and Douban source normalization, and added run concurrency protection plus dynamic timeouts
+- Added structured run summaries, clearer Drama logs, and a one-click action to clear target env variable contents
+
+### v0.4.64 (2026-03-12)
 - Upgraded download timeout strategy with size-based dynamic timeout (with cap and buffer) to reduce false timeouts on large files
 - Added download timeout observability log per task for easier troubleshooting
 

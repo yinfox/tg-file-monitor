@@ -2,10 +2,617 @@
 
 {% block title %}追剧日历正则{% endblock %}
 
+{% block extra_head %}
+<style>
+    .drama-layout {
+        max-width: 1280px;
+    }
+
+    .drama-hero {
+        margin-bottom: 0.85rem;
+        padding: 0.9rem 1rem;
+        border-radius: 1rem;
+        background:
+            radial-gradient(circle at top right, rgba(245, 158, 11, 0.22), transparent 30%),
+            linear-gradient(135deg, rgba(79, 70, 229, 0.96), rgba(37, 99, 235, 0.9));
+        color: #fff;
+        box-shadow: 0 18px 38px rgba(79, 70, 229, 0.18);
+    }
+
+    .drama-hero-shell {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) minmax(280px, 0.7fr);
+        gap: 1rem;
+        align-items: stretch;
+    }
+
+    .drama-hero-main {
+        min-width: 0;
+    }
+
+    .drama-hero-title {
+        display: flex;
+        align-items: center;
+        gap: 0.55rem;
+        font-size: 1.15rem;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+    }
+
+    .drama-hero-desc {
+        margin-top: 0.28rem;
+        font-size: 0.78rem;
+        color: rgba(255, 255, 255, 0.8);
+    }
+
+    .drama-hero-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.65rem;
+    }
+
+    .drama-hero-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        max-width: 100%;
+        padding: 0.38rem 0.68rem;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.14);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        font-size: 0.76rem;
+        color: rgba(255, 255, 255, 0.92);
+    }
+
+    .drama-hero-chip-label {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: rgba(255, 255, 255, 0.64);
+    }
+
+    .drama-hero-chip-value {
+        max-width: 220px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 0.8rem;
+        font-weight: 800;
+    }
+
+    .drama-hero-submeta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem 0.75rem;
+        margin-top: 0.55rem;
+        font-size: 0.76rem;
+        color: rgba(255, 255, 255, 0.82);
+    }
+
+    .drama-hero-subitem {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        min-width: 0;
+    }
+
+    .drama-hero-sublabel {
+        color: rgba(255, 255, 255, 0.58);
+    }
+
+    .drama-hero-subvalue {
+        max-width: 360px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-weight: 700;
+    }
+
+    .drama-status-card {
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 100%;
+        padding: 0.85rem 0.9rem;
+        border-radius: 0.95rem;
+        background: rgba(10, 14, 33, 0.22);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        backdrop-filter: blur(12px);
+    }
+
+    .drama-status-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.6rem;
+    }
+
+    .drama-status-title {
+        font-size: 0.78rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgba(255, 255, 255, 0.72);
+    }
+
+    .drama-status-pill {
+        padding: 0.22rem 0.65rem;
+        border-radius: 999px;
+        font-size: 0.75rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .drama-status-pill.running {
+        background: rgba(250, 204, 21, 0.18);
+        color: #fde68a;
+    }
+
+    .drama-status-pill.enabled {
+        background: rgba(52, 211, 153, 0.16);
+        color: #bbf7d0;
+    }
+
+    .drama-status-pill.disabled {
+        background: rgba(148, 163, 184, 0.16);
+        color: #e2e8f0;
+    }
+
+    .drama-status-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem 0.75rem;
+    }
+
+    .drama-status-item-label {
+        font-size: 0.72rem;
+        color: rgba(255, 255, 255, 0.58);
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+    }
+
+    .drama-status-item-value {
+        margin-top: 0.15rem;
+        font-size: 0.82rem;
+        font-weight: 700;
+        line-height: 1.35;
+        color: #fff;
+        word-break: break-word;
+    }
+
+    .drama-status-message {
+        margin-top: 0.6rem;
+        padding-top: 0.55rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+        font-size: 0.78rem;
+        color: rgba(255, 255, 255, 0.82);
+        line-height: 1.4;
+    }
+
+    .drama-status-summary {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.55rem;
+        margin-top: 0.65rem;
+        padding-top: 0.6rem;
+        border-top: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .drama-status-summary-item {
+        min-width: 0;
+    }
+
+    .drama-status-summary-label {
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        color: rgba(255, 255, 255, 0.58);
+    }
+
+    .drama-status-summary-value {
+        margin-top: 0.16rem;
+        font-size: 0.8rem;
+        font-weight: 800;
+        color: #fff;
+        line-height: 1.35;
+        word-break: break-word;
+    }
+
+    .source-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.6rem;
+    }
+
+    .source-option {
+        position: relative;
+        display: flex;
+    }
+
+    .source-option input[type="checkbox"] {
+        position: absolute;
+        opacity: 0;
+        pointer-events: none;
+    }
+
+    .source-card {
+        display: block;
+        height: 100%;
+        width: 100%;
+        min-height: 5.6rem;
+        padding: 0.7rem 0.8rem;
+        border: 1px solid rgba(79, 70, 229, 0.15);
+        border-radius: 0.85rem;
+        background: rgba(255, 255, 255, 0.72);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
+        cursor: pointer;
+    }
+
+    .source-card:hover {
+        transform: translateY(-1px);
+        border-color: rgba(79, 70, 229, 0.35);
+        box-shadow: 0 10px 24px rgba(79, 70, 229, 0.08);
+    }
+
+    .source-option input[type="checkbox"]:checked + .source-card {
+        border-color: #4f46e5;
+        background: rgba(79, 70, 229, 0.08);
+        box-shadow: 0 12px 30px rgba(79, 70, 229, 0.12);
+    }
+
+    .source-option input[type="checkbox"]:disabled + .source-card {
+        opacity: 0.5;
+        cursor: not-allowed;
+        box-shadow: none;
+    }
+
+    .source-card-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.5rem;
+        font-weight: 700;
+        color: #111827;
+    }
+
+    .source-card-desc {
+        margin-top: 0.25rem;
+        font-size: 0.74rem;
+        color: #6b7280;
+        line-height: 1.35;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .source-panel {
+        margin-top: 0.65rem;
+        padding: 0.65rem 0.75rem 0.1rem;
+        border: 1px dashed rgba(79, 70, 229, 0.2);
+        border-radius: 0.9rem;
+        background: rgba(255, 255, 255, 0.38);
+    }
+
+    .source-panel[hidden] {
+        display: none !important;
+    }
+
+    .source-panel-title {
+        margin-bottom: 0.45rem;
+        font-size: 0.82rem;
+        font-weight: 800;
+        color: #4338ca;
+        letter-spacing: 0.02em;
+    }
+
+    .dense-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem 0.75rem;
+    }
+
+    .dense-grid > .full {
+        grid-column: 1 / -1;
+    }
+
+    .compact-checks {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.45rem 0.75rem;
+    }
+
+    .compact-checks .form-check {
+        min-height: auto;
+        margin-bottom: 0;
+    }
+
+    .panel-toggle {
+        width: 100%;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        text-align: left;
+    }
+
+    .panel-toggle-copy {
+        min-width: 0;
+    }
+
+    .panel-toggle-heading {
+        font-size: 0.82rem;
+        font-weight: 800;
+        color: #4338ca;
+        letter-spacing: 0.02em;
+    }
+
+    .panel-toggle-meta {
+        margin-top: 0.2rem;
+        font-size: 0.76rem;
+        color: #6b7280;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .panel-toggle-icon {
+        color: #4f46e5;
+        transition: transform 0.18s ease;
+    }
+
+    .panel-toggle[aria-expanded="true"] .panel-toggle-icon {
+        transform: rotate(180deg);
+    }
+
+    .panel-collapse-body {
+        margin-top: 0.65rem;
+    }
+
+    .action-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-top: 0.65rem;
+    }
+
+    .action-bar > * {
+        flex: 1 1 180px;
+    }
+
+    .action-bar .btn {
+        border-radius: 0.85rem;
+        padding-top: 0.55rem;
+        padding-bottom: 0.55rem;
+        box-shadow: 0 10px 20px rgba(79, 70, 229, 0.08);
+    }
+
+    .secondary-bar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.6rem;
+        margin-top: 0.55rem;
+    }
+
+    .compact-textarea {
+        min-height: 4.8rem;
+        resize: vertical;
+    }
+
+    .source-panel .form-text {
+        margin-top: 0.2rem;
+        margin-bottom: 0;
+        line-height: 1.3;
+    }
+
+    .source-tabs {
+        gap: 0.45rem;
+    }
+
+    .source-tabs[hidden] {
+        display: none !important;
+    }
+
+    .source-tabs .nav-link {
+        border-radius: 999px;
+        padding: 0.3rem 0.8rem;
+        border: 1px solid rgba(79, 70, 229, 0.15);
+        background: rgba(255, 255, 255, 0.7);
+        color: #374151;
+        font-size: 0.78rem;
+        line-height: 1.25;
+    }
+
+    .source-tabs .nav-link.active {
+        background: #4f46e5;
+        border-color: #4f46e5;
+        color: #fff;
+        box-shadow: 0 10px 20px rgba(79, 70, 229, 0.16);
+    }
+
+    .source-tab-content {
+        margin-top: 0.6rem;
+    }
+
+    .overview-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr);
+        gap: 0.65rem;
+    }
+
+    @media (max-width: 767.98px) {
+        .source-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drama-hero-shell,
+        .dense-grid,
+        .compact-checks,
+        .overview-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .drama-status-grid {
+            grid-template-columns: 1fr 1fr;
+        }
+
+        .drama-status-summary {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    @media (min-width: 1200px) {
+        .source-grid {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+        }
+    }
+</style>
+{% endblock %}
+
 {% block content %}
 <div class="row">
-    <div class="col-md-10 col-lg-8 mx-auto">
-        <h3 class="mb-3"><i class="bi bi-calendar3 me-2"></i>追剧日历正则同步</h3>
+    <div class="col-12 drama-layout mx-auto">
+        {% set selected_sources = config.get('drama_calendar', {}).get('source', ['calendar']) %}
+        {% if selected_sources is string %}
+            {% set selected_sources = selected_sources.split(',') %}
+        {% endif %}
+        {% set drama_cfg = config.get('drama_calendar', {}) %}
+        {% set env_files_raw = (drama_cfg.get('env_files', '') or '').strip() %}
+        {% set env_key_value = drama_cfg.get('env_key', 'DRAMA_CALENDAR_REGEX') %}
+        {% set finish_mode_value = drama_cfg.get('finish_detect_mode', 'hybrid') %}
+        {% set auto_sync_enabled = drama_cfg.get('auto_sync_enabled', False) %}
+        {% set write_panel_open = not env_files_raw %}
+        {% set finish_panel_open = False %}
+        {% set env_files_count = env_files_raw.splitlines()|length if '\n' in env_files_raw else (env_files_raw.split(',')|select|list|length if env_files_raw else 0) %}
+        {% if 'all' in selected_sources %}
+            {% set effective_source_count = 7 %}
+            {% set source_summary_label = '追剧日历 / 猫眼票房 / 豆瓣美剧 / 日韩 / 国产 / 综艺 / 动漫' %}
+        {% else %}
+            {% set effective_source_count = selected_sources|length %}
+            {% set source_summary_label = [] %}
+        {% endif %}
+
+        <div class="drama-hero">
+            <div class="drama-hero-shell">
+                <div class="drama-hero-main">
+                    <div class="drama-hero-title">
+                        <i class="bi bi-calendar3"></i>
+                        <span>追剧日历正则同步</span>
+                    </div>
+                    <div class="drama-hero-desc">选择来源后执行预览或写入，详细配置按需展开。</div>
+                    <div class="drama-hero-meta">
+                        <span class="drama-hero-chip">
+                            <span class="drama-hero-chip-label">来源</span>
+                            <span class="drama-hero-chip-value">{% if 'all' in selected_sources %}全部来源 / 7 项{% else %}{{ effective_source_count }} 项{% endif %}</span>
+                        </span>
+                        <span class="drama-hero-chip">
+                            <span class="drama-hero-chip-label">变量</span>
+                            <span class="drama-hero-chip-value">{{ env_key_value }}</span>
+                        </span>
+                        <span class="drama-hero-chip">
+                            <span class="drama-hero-chip-label">判定</span>
+                            <span class="drama-hero-chip-value">{{ finish_mode_value|upper }}</span>
+                        </span>
+                    </div>
+                    <div class="drama-hero-submeta">
+                        <span class="drama-hero-subitem">
+                            <span class="drama-hero-sublabel">当前来源</span>
+                            <span class="drama-hero-subvalue">
+                                {% if 'all' in selected_sources %}
+                                    {{ source_summary_label }}
+                                {% else %}
+                                    {% set labels = [] %}
+                                    {% if 'calendar' in selected_sources %}{% set _ = labels.append('追剧日历') %}{% endif %}
+                                    {% if 'maoyan' in selected_sources %}{% set _ = labels.append('猫眼票房') %}{% endif %}
+                                    {% if 'douban' in selected_sources %}{% set _ = labels.append('豆瓣美剧') %}{% endif %}
+                                    {% if 'douban_asia' in selected_sources %}{% set _ = labels.append('豆瓣日韩') %}{% endif %}
+                                    {% if 'douban_domestic' in selected_sources %}{% set _ = labels.append('豆瓣国产剧') %}{% endif %}
+                                    {% if 'douban_variety' in selected_sources %}{% set _ = labels.append('豆瓣综艺') %}{% endif %}
+                                    {% if 'douban_animation' in selected_sources %}{% set _ = labels.append('豆瓣动漫') %}{% endif %}
+                                    {{ labels|join(' / ') if labels else '未选择' }}
+                                {% endif %}
+                            </span>
+                        </span>
+                        <span class="drama-hero-subitem">
+                            <span class="drama-hero-sublabel">目标 .env</span>
+                            <span class="drama-hero-subvalue">{{ env_files_count }} 个</span>
+                        </span>
+                        <span class="drama-hero-subitem">
+                            <span class="drama-hero-sublabel">写入模式</span>
+                            <span class="drama-hero-subvalue">{{ '追加白名单' if drama_cfg.get('append_to_whitelist', True) else '覆盖变量值' }}</span>
+                        </span>
+                    </div>
+                </div>
+
+                <aside class="drama-status-card">
+                    <div>
+                        <div class="drama-status-head">
+                            <div class="drama-status-title">调度状态</div>
+                            {% if scheduler_state.get('enabled') %}
+                                {% if scheduler_state.get('running') %}
+                                <span class="drama-status-pill running">执行中</span>
+                                {% else %}
+                                <span class="drama-status-pill enabled">已启用</span>
+                                {% endif %}
+                            {% else %}
+                            <span class="drama-status-pill disabled">未启用</span>
+                            {% endif %}
+                        </div>
+
+                        <div class="drama-status-grid">
+                            <div>
+                                <div class="drama-status-item-label">下次执行</div>
+                                <div class="drama-status-item-value">{{ scheduler_state.get('next_run_at', '未启用') or '未启用' }}</div>
+                            </div>
+                            <div>
+                                <div class="drama-status-item-label">调度模式</div>
+                                <div class="drama-status-item-value">{{ 'Cron' if scheduler_state.get('schedule_mode') == 'cron' else '间隔分钟' }}</div>
+                            </div>
+                            <div>
+                                <div class="drama-status-item-label">上次执行</div>
+                                <div class="drama-status-item-value">{{ scheduler_state.get('last_run_at', '') or '暂无' }}</div>
+                            </div>
+                            <div>
+                                <div class="drama-status-item-label">上次结果</div>
+                                <div class="drama-status-item-value">
+                                    {% if scheduler_state.get('last_status') == 'success' %}
+                                    成功
+                                    {% elif scheduler_state.get('last_status') == 'error' %}
+                                    失败
+                                    {% else %}
+                                    暂无
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    {% set last_summary = scheduler_state.get('last_summary', {}) %}
+                    {% if last_summary.get('extract') or last_summary.get('removed') or last_summary.get('result') %}
+                    <div class="drama-status-summary">
+                        <div class="drama-status-summary-item">
+                            <div class="drama-status-summary-label">提取剧名</div>
+                            <div class="drama-status-summary-value">{{ last_summary.get('extract', '0') or '0' }}</div>
+                        </div>
+                        <div class="drama-status-summary-item">
+                            <div class="drama-status-summary-label">剔除统计</div>
+                            <div class="drama-status-summary-value">{{ last_summary.get('removed', '无') or '无' }}</div>
+                        </div>
+                        <div class="drama-status-summary-item">
+                            <div class="drama-status-summary-label">写入结果</div>
+                            <div class="drama-status-summary-value">{{ last_summary.get('result', '暂无') or '暂无' }}</div>
+                        </div>
+                    </div>
+                    {% elif scheduler_state.get('last_message') %}
+                    <div class="drama-status-message">摘要：{{ scheduler_state.get('last_message') }}</div>
+                    {% endif %}
+                </aside>
+            </div>
+        </div>
 
         <div class="card shadow-sm border-primary">
             <div class="card-header bg-primary text-white">
@@ -15,275 +622,501 @@
                 <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-3">
 
                     <div class="mb-2">
-                        <label class="form-label small" for="drama_source">数据源</label>
-                        <select class="form-select form-select-sm" id="drama_source" name="drama_source">
-                            <option value="calendar" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'calendar' %}selected{% endif %}>追剧日历（blog.922928.de）</option>
-                            <option value="maoyan" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'maoyan' %}selected{% endif %}>猫眼票房（piaofang.maoyan.com）</option>
-                            <option value="douban" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'douban' %}selected{% endif %}>豆瓣热播美剧（m.douban.com）</option>
-                            <option value="all" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'all' %}selected{% endif %}>全部（追剧日历 + 猫眼 + 豆瓣热播美剧）</option>
-                        </select>
+                        <label class="form-label small">数据源</label>
+                        <div class="source-grid" id="drama_source_group">
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_calendar" name="drama_source" value="calendar" {% if 'calendar' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_calendar">
+                                    <span class="source-card-title">追剧日历 <span class="badge bg-primary">blog</span></span>
+                                    <span class="source-card-desc">抓取 blog.922928.de 最新追剧日历文章。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_maoyan" name="drama_source" value="maoyan" {% if 'maoyan' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_maoyan">
+                                    <span class="source-card-title">猫眼票房 <span class="badge bg-warning text-dark">票房</span></span>
+                                    <span class="source-card-desc">抓取猫眼票房榜，可叠加网播热度榜。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_douban" name="drama_source" value="douban" {% if 'douban' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_douban">
+                                    <span class="source-card-title">豆瓣美剧 <span class="badge bg-success">TV</span></span>
+                                    <span class="source-card-desc">抓取豆瓣热播美剧列表。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_douban_asia" name="drama_source" value="douban_asia" {% if 'douban_asia' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_douban_asia">
+                                    <span class="source-card-title">豆瓣日韩剧 <span class="badge bg-success">Asia</span></span>
+                                    <span class="source-card-desc">合并豆瓣韩剧与日剧榜单后去重。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_douban_domestic" name="drama_source" value="douban_domestic" {% if 'douban_domestic' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_douban_domestic">
+                                    <span class="source-card-title">豆瓣国产剧 <span class="badge bg-success">CN</span></span>
+                                    <span class="source-card-desc">抓取豆瓣热播国产剧列表。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_douban_variety" name="drama_source" value="douban_variety" {% if 'douban_variety' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_douban_variety">
+                                    <span class="source-card-title">豆瓣综艺 <span class="badge bg-success">Show</span></span>
+                                    <span class="source-card-desc">抓取豆瓣热播综艺榜单。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_douban_animation" name="drama_source" value="douban_animation" {% if 'douban_animation' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_douban_animation">
+                                    <span class="source-card-title">豆瓣动漫 <span class="badge bg-success">Anime</span></span>
+                                    <span class="source-card-desc">抓取豆瓣热播动漫列表。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
+                                <input type="checkbox" id="drama_source_all" name="drama_source" value="all" {% if 'all' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_all">
+                                    <span class="source-card-title">全部来源 <span class="badge bg-dark">ALL</span></span>
+                                    <span class="source-card-desc">一次合并全部来源；选中后会自动禁用其他单项。</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="form-text">支持多选。选中“全部来源”时会自动忽略并禁用其他来源。</div>
                     </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_home_url">首页 URL</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_home_url" name="drama_home_url"
-                            value="{{ config.get('drama_calendar', {}).get('home_url', 'https://blog.922928.de/') }}"
-                            placeholder="https://blog.922928.de/">
-                    </div>
+                    <div class="source-panel">
+                        <div class="source-panel-title">来源参数</div>
+                        <ul class="nav nav-pills source-tabs" id="drama_source_tabs" role="tablist">
+                            <li class="nav-item" role="presentation" data-source-tab-scope="calendar">
+                                <button class="nav-link active" id="drama_source_tab_calendar" data-source-pane="drama_source_pane_calendar" type="button" role="tab" aria-controls="drama_source_pane_calendar" aria-selected="true">追剧日历</button>
+                            </li>
+                            <li class="nav-item" role="presentation" data-source-tab-scope="maoyan">
+                                <button class="nav-link" id="drama_source_tab_maoyan" data-source-pane="drama_source_pane_maoyan" type="button" role="tab" aria-controls="drama_source_pane_maoyan" aria-selected="false">猫眼</button>
+                            </li>
+                            <li class="nav-item" role="presentation" data-source-tab-scope="douban">
+                                <button class="nav-link" id="drama_source_tab_douban" data-source-pane="drama_source_pane_douban" type="button" role="tab" aria-controls="drama_source_pane_douban" aria-selected="false">豆瓣</button>
+                            </li>
+                        </ul>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_maoyan_url">猫眼票房 URL</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_maoyan_url" name="drama_maoyan_url"
-                            value="{{ config.get('drama_calendar', {}).get('maoyan_url', 'https://piaofang.maoyan.com/box-office?ver=normal') }}"
-                            placeholder="https://piaofang.maoyan.com/box-office?ver=normal">
-                    </div>
+                        <div class="tab-content source-tab-content">
+                            <div class="tab-pane fade show active" id="drama_source_pane_calendar" role="tabpanel" aria-labelledby="drama_source_tab_calendar" tabindex="0" data-source-scope="calendar">
+                                <div class="dense-grid">
+                                    <div>
+                                        <label class="form-label small" for="drama_home_url">首页 URL</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_home_url" name="drama_home_url"
+                                            value="{{ config.get('drama_calendar', {}).get('home_url', 'https://blog.922928.de/') }}"
+                                            placeholder="https://blog.922928.de/">
+                                    </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_maoyan_top_n">猫眼前N名（仅猫眼来源生效）</label>
-                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_maoyan_top_n" name="drama_maoyan_top_n"
-                            value="{{ config.get('drama_calendar', {}).get('maoyan_top_n', 0) }}"
-                            placeholder="0 表示不限制">
-                        <div class="form-text">填写 0 表示提取全部；填写 10 表示只提取前 10 名。</div>
-                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_post_url">指定文章 URL（可选）</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_post_url" name="drama_post_url"
+                                            value="{{ config.get('drama_calendar', {}).get('post_url', '') }}"
+                                            placeholder="留空则自动抓最新追剧日历">
+                                    </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_douban_url">豆瓣热播美剧 URL</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_douban_url" name="drama_douban_url"
-                            value="{{ config.get('drama_calendar', {}).get('douban_url', 'https://m.douban.com/subject_collection/tv_american') }}"
-                            placeholder="https://m.douban.com/subject_collection/tv_american">
-                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_line_keywords">筛选关键词（逗号分隔）</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_line_keywords" name="drama_line_keywords"
+                                            value="{{ config.get('drama_calendar', {}).get('line_keywords', '上线,开播') }}"
+                                            placeholder="上线,开播">
+                                    </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_douban_top_n">豆瓣热播美剧前N名（仅豆瓣来源生效）</label>
-                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_douban_top_n" name="drama_douban_top_n"
-                            value="{{ config.get('drama_calendar', {}).get('douban_top_n', 0) }}"
-                            placeholder="0 表示不限制">
-                        <div class="form-text">填写 0 表示提取全部；填写 20 表示只提取前 20 个。</div>
-                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_remove_finished_after_days">完结后移除天数</label>
+                                        <input type="number" min="-1" step="1" class="form-control form-control-sm" id="drama_remove_finished_after_days" name="drama_remove_finished_after_days"
+                                            value="{{ config.get('drama_calendar', {}).get('remove_finished_after_days', -1) }}"
+                                            placeholder="-1 表示不移除">
+                                        <div class="form-text">-1 不移除；0 立即移除；14 表示完结满 14 天后去除。</div>
+                                    </div>
+                                </div>
+                            </div>
 
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="drama_include_maoyan_web_heat" name="drama_include_maoyan_web_heat"
-                                {% if config.get('drama_calendar', {}).get('include_maoyan_web_heat', True) %}checked{% endif %}>
-                            <label class="form-check-label small" for="drama_include_maoyan_web_heat">
-                                同时监控猫眼网播热度电视剧榜
-                            </label>
+                            <div class="tab-pane fade" id="drama_source_pane_maoyan" role="tabpanel" aria-labelledby="drama_source_tab_maoyan" tabindex="0" data-source-scope="maoyan">
+                                <div class="dense-grid">
+                                    <div class="full">
+                                        <label class="form-label small" for="drama_maoyan_url">猫眼票房 URL</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_maoyan_url" name="drama_maoyan_url"
+                                            value="{{ config.get('drama_calendar', {}).get('maoyan_url', 'https://piaofang.maoyan.com/box-office?ver=normal') }}"
+                                            placeholder="https://piaofang.maoyan.com/box-office?ver=normal">
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small" for="drama_maoyan_top_n">猫眼前N名</label>
+                                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_maoyan_top_n" name="drama_maoyan_top_n"
+                                            value="{{ config.get('drama_calendar', {}).get('maoyan_top_n', 0) }}"
+                                            placeholder="0 表示不限制">
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small" for="drama_remove_movie_premiere_after_days">电影超期移除天数</label>
+                                        <input type="number" min="-1" step="1" class="form-control form-control-sm" id="drama_remove_movie_premiere_after_days" name="drama_remove_movie_premiere_after_days"
+                                            value="{{ config.get('drama_calendar', {}).get('remove_movie_premiere_after_days', 365) }}"
+                                            placeholder="365">
+                                        <div class="form-text">默认 365；-1 表示关闭。</div>
+                                    </div>
+
+                                    <div class="full">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="drama_include_maoyan_web_heat" name="drama_include_maoyan_web_heat"
+                                                {% if config.get('drama_calendar', {}).get('include_maoyan_web_heat', True) %}checked{% endif %}>
+                                            <label class="form-check-label small" for="drama_include_maoyan_web_heat">
+                                                同时监控猫眼网播热度电视剧榜
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small" for="drama_maoyan_web_heat_url">猫眼网播热度 URL</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_maoyan_web_heat_url" name="drama_maoyan_web_heat_url"
+                                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_heat_url', 'https://piaofang.maoyan.com/web-heat') }}"
+                                            placeholder="https://piaofang.maoyan.com/web-heat">
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small" for="drama_maoyan_web_heat_top_n">网播热度前N名</label>
+                                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_maoyan_web_heat_top_n" name="drama_maoyan_web_heat_top_n"
+                                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_heat_top_n', 0) }}"
+                                            placeholder="0 表示不限制">
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="tab-pane fade" id="drama_source_pane_douban" role="tabpanel" aria-labelledby="drama_source_tab_douban" tabindex="0" data-source-scope="douban,douban_asia,douban_domestic,douban_variety,douban_animation">
+                                <div class="dense-grid">
+                                    <div>
+                                        <label class="form-label small" for="drama_douban_url">豆瓣热播美剧 URL</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_douban_url" name="drama_douban_url"
+                                            value="{{ config.get('drama_calendar', {}).get('douban_url', 'https://m.douban.com/subject_collection/tv_american') }}"
+                                            placeholder="https://m.douban.com/subject_collection/tv_american">
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small" for="drama_douban_top_n">豆瓣前N名</label>
+                                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_douban_top_n" name="drama_douban_top_n"
+                                            value="{{ config.get('drama_calendar', {}).get('douban_top_n', 0) }}"
+                                            placeholder="0 表示不限制">
+                                        <div class="form-text">0 表示提取全部；20 表示每个豆瓣来源取前 20 个。</div>
+                                    </div>
+
+                                    <div class="full form-text">除“豆瓣热播美剧”外，其余豆瓣来源都使用内置固定地址；日韩剧会先分别抓取韩剧与日剧再合并去重。</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_maoyan_web_heat_url">猫眼网播热度 URL</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_maoyan_web_heat_url" name="drama_maoyan_web_heat_url"
-                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_heat_url', 'https://piaofang.maoyan.com/web-heat') }}"
-                            placeholder="https://piaofang.maoyan.com/web-heat">
-                    </div>
+                    <div class="overview-grid">
+                        <div class="source-panel">
+                            <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_write_panel"
+                                aria-expanded="{{ 'true' if write_panel_open else 'false' }}" aria-controls="drama_write_panel">
+                                <span class="panel-toggle-copy">
+                                    <span class="panel-toggle-heading">写入设置</span>
+                                    <span class="panel-toggle-meta">
+                                        {{ env_key_value }} · {{ '已配置目标路径' if env_files_raw else '未配置目标路径' }}
+                                    </span>
+                                </span>
+                                <i class="bi bi-chevron-down panel-toggle-icon"></i>
+                            </button>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_maoyan_web_heat_top_n">网播热度前N名（0表示不限制）</label>
-                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_maoyan_web_heat_top_n" name="drama_maoyan_web_heat_top_n"
-                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_heat_top_n', 0) }}"
-                            placeholder="0 表示不限制">
-                    </div>
+                            <div id="drama_write_panel" class="collapse{% if write_panel_open %} show{% endif %}">
+                                <div class="panel-collapse-body">
+                                    <div class="dense-grid">
+                                        <div class="full">
+                                            <label class="form-label small" for="drama_env_files">目标 .env 路径（逗号或换行分隔）</label>
+                                            <textarea class="form-control form-control-sm compact-textarea" id="drama_env_files" name="drama_env_files" rows="2"
+                                                placeholder="/opt/docker/a/.env\n/opt/docker/b/.env">{{ config.get('drama_calendar', {}).get('env_files', '') }}</textarea>
+                                        </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_remove_finished_after_days">完结后移除天数（仅追剧日历生效）</label>
-                        <input type="number" min="-1" step="1" class="form-control form-control-sm" id="drama_remove_finished_after_days" name="drama_remove_finished_after_days"
-                            value="{{ config.get('drama_calendar', {}).get('remove_finished_after_days', -1) }}"
-                            placeholder="-1 表示不移除">
-                        <div class="form-text">-1 不移除；0 立即移除；例如 14 表示完结满 14 天后自动从白名单正则中去除。</div>
-                    </div>
+                                        <div class="full">
+                                            <label class="form-label small" for="drama_env_key">写入变量名</label>
+                                            <input type="text" class="form-control form-control-sm" id="drama_env_key" name="drama_env_key"
+                                                value="{{ env_key_value }}"
+                                                placeholder="DRAMA_CALENDAR_REGEX">
+                                        </div>
+                                    </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_remove_movie_premiere_after_days">电影首映超期移除天数（仅猫眼来源生效）</label>
-                        <input type="number" min="-1" step="1" class="form-control form-control-sm" id="drama_remove_movie_premiere_after_days" name="drama_remove_movie_premiere_after_days"
-                            value="{{ config.get('drama_calendar', {}).get('remove_movie_premiere_after_days', 365) }}"
-                            placeholder="365">
-                        <div class="form-text">默认 365；-1 表示关闭电影首映日期自动剔除。</div>
-                    </div>
+                                    <div class="compact-checks mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="drama_backup_before_write" name="drama_backup_before_write"
+                                                {% if config.get('drama_calendar', {}).get('backup_before_write', True) %}checked{% endif %}>
+                                            <label class="form-check-label small" for="drama_backup_before_write">
+                                                写入前备份
+                                            </label>
+                                        </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_post_url">指定文章 URL（可选）</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_post_url" name="drama_post_url"
-                            value="{{ config.get('drama_calendar', {}).get('post_url', '') }}"
-                            placeholder="留空则自动抓最新追剧日历">
-                    </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="drama_append_to_whitelist" name="drama_append_to_whitelist"
+                                                {% if config.get('drama_calendar', {}).get('append_to_whitelist', True) %}checked{% endif %}>
+                                            <label class="form-check-label small" for="drama_append_to_whitelist">
+                                                白名单追加模式
+                                            </label>
+                                        </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_line_keywords">筛选关键词（逗号分隔）</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_line_keywords" name="drama_line_keywords"
-                            value="{{ config.get('drama_calendar', {}).get('line_keywords', '上线,开播') }}"
-                            placeholder="上线,开播">
-                    </div>
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="drama_managed_scope_source_only" name="drama_managed_scope_source_only"
+                                                {% if config.get('drama_calendar', {}).get('managed_scope_source_only', True) %}checked{% endif %}>
+                                            <label class="form-check-label small" for="drama_managed_scope_source_only">
+                                                仅替换同源值
+                                            </label>
+                                        </div>
+                                    </div>
+                                    <div class="form-text mb-2">建议开启“仅替换同源值”。关闭后会按同一变量名统一替换自动写入值。</div>
+                                </div>
+                            </div>
+                        </div>
 
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_env_files">目标 .env 路径（逗号或换行分隔）</label>
-                        <textarea class="form-control form-control-sm" id="drama_env_files" name="drama_env_files" rows="4"
-                            placeholder="/opt/docker/a/.env\n/opt/docker/b/.env">{{ config.get('drama_calendar', {}).get('env_files', '') }}</textarea>
-                    </div>
+                        <div class="source-panel">
+                            <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_finish_panel"
+                                aria-expanded="{{ 'true' if finish_panel_open else 'false' }}" aria-controls="drama_finish_panel">
+                                <span class="panel-toggle-copy">
+                                    <span class="panel-toggle-heading">TMDB 与完结判定</span>
+                                    <span class="panel-toggle-meta">
+                                        {{ finish_mode_value|upper }} · {{ '已配置 TMDB Key' if (drama_cfg.get('tmdb_api_key', '') or '').strip() else '未配置 TMDB Key' }}
+                                    </span>
+                                </span>
+                                <i class="bi bi-chevron-down panel-toggle-icon"></i>
+                            </button>
 
-                    <div class="mb-3">
-                        <label class="form-label small" for="drama_env_key">写入变量名</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_env_key" name="drama_env_key"
-                            value="{{ config.get('drama_calendar', {}).get('env_key', 'DRAMA_CALENDAR_REGEX') }}"
-                            placeholder="DRAMA_CALENDAR_REGEX">
-                    </div>
+                            <div id="drama_finish_panel" class="collapse{% if finish_panel_open %} show{% endif %}">
+                                <div class="panel-collapse-body">
+                                    <div class="dense-grid">
+                                        <div>
+                                            <label class="form-label small" for="drama_finish_detect_mode">完结判定方式</label>
+                                            <select class="form-select form-select-sm" id="drama_finish_detect_mode" name="drama_finish_detect_mode">
+                                                <option value="keyword" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'keyword' %}selected{% endif %}>仅关键词（本地）</option>
+                                                <option value="tmdb" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'tmdb' %}selected{% endif %}>仅 TMDB（联网）</option>
+                                                <option value="hybrid" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'hybrid' %}selected{% endif %}>混合（关键词 + TMDB）</option>
+                                            </select>
+                                            <div class="form-text">推荐“混合”。</div>
+                                        </div>
 
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="drama_backup_before_write" name="drama_backup_before_write"
-                                {% if config.get('drama_calendar', {}).get('backup_before_write', True) %}checked{% endif %}>
-                            <label class="form-check-label small" for="drama_backup_before_write">
-                                写入前自动备份已有 .env（生成 .bak_时间戳 文件）
-                            </label>
+                                        <div>
+                                            <label class="form-label small" for="drama_tmdb_api_key">TMDB API Key（可选）</label>
+                                            <input type="text" class="form-control form-control-sm" id="drama_tmdb_api_key" name="drama_tmdb_api_key"
+                                                value="{{ config.get('drama_calendar', {}).get('tmdb_api_key', '') }}"
+                                                placeholder="留空则尝试读取环境变量 TMDB_API_KEY">
+                                        </div>
+
+                                        <div>
+                                            <label class="form-label small" for="drama_tmdb_language">TMDB 语言</label>
+                                            <input type="text" class="form-control form-control-sm" id="drama_tmdb_language" name="drama_tmdb_language"
+                                                value="{{ config.get('drama_calendar', {}).get('tmdb_language', 'zh-CN') }}" placeholder="zh-CN">
+                                        </div>
+
+                                        <div>
+                                            <label class="form-label small" for="drama_tmdb_region">TMDB 地区</label>
+                                            <input type="text" class="form-control form-control-sm" id="drama_tmdb_region" name="drama_tmdb_region"
+                                                value="{{ config.get('drama_calendar', {}).get('tmdb_region', 'CN') }}" placeholder="CN">
+                                        </div>
+
+                                        <div>
+                                            <label class="form-label small" for="drama_tmdb_year_tolerance">TMDB 年份容差</label>
+                                            <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_tmdb_year_tolerance" name="drama_tmdb_year_tolerance"
+                                                value="{{ config.get('drama_calendar', {}).get('tmdb_year_tolerance', 2) }}" placeholder="2">
+                                        </div>
+
+                                        <div>
+                                            <label class="form-label small" for="drama_tmdb_min_score">TMDB 最低置信分</label>
+                                            <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_tmdb_min_score" name="drama_tmdb_min_score"
+                                                value="{{ config.get('drama_calendar', {}).get('tmdb_min_score', 70) }}" placeholder="70">
+                                            <div class="form-text">分数越高越保守，推荐 70~85。</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="drama_append_to_whitelist" name="drama_append_to_whitelist"
-                                {% if config.get('drama_calendar', {}).get('append_to_whitelist', True) %}checked{% endif %}>
-                            <label class="form-check-label small" for="drama_append_to_whitelist">
-                                写入到关键词白名单时使用追加模式（不覆盖原有值）
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="drama_managed_scope_source_only" name="drama_managed_scope_source_only"
-                                {% if config.get('drama_calendar', {}).get('managed_scope_source_only', True) %}checked{% endif %}>
-                            <label class="form-check-label small" for="drama_managed_scope_source_only">
-                                仅替换同数据源自动写入值（追剧/猫眼互不覆盖）
-                            </label>
-                            <div class="form-text">建议开启。关闭后会按同一变量名统一替换自动写入值。</div>
-                        </div>
-                    </div>
-
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_finish_detect_mode">完结判定方式</label>
-                        <select class="form-select form-select-sm" id="drama_finish_detect_mode" name="drama_finish_detect_mode">
-                            <option value="keyword" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'keyword' %}selected{% endif %}>仅关键词（本地）</option>
-                            <option value="tmdb" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'tmdb' %}selected{% endif %}>仅 TMDB（联网）</option>
-                            <option value="hybrid" {% if config.get('drama_calendar', {}).get('finish_detect_mode', 'hybrid') == 'hybrid' %}selected{% endif %}>混合（关键词 + TMDB）</option>
-                        </select>
-                        <div class="form-text">推荐“混合”，兼顾速度和准确性。</div>
-                    </div>
-
-                    <div class="mb-2">
-                        <label class="form-label small" for="drama_tmdb_api_key">TMDB API Key（可选）</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_tmdb_api_key" name="drama_tmdb_api_key"
-                            value="{{ config.get('drama_calendar', {}).get('tmdb_api_key', '') }}"
-                            placeholder="留空则尝试读取环境变量 TMDB_API_KEY">
-                    </div>
-
-                    <div class="row g-2 mb-3">
-                        <div class="col-6">
-                            <label class="form-label small" for="drama_tmdb_language">TMDB 语言</label>
-                            <input type="text" class="form-control form-control-sm" id="drama_tmdb_language" name="drama_tmdb_language"
-                                value="{{ config.get('drama_calendar', {}).get('tmdb_language', 'zh-CN') }}" placeholder="zh-CN">
-                        </div>
-                        <div class="col-6">
-                            <label class="form-label small" for="drama_tmdb_region">TMDB 地区</label>
-                            <input type="text" class="form-control form-control-sm" id="drama_tmdb_region" name="drama_tmdb_region"
-                                value="{{ config.get('drama_calendar', {}).get('tmdb_region', 'CN') }}" placeholder="CN">
-                        </div>
-                    </div>
-
-                    <div class="row g-2 mb-3">
-                        <div class="col-6">
-                            <label class="form-label small" for="drama_tmdb_year_tolerance">TMDB 年份容差</label>
-                            <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_tmdb_year_tolerance" name="drama_tmdb_year_tolerance"
-                                value="{{ config.get('drama_calendar', {}).get('tmdb_year_tolerance', 2) }}" placeholder="2">
-                        </div>
-                        <div class="col-6">
-                            <label class="form-label small" for="drama_tmdb_min_score">TMDB 最低置信分</label>
-                            <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_tmdb_min_score" name="drama_tmdb_min_score"
-                                value="{{ config.get('drama_calendar', {}).get('tmdb_min_score', 70) }}" placeholder="70">
-                        </div>
-                        <div class="form-text">分数越高越保守。推荐：70~85。</div>
-                    </div>
-
-                    <hr>
-                    <div class="mb-3">
-                        <div class="form-check">
-                            <input class="form-check-input" type="checkbox" id="drama_auto_sync_enabled" name="drama_auto_sync_enabled"
-                                {% if config.get('drama_calendar', {}).get('auto_sync_enabled', False) %}checked{% endif %}>
-                            <label class="form-check-label small" for="drama_auto_sync_enabled">
-                                开启定时自动抓取并写入
-                            </label>
-                        </div>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label small" for="drama_auto_sync_interval_minutes">自动抓取间隔（分钟）</label>
-                        <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_auto_sync_interval_minutes" name="drama_auto_sync_interval_minutes"
-                            value="{{ config.get('drama_calendar', {}).get('auto_sync_interval_minutes', 60) }}"
-                            placeholder="60">
-                        <div class="form-text">留空 Cron 时按该间隔执行。</div>
-                    </div>
-
-                    <div class="mb-3">
-                        <label class="form-label small" for="drama_auto_sync_cron_expr">Cron 表达式（可选，优先于间隔）</label>
-                        <input type="text" class="form-control form-control-sm" id="drama_auto_sync_cron_expr" name="drama_auto_sync_cron_expr"
-                            value="{{ config.get('drama_calendar', {}).get('auto_sync_cron_expr', '') }}"
-                            placeholder="例如：0 */4 * * *">
-                        <div class="form-text">标准 5 段：分 时 日 月 周。示例：<code>0 8 * * *</code>（每天 08:00），<code>0 */6 * * *</code>（每6小时）。</div>
-                    </div>
-
-                    <div class="alert alert-light border small py-2" role="alert">
-                        <div>调度状态：
-                            {% if scheduler_state.get('enabled') %}
-                                {% if scheduler_state.get('running') %}
-                                    <span class="badge bg-info text-dark">执行中</span>
-                                {% else %}
-                                    <span class="badge bg-success">已启用</span>
-                                {% endif %}
-                            {% else %}
-                                <span class="badge bg-secondary">未启用</span>
-                            {% endif %}
-                        </div>
-                        <div class="mt-1">下次执行：{{ scheduler_state.get('next_run_at', '未启用') or '未启用' }}</div>
-                        <div>调度模式：{{ 'Cron' if scheduler_state.get('schedule_mode') == 'cron' else '间隔分钟' }}</div>
-                        <div>上次执行：{{ scheduler_state.get('last_run_at', '') or '暂无' }}</div>
-                        <div>上次结果：
-                            {% if scheduler_state.get('last_status') == 'success' %}
-                                <span class="text-success">成功</span>
-                            {% elif scheduler_state.get('last_status') == 'error' %}
-                                <span class="text-danger">失败</span>
-                            {% else %}
-                                <span class="text-muted">暂无</span>
-                            {% endif %}
-                        </div>
-                        {% if scheduler_state.get('last_message') %}
-                        <div class="text-break">摘要：{{ scheduler_state.get('last_message') }}</div>
-                        {% endif %}
-                    </div>
-
-                    <div class="d-grid gap-2 mt-2">
-                        <button type="submit" name="action" value="update_drama_calendar_settings" class="btn btn-outline-primary btn-sm w-100">保存追剧配置</button>
-
-                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-info btn-sm w-100"
-                            onclick="document.getElementById('run_mode').value='preview';">
-                            <i class="bi bi-search me-1"></i>预览提取（不写入）
+                    <div class="source-panel">
+                        {% set auto_sync_enabled = config.get('drama_calendar', {}).get('auto_sync_enabled', False) %}
+                        <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_auto_sync_panel"
+                            aria-expanded="{{ 'true' if auto_sync_enabled else 'false' }}" aria-controls="drama_auto_sync_panel">
+                            <span class="panel-toggle-copy">
+                                <span class="panel-toggle-heading">自动调度</span>
+                                <span class="panel-toggle-meta">
+                                    {% if scheduler_state.get('enabled') %}
+                                        已启用 · 下次执行 {{ scheduler_state.get('next_run_at', '未启用') or '未启用' }}
+                                    {% else %}
+                                        未启用 · 点击展开查看调度配置
+                                    {% endif %}
+                                </span>
+                            </span>
+                            <i class="bi bi-chevron-down panel-toggle-icon"></i>
                         </button>
 
-                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-primary btn-sm w-100"
+                        <div id="drama_auto_sync_panel" class="collapse{% if auto_sync_enabled %} show{% endif %}">
+                            <div class="panel-collapse-body">
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="drama_auto_sync_enabled" name="drama_auto_sync_enabled"
+                                            {% if auto_sync_enabled %}checked{% endif %}>
+                                        <label class="form-check-label small" for="drama_auto_sync_enabled">
+                                            开启定时自动抓取并写入
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="dense-grid">
+                                    <div>
+                                        <label class="form-label small" for="drama_auto_sync_interval_minutes">自动抓取间隔（分钟）</label>
+                                        <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_auto_sync_interval_minutes" name="drama_auto_sync_interval_minutes"
+                                            value="{{ config.get('drama_calendar', {}).get('auto_sync_interval_minutes', 60) }}"
+                                            placeholder="60">
+                                        <div class="form-text">留空 Cron 时按该间隔执行。</div>
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small" for="drama_auto_sync_cron_expr">Cron 表达式（可选）</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_auto_sync_cron_expr" name="drama_auto_sync_cron_expr"
+                                            value="{{ config.get('drama_calendar', {}).get('auto_sync_cron_expr', '') }}"
+                                            placeholder="例如：0 */4 * * *">
+                                        <div class="form-text">标准 5 段，优先于间隔。</div>
+                                    </div>
+                                </div>
+                                <div class="form-text mb-2">实时调度状态已移动到顶部右侧概览卡，展开这里仅修改调度参数。</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="action-bar">
+                        <button type="submit" name="action" value="update_drama_calendar_settings" class="btn btn-outline-primary btn-sm">保存追剧配置</button>
+
+                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-info btn-sm"
+                            onclick="document.getElementById('run_mode').value='preview';">
+                            <i class="bi bi-search me-1"></i>预览提取
+                        </button>
+
+                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-primary btn-sm"
                             onclick="document.getElementById('run_mode').value='apply'; return confirm('确认把提取后的正则写入目标 .env 吗？');">
-                            <i class="bi bi-download me-1"></i>执行写入 .env
+                            <i class="bi bi-download me-1"></i>执行写入
+                        </button>
+
+                        <button type="submit" name="action" value="clear_drama_calendar_env" class="btn btn-outline-danger btn-sm"
+                            onclick="return confirm('确认清空目标 .env 中该变量的内容吗？这会把当前写入变量改为空字符串。');">
+                            <i class="bi bi-eraser me-1"></i>清空变量内容
                         </button>
                     </div>
                     <input type="hidden" id="run_mode" name="run_mode" value="preview">
                 </form>
 
-                <div class="d-grid mt-2">
+                <div class="secondary-bar">
                     <a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-secondary btn-sm">
                         <i class="bi bi-journal-text me-1"></i>查看追剧日志
                     </a>
+                    <div class="form-text align-self-center mb-0">执行结果会在页面顶部显示，建议先预览再写入。</div>
                 </div>
-
-                <div class="form-text mt-2">执行结果会在页面顶部显示，建议先预览再写入。</div>
             </div>
         </div>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        const allInput = document.getElementById('drama_source_all');
+        const sourceInputs = Array.from(document.querySelectorAll('input[name="drama_source"]')).filter((el) => el !== allInput);
+        const sourceTabsNav = document.getElementById('drama_source_tabs');
+        const sourceTabItems = Array.from(document.querySelectorAll('[data-source-tab-scope]'));
+        const sourceTabButtons = sourceTabItems
+            .map((item) => item.querySelector('.nav-link'))
+            .filter(Boolean);
+        const sourceTabPanes = Array.from(document.querySelectorAll('.tab-pane[data-source-scope]'));
+
+        if (!allInput || !sourceInputs.length) {
+            return;
+        }
+
+        function scopeMatches(scopeText, activeSources) {
+            const scopes = String(scopeText || '')
+                .split(',')
+                .map((item) => item.trim())
+                .filter(Boolean);
+            return scopes.some((scope) => activeSources.has(scope));
+        }
+
+        function activateSourceTab(button) {
+            if (!button || button.hidden) {
+                return;
+            }
+
+            sourceTabButtons.forEach((tabButton) => {
+                const isActive = tabButton === button;
+                tabButton.classList.toggle('active', isActive);
+                tabButton.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            });
+
+            sourceTabPanes.forEach((pane) => {
+                const isActive = pane.id === button.dataset.sourcePane;
+                pane.classList.toggle('show', isActive);
+                pane.classList.toggle('active', isActive);
+            });
+        }
+
+        function syncSourceTabs(activeSources, preferredSource) {
+            const visibleButtons = [];
+
+            sourceTabItems.forEach((item) => {
+                const visible = scopeMatches(item.dataset.sourceTabScope, activeSources);
+                item.hidden = !visible;
+                const button = item.querySelector('.nav-link');
+                if (visible && button) {
+                    visibleButtons.push(button);
+                }
+            });
+
+            sourceTabPanes.forEach((pane) => {
+                pane.hidden = !scopeMatches(pane.dataset.sourceScope, activeSources);
+            });
+
+            if (sourceTabsNav) {
+                sourceTabsNav.hidden = visibleButtons.length <= 1;
+            }
+
+            let targetButton = null;
+            if (preferredSource) {
+                targetButton = visibleButtons.find((button) => button.id === `drama_source_tab_${preferredSource}`);
+            }
+            if (!targetButton) {
+                targetButton = visibleButtons.find((button) => button.classList.contains('active')) || visibleButtons[0] || null;
+            }
+            activateSourceTab(targetButton);
+        }
+
+        function syncSourceState(changedInput) {
+            if (changedInput === allInput && allInput.checked) {
+                sourceInputs.forEach((input) => {
+                    input.checked = false;
+                });
+            }
+
+            if (changedInput !== allInput && changedInput && changedInput.checked) {
+                allInput.checked = false;
+            }
+
+            const allChecked = allInput.checked;
+            sourceInputs.forEach((input) => {
+                input.disabled = allChecked;
+            });
+
+            const activeSources = new Set(
+                allChecked
+                    ? sourceInputs.map((input) => input.value)
+                    : sourceInputs.filter((input) => input.checked).map((input) => input.value)
+            );
+            const preferredSource = (changedInput && changedInput !== allInput && changedInput.checked) ? changedInput.value : null;
+            syncSourceTabs(activeSources, preferredSource);
+        }
+
+        sourceTabButtons.forEach((button) => {
+            button.addEventListener('click', () => activateSourceTab(button));
+        });
+
+        [allInput, ...sourceInputs].forEach((input) => {
+            input.addEventListener('change', () => syncSourceState(input));
+        });
+
+        syncSourceState();
+    })();
+</script>
 {% endblock %}

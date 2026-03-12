@@ -12,6 +12,7 @@ import uuid
 import time
 import re
 import datetime
+import shutil
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError
@@ -29,7 +30,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.65"
+VERSION = "0.4.66"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
@@ -39,6 +40,8 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
 DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
+DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
+DRAMA_RUN_BUSY_MESSAGE = '当前已有追剧任务在运行（可能是自动调度），请稍后重试。'
 
 # Load environment variables from config/.env
 try:
@@ -138,6 +141,10 @@ def load_config():
                 else:
                     merged_drama = default_config["drama_calendar"].copy()
                     merged_drama.update(config.get("drama_calendar") or {})
+                    merged_drama["douban_url"] = _normalize_douban_collection_url(
+                        str(merged_drama.get("douban_url") or ""),
+                        fallback_url=default_config["drama_calendar"]["douban_url"],
+                    )
                     config["drama_calendar"] = merged_drama
         except json.JSONDecodeError:
             flash(f"错误: 无法解析 {CONFIG_FILE}。请检查文件格式。", "error")
@@ -191,6 +198,380 @@ def _parse_env_files(raw_env_files: str):
     return result
 
 
+DRAMA_SOURCE_CHOICES = (
+    'calendar',
+    'maoyan',
+    'douban',
+    'douban_asia',
+    'douban_domestic',
+    'douban_variety',
+    'douban_animation',
+    'all',
+)
+
+
+def _normalize_drama_sources(raw_sources):
+    if isinstance(raw_sources, str):
+        candidates = [item.strip() for item in raw_sources.split(',')]
+    elif isinstance(raw_sources, (list, tuple, set)):
+        candidates = [str(item).strip() for item in raw_sources]
+    else:
+        candidates = []
+
+    normalized = []
+    seen = set()
+    for item in candidates:
+        if not item or item not in DRAMA_SOURCE_CHOICES:
+            continue
+        if item == 'all':
+            return ['all']
+        if item not in seen:
+            normalized.append(item)
+            seen.add(item)
+    return normalized or ['calendar']
+
+
+def _drama_sources_csv(raw_sources) -> str:
+    return ','.join(_normalize_drama_sources(raw_sources))
+
+
+def _normalize_douban_collection_url(raw_url: str, fallback_url: str = 'https://m.douban.com/subject_collection/tv_american') -> str:
+    text = (raw_url or '').strip()
+    if not text:
+        return fallback_url
+
+    url_matches = re.findall(r'https?://m\.douban\.com/subject_collection/[^,\s?#]+', text, flags=re.IGNORECASE)
+    if url_matches:
+        return url_matches[0]
+
+    slug_match = re.search(r'/subject_collection/([^,\s/?#]+)', text)
+    if slug_match:
+        return f'https://m.douban.com/subject_collection/{slug_match.group(1).strip()}'
+
+    return fallback_url
+
+
+def _strip_env_quotes(v: str) -> str:
+    v = (v or '').strip()
+    if len(v) >= 2 and ((v[0] == '"' and v[-1] == '"') or (v[0] == "'" and v[-1] == "'")):
+        return v[1:-1]
+    return v
+
+
+def _detect_env_quote_style(v: str) -> str:
+    s = (v or '').strip()
+    if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+        return 'double'
+    if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
+        return 'single'
+    return 'bare'
+
+
+def _format_env_value(value: str, style: str) -> str:
+    if style == 'single':
+        safe = (value or '').replace("'", "'\\''")
+        return f"'{safe}'"
+    if style == 'bare':
+        return value or ''
+    safe = (value or '').replace('"', '\\"')
+    return f'"{safe}"'
+
+
+def _update_env_key_value(env_content: str, key: str, value: str) -> str:
+    lines = (env_content or '').splitlines()
+    updated = False
+    new_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('#') or '=' not in line:
+            new_lines.append(line)
+            continue
+
+        left, raw_v = line.split('=', 1)
+        if left.strip() == key:
+            quote_style = _detect_env_quote_style(raw_v)
+            new_lines.append(f"{left}={_format_env_value(value, quote_style)}")
+            updated = True
+        else:
+            new_lines.append(line)
+
+    if not updated:
+        if new_lines and new_lines[-1].strip() != '':
+            new_lines.append('')
+        new_lines.append(f'{key}="{value}"')
+
+    return '\n'.join(new_lines) + '\n'
+
+
+def _make_env_backup_if_needed(env_path: str) -> str:
+    ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    backup_path = f"{env_path}.bak_{ts}"
+    shutil.copy2(env_path, backup_path)
+    return backup_path
+
+
+def _clear_drama_calendar_state_records(env_path: str, key: str) -> None:
+    if not DRAMA_CALENDAR_STATE_FILE or not os.path.exists(DRAMA_CALENDAR_STATE_FILE):
+        return
+    try:
+        with open(DRAMA_CALENDAR_STATE_FILE, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+        records = state.get('records') if isinstance(state, dict) else None
+        if not isinstance(records, list):
+            return
+        filtered = []
+        target_env = os.path.abspath(env_path)
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            rec_env = os.path.abspath(str(rec.get('env_path') or ''))
+            rec_key = str(rec.get('key') or '')
+            if rec_env == target_env and rec_key == key:
+                continue
+            filtered.append(rec)
+        state['records'] = filtered
+        with open(DRAMA_CALENDAR_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _clear_drama_calendar_env_values(drama_cfg: dict):
+    env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
+    if not env_files_list:
+        return False, [], ['请先在追剧日历配置中填写至少一个 .env 路径。']
+
+    env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
+    success_paths = []
+    errors = []
+
+    for env_path in env_files_list:
+        abs_env_path = os.path.abspath(env_path)
+        try:
+            original = ''
+            env_exists = os.path.exists(abs_env_path)
+            if env_exists:
+                with open(abs_env_path, 'r', encoding='utf-8') as f:
+                    original = f.read()
+            updated = _update_env_key_value(original, env_key, '')
+
+            os.makedirs(os.path.dirname(abs_env_path) or '.', exist_ok=True)
+            if env_exists:
+                emergency_backup = f"{abs_env_path}.autosnap_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                shutil.copy2(abs_env_path, emergency_backup)
+            if env_exists and bool(drama_cfg.get('backup_before_write', False)):
+                _make_env_backup_if_needed(abs_env_path)
+            with open(abs_env_path, 'w', encoding='utf-8') as f:
+                f.write(updated)
+            _clear_drama_calendar_state_records(abs_env_path, env_key)
+            success_paths.append(abs_env_path)
+        except Exception as e:
+            errors.append(f'{abs_env_path}: {e}')
+
+    ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    log_lines = [
+        f'[{ts}] [INFO] [DRAMA] 清空环境变量 key={env_key} success={len(success_paths)} errors={len(errors)}',
+    ]
+    for path in success_paths[:20]:
+        log_lines.append(f'[{ts}] [INFO] [DRAMA][CLEAR] {path}')
+    for item in errors[:20]:
+        log_lines.append(f'[{ts}] [ERROR] [DRAMA][CLEAR] {item}')
+    _append_drama_calendar_log(log_lines)
+    return len(errors) == 0, success_paths, errors
+
+
+def _estimate_drama_run_timeout(drama_cfg: dict) -> int:
+    sources = _normalize_drama_sources(drama_cfg.get('source'))
+    source_count = 7 if 'all' in sources else len(sources)
+    finish_mode = str(drama_cfg.get('finish_detect_mode') or 'hybrid').strip().lower()
+    has_tmdb_key = bool((drama_cfg.get('tmdb_api_key') or os.environ.get('TMDB_API_KEY') or '').strip())
+    remove_finished_days = int(drama_cfg.get('remove_finished_after_days', -1) or -1)
+    remove_movie_days = int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)
+
+    timeout_seconds = 180
+    if source_count >= 3:
+        timeout_seconds = max(timeout_seconds, 300)
+    if source_count >= 5 or 'all' in sources:
+        timeout_seconds = max(timeout_seconds, 600)
+    if has_tmdb_key and finish_mode in ('tmdb', 'hybrid') and remove_finished_days >= 0:
+        timeout_seconds = max(timeout_seconds, 420 if source_count < 5 else 600)
+    if has_tmdb_key and remove_movie_days >= 0 and ('maoyan' in sources or 'all' in sources):
+        timeout_seconds = max(timeout_seconds, 420 if source_count < 5 else 600)
+    return timeout_seconds
+
+
+def _decode_subprocess_output(raw: bytes) -> str:
+    data = raw or b''
+    for encoding in ('utf-8', 'utf-8-sig', 'gb18030'):
+        try:
+            return data.decode(encoding)
+        except Exception:
+            continue
+    return data.decode('utf-8', errors='replace')
+
+
+def _select_drama_log_lines(lines, *, max_lines: int = 120):
+    cleaned = [str(ln).strip() for ln in (lines or []) if str(ln).strip()]
+    if len(cleaned) <= max_lines:
+        return cleaned
+
+    noisy_markers = (
+        'TMDB 缓存命中',
+        'TMDB 发起请求',
+        'TMDB 电影缓存命中',
+        'TMDB 电影发起请求',
+    )
+    important_markers = (
+        '[INFO] 数据源:',
+        '[INFO] 来源链接:',
+        '[INFO] 提取剧名数:',
+        '[INFO] 已移除完结剧:',
+        '[INFO] 已移除超期电影:',
+        '[INFO] TMDB 补充判定为完结:',
+        '[INFO] 已跳过历史已监控剧名:',
+        '[INFO] 生成正则:',
+        '[INFO] 本次无新增剧名可写入',
+        '[OK] 已写入',
+        '[DRY-RUN] 将更新',
+        '[WARN] 未提取到任何剧名',
+        '[INFO] 猫眼提取前N:',
+        '[INFO] 豆瓣前N:',
+        '[INFO] 豆瓣日韩前N:',
+        '[INFO] 豆瓣国产剧前N:',
+        '[INFO] 豆瓣综艺前N:',
+        '[INFO] 豆瓣动漫前N:',
+        '[INFO] 完结判定模式:',
+        '[INFO] 完结移除天数:',
+        '[INFO] 电影首映剔除阈值:',
+    )
+
+    selected_idx = set()
+
+    for idx, line in enumerate(cleaned):
+        if any(marker in line for marker in important_markers):
+            selected_idx.add(idx)
+            for follow_idx in range(idx + 1, min(len(cleaned), idx + 6)):
+                if cleaned[follow_idx].lstrip().startswith('- '):
+                    selected_idx.add(follow_idx)
+                else:
+                    break
+
+    non_noisy_idx = [idx for idx, line in enumerate(cleaned) if not any(marker in line for marker in noisy_markers)]
+    for idx in non_noisy_idx[:20]:
+        selected_idx.add(idx)
+    for idx in non_noisy_idx[-40:]:
+        selected_idx.add(idx)
+
+    ordered = [cleaned[idx] for idx in sorted(selected_idx)]
+    if len(ordered) > max_lines:
+        return ordered[:max_lines]
+    return ordered
+
+
+def _summarize_drama_output_lines(lines, *, prefer_write: bool = False, max_parts: int = 4) -> str:
+    cleaned = [str(ln).strip() for ln in (lines or []) if str(ln).strip()]
+    if not cleaned:
+        return ''
+
+    priority_markers = [
+        '[OK] 已写入',
+        '[INFO] 提取剧名数:',
+        '[INFO] 已移除完结剧:',
+        '[INFO] 已移除超期电影:',
+        '[INFO] TMDB 补充判定为完结:',
+        '[INFO] 已跳过历史已监控剧名:',
+        '[INFO] 本次无新增剧名可写入',
+        '[WARN] 未提取到任何剧名',
+        '[INFO] 数据源:',
+        '[INFO] 来源链接:',
+    ]
+    if prefer_write:
+        priority_markers = ['[OK] 已写入', '[INFO] 本次无新增剧名可写入'] + [m for m in priority_markers if m not in ('[OK] 已写入', '[INFO] 本次无新增剧名可写入')]
+
+    picked: List[str] = []
+    seen: Set[str] = set()
+    for marker in priority_markers:
+        for line in cleaned:
+            if marker in line and line not in seen:
+                picked.append(line)
+                seen.add(line)
+                break
+        if len(picked) >= max_parts:
+            break
+
+    if len(picked) < max_parts:
+        noisy_markers = (
+            'TMDB 缓存命中',
+            'TMDB 发起请求',
+            'TMDB 电影缓存命中',
+            'TMDB 电影发起请求',
+        )
+        for line in cleaned:
+            if line in seen:
+                continue
+            if any(marker in line for marker in noisy_markers):
+                continue
+            picked.append(line)
+            seen.add(line)
+            if len(picked) >= max_parts:
+                break
+
+    return ' | '.join(picked[:max_parts]).strip()
+
+
+def _extract_drama_count(lines, marker: str) -> int:
+    for line in (lines or []):
+        if marker not in str(line):
+            continue
+        m = re.search(r':\s*(\d+)', str(line))
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                return 0
+    return 0
+
+
+def _build_drama_summary_items(output_lines, err_lines, *, ok: bool, dry_run: bool) -> dict:
+    lines = [str(ln).strip() for ln in (output_lines or []) if str(ln).strip()]
+    errs = [str(ln).strip() for ln in (err_lines or []) if str(ln).strip()]
+
+    extracted = _extract_drama_count(lines, '[INFO] 提取剧名数:')
+    removed_finished = _extract_drama_count(lines, '[INFO] 已移除完结剧:')
+    removed_movies = _extract_drama_count(lines, '[INFO] 已移除超期电影:')
+    skipped_existing = _extract_drama_count(lines, '[INFO] 已跳过历史已监控剧名:')
+
+    if ok:
+        if any('[OK] 已写入' in line for line in lines):
+            env_write_count = sum(1 for line in lines if '[OK] 已写入' in line)
+            result_text = f'已写入 {env_write_count} 个 .env'
+        elif any('本次无新增剧名可写入' in line for line in lines):
+            result_text = '无新增，已跳过写入'
+        elif dry_run and any('[DRY-RUN] 将更新' in line for line in lines):
+            preview_count = sum(1 for line in lines if '[DRY-RUN] 将更新' in line)
+            result_text = f'预览 {preview_count} 个 .env'
+        else:
+            result_text = '执行成功'
+    else:
+        result_text = _summarize_drama_output_lines(errs or lines, prefer_write=not dry_run, max_parts=2) or '执行失败'
+
+    removed_parts = []
+    if removed_finished:
+        removed_parts.append(f'完结 {removed_finished}')
+    if removed_movies:
+        removed_parts.append(f'电影 {removed_movies}')
+    if skipped_existing:
+        removed_parts.append(f'历史 {skipped_existing}')
+    removed_text = ' / '.join(removed_parts) if removed_parts else '无'
+
+    return {
+        'extract': (str(extracted) if extracted else '0'),
+        'removed': removed_text,
+        'result': result_text,
+    }
+
+
 def _append_drama_calendar_log(lines):
     try:
         os.makedirs(LOG_DIR, exist_ok=True)
@@ -222,16 +603,26 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
     if not env_files_list:
         return False, "", "请先在追剧日历配置中填写至少一个 .env 路径。"
 
+    if not _DRAMA_RUN_LOCK.acquire(blocking=False):
+        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+        _append_drama_calendar_log([
+            f'[{ts}] [WARN] [DRAMA] 忽略执行，已有任务运行中 trigger={trigger}',
+        ])
+        return False, '', DRAMA_RUN_BUSY_MESSAGE
+
     cmd = [
         sys.executable,
         DRAMA_CALENDAR_SCRIPT,
-        '--source', (drama_cfg.get('source') or 'calendar').strip(),
+        '--source', _drama_sources_csv(drama_cfg.get('source')),
         '--home-url', (drama_cfg.get('home_url') or 'https://blog.922928.de/').strip(),
         '--maoyan-url', (drama_cfg.get('maoyan_url') or 'https://piaofang.maoyan.com/box-office?ver=normal').strip(),
         '--maoyan-top-n', str(int(drama_cfg.get('maoyan_top_n', 0) or 0)),
         '--maoyan-web-heat-url', (drama_cfg.get('maoyan_web_heat_url') or 'https://piaofang.maoyan.com/web-heat').strip(),
         '--maoyan-web-heat-top-n', str(int(drama_cfg.get('maoyan_web_heat_top_n', 0) or 0)),
-        '--douban-url', (drama_cfg.get('douban_url') or 'https://m.douban.com/subject_collection/tv_american').strip(),
+        '--douban-url', _normalize_douban_collection_url(
+            str(drama_cfg.get('douban_url') or ''),
+            fallback_url='https://m.douban.com/subject_collection/tv_american',
+        ),
         '--douban-top-n', str(int(drama_cfg.get('douban_top_n', 0) or 0)),
         '--remove-movie-premiere-after-days', str(int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)),
         '--remove-finished-after-days', str(int(drama_cfg.get('remove_finished_after_days', -1) if drama_cfg.get('remove_finished_after_days', -1) is not None else -1)),
@@ -271,50 +662,55 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         cmd.append('--dry-run')
 
     started_at = time.strftime('%Y-%m-%d %H:%M:%S')
-    source = (drama_cfg.get('source') or 'calendar').strip()
+    source = _drama_sources_csv(drama_cfg.get('source'))
     run_label = '预览' if dry_run else '写入'
     _append_drama_calendar_log([
         f"[{started_at}] [INFO] [DRAMA] 开始执行 ({run_label}) trigger={trigger} source={source} env_files={len(env_files_list)}",
     ])
 
     try:
+        timeout_seconds = _estimate_drama_run_timeout(drama_cfg)
         proc = subprocess.run(
             cmd,
             cwd=ROOT_DIR,
             capture_output=True,
-            text=True,
-            timeout=180,
+            timeout=timeout_seconds,
             check=False,
         )
         finished_at = time.strftime('%Y-%m-%d %H:%M:%S')
         level = 'INFO' if proc.returncode == 0 else 'ERROR'
         summary = f"[{finished_at}] [{level}] [DRAMA] 执行结束 exit={proc.returncode} trigger={trigger} mode={run_label}"
         log_lines = [summary]
-        out_lines = [ln for ln in (proc.stdout or '').splitlines() if ln.strip()]
-        err_lines = [ln for ln in (proc.stderr or '').splitlines() if ln.strip()]
-        for ln in out_lines[:120]:
+        stdout_text = _decode_subprocess_output(proc.stdout)
+        stderr_text = _decode_subprocess_output(proc.stderr)
+        out_lines = [ln for ln in (stdout_text or '').splitlines() if ln.strip()]
+        err_lines = [ln for ln in (stderr_text or '').splitlines() if ln.strip()]
+        for ln in _select_drama_log_lines(out_lines, max_lines=120):
             log_lines.append(f"[{finished_at}] [INFO] [DRAMA][OUT] {ln}")
         for ln in err_lines[:120]:
             log_lines.append(f"[{finished_at}] [ERROR] [DRAMA][ERR] {ln}")
         _append_drama_calendar_log(log_lines)
-        return proc.returncode == 0, proc.stdout or '', proc.stderr or ''
+        return proc.returncode == 0, stdout_text, stderr_text
     except subprocess.TimeoutExpired:
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
         _append_drama_calendar_log([
-            f"[{ts}] [ERROR] [DRAMA] 执行超时 (180s) trigger={trigger} mode={run_label}",
+            f"[{ts}] [ERROR] [DRAMA] 执行超时 ({timeout_seconds}s) trigger={trigger} mode={run_label}",
         ])
-        return False, '', '执行超时（180秒），请检查网络连通性后重试。'
+        return False, '', f'执行超时（{timeout_seconds}秒），请检查网络连通性后重试。'
     except Exception as e:
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
         _append_drama_calendar_log([
             f"[{ts}] [ERROR] [DRAMA] 执行异常 trigger={trigger} mode={run_label}: {e}",
         ])
         return False, '', f'执行异常: {e}'
+    finally:
+        _DRAMA_RUN_LOCK.release()
 
 
 _DRAMA_SCHEDULER_STOP_EVENT = threading.Event()
 _DRAMA_SCHEDULER_THREAD = None
 _DRAMA_SCHEDULER_LOCK = threading.Lock()
+_DRAMA_RUN_LOCK = threading.Lock()
 _DRAMA_SCHEDULER_STATE = {
     'enabled': False,
     'running': False,
@@ -322,6 +718,11 @@ _DRAMA_SCHEDULER_STATE = {
     'last_run_at': '',
     'last_status': '',
     'last_message': '',
+    'last_summary': {
+        'extract': '',
+        'removed': '',
+        'result': '',
+    },
     'schedule_mode': 'interval',
 }
 
@@ -382,7 +783,7 @@ def _drama_scheduler_loop():
             enabled,
             interval_minutes,
             cron_expr,
-            str(cfg.get('source', 'calendar')),
+            _drama_sources_csv(cfg.get('source', 'calendar')),
             str(cfg.get('env_key', 'DRAMA_CALENDAR_REGEX')),
             str(cfg.get('env_files', '')),
             bool(cfg.get('include_maoyan_web_heat', True)),
@@ -433,11 +834,14 @@ def _drama_scheduler_loop():
         ok, out, err = _run_drama_calendar_update(cfg, dry_run=False, trigger='scheduler')
         output_lines = [ln for ln in (out or '').splitlines() if ln.strip()]
         err_lines = [ln for ln in (err or '').splitlines() if ln.strip()]
+        summary_items = _build_drama_summary_items(output_lines, err_lines, ok=ok, dry_run=False)
         if ok:
-            ok_lines = [ln for ln in output_lines if ln.startswith('[OK]')]
-            summary_lines = ok_lines if ok_lines else output_lines[:4]
-            summary = ' | '.join(summary_lines) if summary_lines else '自动执行成功'
+            summary = _summarize_drama_output_lines(output_lines, prefer_write=True, max_parts=4) or '自动执行成功'
             status = 'success'
+        elif (err or '').strip() == DRAMA_RUN_BUSY_MESSAGE:
+            summary = '已有任务在运行，已跳过本次自动调度'
+            status = 'success'
+            summary_items = {'extract': '', 'removed': '', 'result': '已有任务运行，已跳过'}
         else:
             summary_out = ' | '.join(output_lines[:3]) if output_lines else ''
             summary_err = ' | '.join(err_lines[:3]) if err_lines else '未知错误'
@@ -454,6 +858,7 @@ def _drama_scheduler_loop():
             last_run_at=_format_scheduler_ts(time.time()),
             last_status=status,
             last_message=summary,
+            last_summary=summary_items,
             schedule_mode=('cron' if use_cron else 'interval'),
             next_run_at=_format_scheduler_ts(next_run_ts),
         )
@@ -1232,10 +1637,7 @@ def drama_calendar_settings():
 
         def _drama_cfg_from_form(base: dict) -> dict:
             drama = dict(base or {})
-            source = (request.form.get('drama_source') or 'calendar').strip() or 'calendar'
-            if source not in ('calendar', 'maoyan', 'douban', 'all'):
-                source = 'calendar'
-            drama['source'] = source
+            drama['source'] = _normalize_drama_sources(request.form.getlist('drama_source'))
             drama['home_url'] = (request.form.get('drama_home_url') or '').strip() or 'https://blog.922928.de/'
             drama['post_url'] = (request.form.get('drama_post_url') or '').strip()
             drama['maoyan_url'] = (request.form.get('drama_maoyan_url') or '').strip() or 'https://piaofang.maoyan.com/box-office?ver=normal'
@@ -1249,7 +1651,10 @@ def drama_calendar_settings():
                 drama['maoyan_web_heat_top_n'] = max(0, int((request.form.get('drama_maoyan_web_heat_top_n') or '0').strip() or 0))
             except Exception:
                 drama['maoyan_web_heat_top_n'] = 0
-            drama['douban_url'] = (request.form.get('drama_douban_url') or '').strip() or 'https://m.douban.com/subject_collection/tv_american'
+            drama['douban_url'] = _normalize_douban_collection_url(
+                (request.form.get('drama_douban_url') or '').strip(),
+                fallback_url='https://m.douban.com/subject_collection/tv_american',
+            )
             try:
                 drama['douban_top_n'] = max(0, int((request.form.get('drama_douban_top_n') or '0').strip() or 0))
             except Exception:
@@ -1317,20 +1722,54 @@ def drama_calendar_settings():
             ok, out, err = _run_drama_calendar_update(drama_cfg, dry_run=dry_run, trigger='manual')
             output_lines = [ln for ln in (out or '').splitlines() if ln.strip()]
             err_lines = [ln for ln in (err or '').splitlines() if ln.strip()]
+            summary_items = _build_drama_summary_items(output_lines, err_lines, ok=ok, dry_run=dry_run)
 
             if ok:
                 label = '预览成功' if dry_run else '写入成功'
                 if dry_run:
-                    summary = ' | '.join(output_lines[:6]) if output_lines else '无输出'
+                    summary = _summarize_drama_output_lines(output_lines, prefer_write=False, max_parts=6) or '无输出'
                 else:
-                    ok_lines = [ln for ln in output_lines if ln.startswith('[OK]')]
-                    summary_lines = ok_lines if ok_lines else output_lines[:6]
-                    summary = ' | '.join(summary_lines) if summary_lines else '无输出'
+                    summary = _summarize_drama_output_lines(output_lines, prefer_write=True, max_parts=6) or '无输出'
                 flash(f'{label}：{summary}', 'success')
+                _set_drama_scheduler_state(
+                    last_run_at=_format_scheduler_ts(time.time()),
+                    last_status='success',
+                    last_message=summary,
+                    last_summary=summary_items,
+                )
+            elif (err or '').strip() == DRAMA_RUN_BUSY_MESSAGE:
+                flash(DRAMA_RUN_BUSY_MESSAGE, 'warning')
+                _set_drama_scheduler_state(
+                    last_run_at=_format_scheduler_ts(time.time()),
+                    last_status='warning',
+                    last_message=DRAMA_RUN_BUSY_MESSAGE,
+                    last_summary={'extract': '', 'removed': '', 'result': '已有任务运行'},
+                )
             else:
                 summary_out = ' | '.join(output_lines[:4]) if output_lines else ''
                 summary_err = ' | '.join(err_lines[:4]) if err_lines else '未知错误'
                 flash(f'追剧日历执行失败：{summary_out} {summary_err}'.strip(), 'error')
+                _set_drama_scheduler_state(
+                    last_run_at=_format_scheduler_ts(time.time()),
+                    last_status='error',
+                    last_message=(summary_out + ' ' + summary_err).strip(),
+                    last_summary=summary_items,
+                )
+
+        elif action == 'clear_drama_calendar_env':
+            drama_cfg = config.get('drama_calendar', {})
+            if request.form.get('drama_source') is not None:
+                drama_cfg = _drama_cfg_from_form(drama_cfg)
+                config['drama_calendar'] = drama_cfg
+                save_config(config)
+            ok, success_paths, errors = _clear_drama_calendar_env_values(drama_cfg)
+            env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
+            if ok:
+                flash(f'已清空 {len(success_paths)} 个 .env 中的变量内容：{env_key}', 'success')
+            elif success_paths:
+                flash(f'已清空 {len(success_paths)} 个 .env，但仍有 {len(errors)} 个失败：{env_key}', 'warning')
+            else:
+                flash(f'清空失败：{" | ".join(errors[:3])}', 'error')
 
         return redirect(url_for('drama_calendar_settings'))
 
