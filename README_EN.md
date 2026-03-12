@@ -17,6 +17,8 @@
 - 📤 Smart message forwarding
 - 📥 Automatic media/file downloads
 - 🎯 Keyword and regex filtering
+- 🛡️ Download risk controls (per-channel rate limit, dedup cooldown, file-size and free-space guards)
+- ⏱️ Dynamic download timeout based on file size (with cap/buffer and timeout logs)
 
 ### 📂 File Monitoring
 - 👀 Local directory watch
@@ -29,6 +31,13 @@
 - Visual configuration pages
 - Real-time logs
 - Login protection
+
+### 📺 Drama Calendar & Regex Sync
+- Multi-source ingestion (`calendar`, `maoyan`, web-heat, and merged `all` mode)
+- Automatic scheduling with interval mode and Cron expressions
+- Finished-show filtering via keyword / TMDB / hybrid strategies (with year tolerance and confidence score)
+- Movie age pruning for Maoyan source using TMDB premiere dates (customizable day threshold)
+- Dedicated drama logs with view / download / clear actions
 
 ## 🚀 Quick Start
 
@@ -157,7 +166,14 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.62 (2026-03-11) - Current
+### v0.4.64 (2026-03-12) - Current
+- Upgraded download timeout strategy with size-based dynamic timeout (with cap and buffer) to reduce false timeouts on large files
+- Added download timeout observability log per task for easier troubleshooting
+
+### v0.4.63 (2026-03-11)
+- Fixed Drama Calendar runs being marked as failure when there are no new titles to write (now treated as successful skip)
+
+### v0.4.62 (2026-03-11)
 - Added configurable movie premiere age removal in Drama Calendar settings (default: 365 days, `-1` to disable)
 - Added TMDB-based auto-removal for over-age movie titles from Maoyan source
 
