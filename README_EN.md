@@ -16,6 +16,7 @@
 - 🔄 Real-time channel monitoring
 - 📤 Smart message forwarding
 - 📥 Automatic media/file downloads
+- 🤖 Bot link download flow: send a video-platform URL to the bot, auto-download, then upload back to TG
 - 🎯 Keyword and regex filtering
 - 🛡️ Download risk controls (per-channel rate limit, dedup cooldown, file-size and free-space guards)
 - ⏱️ Dynamic download timeout based on file size (with cap/buffer and timeout logs)
@@ -119,6 +120,12 @@ docker compose up -d --build
 - Destination dir: `/path/to/sync`
 - Mode: `copy` / `move`
 - Stable time: e.g. `10` seconds
+
+### Example: Bot Link Download to TG
+
+- Send a supported video-platform URL to your Telegram bot
+- The bot resolves and downloads the media automatically
+- After completion, the media is uploaded back to Telegram with progress/timeout logs
 
 ## 🔐 Security Best Practices
 
