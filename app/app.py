@@ -29,7 +29,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.64"
+VERSION = "0.4.65"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
@@ -94,6 +94,8 @@ def load_config():
             "include_maoyan_web_heat": True,
             "maoyan_web_heat_url": "https://piaofang.maoyan.com/web-heat",
             "maoyan_web_heat_top_n": 0,
+            "douban_url": "https://m.douban.com/subject_collection/tv_american",
+            "douban_top_n": 0,
             "remove_movie_premiere_after_days": 365,
             "remove_finished_after_days": -1,
             "line_keywords": "上线,开播",
@@ -229,6 +231,8 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         '--maoyan-top-n', str(int(drama_cfg.get('maoyan_top_n', 0) or 0)),
         '--maoyan-web-heat-url', (drama_cfg.get('maoyan_web_heat_url') or 'https://piaofang.maoyan.com/web-heat').strip(),
         '--maoyan-web-heat-top-n', str(int(drama_cfg.get('maoyan_web_heat_top_n', 0) or 0)),
+        '--douban-url', (drama_cfg.get('douban_url') or 'https://m.douban.com/subject_collection/tv_american').strip(),
+        '--douban-top-n', str(int(drama_cfg.get('douban_top_n', 0) or 0)),
         '--remove-movie-premiere-after-days', str(int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)),
         '--remove-finished-after-days', str(int(drama_cfg.get('remove_finished_after_days', -1) if drama_cfg.get('remove_finished_after_days', -1) is not None else -1)),
         '--finish-detect-mode', (drama_cfg.get('finish_detect_mode') or 'hybrid').strip(),
@@ -1229,7 +1233,7 @@ def drama_calendar_settings():
         def _drama_cfg_from_form(base: dict) -> dict:
             drama = dict(base or {})
             source = (request.form.get('drama_source') or 'calendar').strip() or 'calendar'
-            if source not in ('calendar', 'maoyan', 'all'):
+            if source not in ('calendar', 'maoyan', 'douban', 'all'):
                 source = 'calendar'
             drama['source'] = source
             drama['home_url'] = (request.form.get('drama_home_url') or '').strip() or 'https://blog.922928.de/'
@@ -1245,6 +1249,11 @@ def drama_calendar_settings():
                 drama['maoyan_web_heat_top_n'] = max(0, int((request.form.get('drama_maoyan_web_heat_top_n') or '0').strip() or 0))
             except Exception:
                 drama['maoyan_web_heat_top_n'] = 0
+            drama['douban_url'] = (request.form.get('drama_douban_url') or '').strip() or 'https://m.douban.com/subject_collection/tv_american'
+            try:
+                drama['douban_top_n'] = max(0, int((request.form.get('drama_douban_top_n') or '0').strip() or 0))
+            except Exception:
+                drama['douban_top_n'] = 0
             try:
                 drama['remove_movie_premiere_after_days'] = int((request.form.get('drama_remove_movie_premiere_after_days') or '365').strip() or 365)
             except Exception:

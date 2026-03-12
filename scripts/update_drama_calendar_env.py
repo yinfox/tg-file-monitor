@@ -15,6 +15,7 @@ import requests
 HOME_URL = "https://blog.922928.de/"
 MAOYAN_BOX_OFFICE_URL = "https://piaofang.maoyan.com/box-office?ver=normal"
 MAOYAN_WEB_HEAT_URL = "https://piaofang.maoyan.com/web-heat"
+DOUBAN_AMERICAN_TV_URL = "https://m.douban.com/subject_collection/tv_american"
 DEFAULT_STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "drama_calendar_state.json")
 DEFAULT_TMDB_CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "tmdb_tv_status_cache.json")
 FINISH_KEYWORDS = ("完结", "收官", "大结局")
@@ -29,6 +30,15 @@ FINISH_EXCLUDE_KEYWORDS = (
 )
 TMDB_FINISHED_STATUSES = {"ended", "canceled", "cancelled"}
 TMDB_MIN_CONFIDENCE_SCORE = 70
+
+
+def _clean_extracted_title(title: str) -> str:
+    s = (title or "").strip()
+    if not s:
+        return ""
+    # 统一去掉尾部季数后缀：例如“极乐凶间 第二季” -> “极乐凶间”。
+    s = re.sub(r"\s+第[一二三四五六七八九十百零两0-9]+季$", "", s).strip()
+    return s
 
 
 def parse_date_from_post_url(post_url: str) -> Optional[datetime.date]:
@@ -463,7 +473,7 @@ def extract_titles_from_text(text: str, include_keywords: Sequence[str]) -> Tupl
 
         target_lines.append(line)
         for title in re.findall(r"《([^》]+)》", line):
-            cleaned = title.strip()
+            cleaned = _clean_extracted_title(title)
             if not cleaned:
                 continue
             if cleaned in seen_titles:
@@ -504,7 +514,8 @@ def extract_calendar_title_states(
         if not has_include_kw and not has_finish_kw:
             continue
 
-        line_titles = [t.strip() for t in re.findall(r"《([^》]+)》", line) if t.strip()]
+        line_titles = [_clean_extracted_title(t) for t in re.findall(r"《([^》]+)》", line)]
+        line_titles = [t for t in line_titles if t]
         if not line_titles:
             continue
 
@@ -550,7 +561,7 @@ def extract_calendar_title_states(
     seen: Set[str] = set()
     for line in lines:
         for title in re.findall(r"《([^》]+)》", line):
-            cleaned = title.strip()
+            cleaned = _clean_extracted_title(title)
             if not cleaned or cleaned in seen:
                 continue
             st = title_states.get(cleaned)
@@ -567,7 +578,7 @@ def extract_maoyan_movie_names(raw_html: str) -> List[str]:
 
     # 1) Prefer structured fields if present.
     for m in re.findall(r'"movieName"\s*:\s*"(.*?)"', raw_html, flags=re.IGNORECASE):
-        name = html.unescape(m).strip()
+        name = _clean_extracted_title(html.unescape(m))
         if not name or name in seen:
             continue
         seen.add(name)
@@ -579,7 +590,7 @@ def extract_maoyan_movie_names(raw_html: str) -> List[str]:
         mm = re.match(r'^(.+?)\s+上映\d+天', line)
         if not mm:
             continue
-        name = mm.group(1).strip().strip('|').strip()
+        name = _clean_extracted_title(mm.group(1).strip().strip('|').strip())
         if not name:
             continue
         # Skip obvious non-title rows.
@@ -603,7 +614,7 @@ def extract_maoyan_web_heat_names(raw_html: str) -> List[str]:
     }
 
     for m in re.findall(r'"name"\s*:\s*"(.*?)"', raw_html, flags=re.IGNORECASE):
-        name = html.unescape(m).strip()
+        name = _clean_extracted_title(html.unescape(m))
         if not name or name in seen or name in blocked_names:
             continue
         if len(name) <= 1:
@@ -613,6 +624,87 @@ def extract_maoyan_web_heat_names(raw_html: str) -> List[str]:
         seen.add(name)
         names.append(name)
 
+    return names
+
+
+def extract_douban_collection_titles(raw_html: str) -> List[str]:
+    names: List[str] = []
+    seen: Set[str] = set()
+
+    blocked_names = {
+        "豆瓣", "豆瓣电影", "豆瓣评分", "全部", "更多", "加载中", "立即打开",
+        "电视剧", "电影", "综艺", "动漫", "纪录片", "热门", "最新",
+    }
+
+    for m in re.findall(r'"title"\s*:\s*"(.*?)"', raw_html, flags=re.IGNORECASE):
+        name = _clean_extracted_title(html.unescape(m))
+        if not name or name in blocked_names:
+            continue
+        if len(name) <= 1:
+            continue
+        if re.fullmatch(r"\d+", name):
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+
+    if names:
+        return names
+
+    # Fallback: parse anchor text that points to /subject/<id>/
+    for m in re.findall(r'<a[^>]+href=["\'][^"\']*/subject/\d+/?[^"\']*["\'][^>]*>(.*?)</a>', raw_html, flags=re.IGNORECASE | re.DOTALL):
+        name = _clean_extracted_title(strip_html(m).strip())
+        if not name or name in blocked_names:
+            continue
+        if len(name) <= 1:
+            continue
+        if re.fullmatch(r"\d+", name):
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
+
+    return names
+
+
+def fetch_douban_collection_titles(douban_url: str, *, count: int, timeout: int = 20) -> List[str]:
+    m = re.search(r"/subject_collection/([^/?#]+)", douban_url or "")
+    if not m:
+        raise RuntimeError(f"无效的豆瓣合集 URL: {douban_url}")
+
+    slug = m.group(1).strip()
+    api_url = f"https://m.douban.com/rexxar/api/v2/subject_collection/{slug}/items"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
+        "Referer": (douban_url or f"https://m.douban.com/subject_collection/{slug}"),
+        "Accept": "application/json",
+    }
+    req_count = max(1, min(200, int(count or 50)))
+    resp = requests.get(
+        api_url,
+        params={"start": 0, "count": req_count},
+        headers=headers,
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+
+    payload = resp.json() if resp.content else {}
+    items = payload.get("subject_collection_items") if isinstance(payload, dict) else None
+    if not isinstance(items, list):
+        return []
+
+    names: List[str] = []
+    seen: Set[str] = set()
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        name = _clean_extracted_title(str(it.get("title") or ""))
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        names.append(name)
     return names
 
 
@@ -1122,8 +1214,8 @@ def main() -> int:
     parser.add_argument(
         "--source",
         default="calendar",
-        choices=["calendar", "maoyan", "all"],
-        help="数据源：calendar(追剧日历) / maoyan(猫眼票房) / all(两者合并)",
+        choices=["calendar", "maoyan", "douban", "all"],
+        help="数据源：calendar(追剧日历) / maoyan(猫眼票房) / douban(豆瓣热播美剧) / all(三者合并)",
     )
     parser.add_argument("--home-url", default=HOME_URL, help="博客首页 URL")
     parser.add_argument("--post-url", default="", help="指定文章 URL（不传则自动取最新追剧日历）")
@@ -1132,6 +1224,8 @@ def main() -> int:
     parser.add_argument("--include-maoyan-web-heat", action="store_true", help="猫眼来源时同时抓取网播热度榜")
     parser.add_argument("--maoyan-web-heat-url", default=MAOYAN_WEB_HEAT_URL, help="猫眼网播热度 URL")
     parser.add_argument("--maoyan-web-heat-top-n", type=int, default=0, help="猫眼网播热度仅提取前N名，0表示不限制")
+    parser.add_argument("--douban-url", default=DOUBAN_AMERICAN_TV_URL, help="豆瓣热播美剧 URL")
+    parser.add_argument("--douban-top-n", type=int, default=0, help="豆瓣热播美剧仅提取前N名，0表示不限制")
     parser.add_argument("--remove-movie-premiere-after-days", type=int, default=365, help="仅猫眼来源生效：电影首映超过多少天后移除；-1表示不移除，默认365")
     parser.add_argument("--remove-finished-after-days", type=int, default=-1, help="仅对追剧日历生效：完结多少天后从结果中移除；-1表示不移除")
     parser.add_argument(
@@ -1210,8 +1304,10 @@ def main() -> int:
         tmdb_marked_finished_titles: List[str] = []
         calendar_titles: List[str] = []
         maoyan_titles: List[str] = []
+        douban_titles: List[str] = []
         calendar_source_url = ""
         maoyan_source_url = ""
+        douban_source_url = ""
 
         finish_detect_mode = (args.finish_detect_mode or "hybrid").strip().lower()
         tmdb_api_key = (args.tmdb_api_key or os.environ.get("TMDB_API_KEY") or "").strip()
@@ -1387,15 +1483,60 @@ def main() -> int:
             else:
                 print("[INFO] 已关闭电影首映日期剔除(remove_movie_premiere_after_days=-1)")
 
+        if args.source in ("douban", "all"):
+            douban_url = (args.douban_url or DOUBAN_AMERICAN_TV_URL).strip()
+            req_count = int(args.douban_top_n or 0)
+            if req_count <= 0:
+                req_count = 100
+            titles = fetch_douban_collection_titles(douban_url, count=req_count, timeout=20)
+            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0:
+                douban_titles, removed_from_douban, douban_cache_dirty = _remove_finished_titles_by_tmdb(
+                    titles,
+                    remove_days=remove_days,
+                    tmdb_enabled=tmdb_enabled,
+                    finish_detect_mode=finish_detect_mode,
+                    tmdb_api_key=tmdb_api_key,
+                    tmdb_language=tmdb_language,
+                    tmdb_region=tmdb_region,
+                    tmdb_timeout=tmdb_timeout,
+                    tmdb_cache=tmdb_cache,
+                    tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                    tmdb_year_tolerance=tmdb_year_tolerance,
+                    tmdb_min_score=tmdb_min_score,
+                    tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                )
+                if douban_cache_dirty:
+                    tmdb_cache_dirty = True
+                if removed_from_douban:
+                    removed_finished_titles.extend(removed_from_douban)
+            else:
+                douban_titles = titles
+                if finish_detect_mode in ("tmdb", "hybrid"):
+                    print("[INFO] 豆瓣来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            douban_source_url = douban_url
+
+        if tmdb_cache_dirty:
+            try:
+                _save_tmdb_cache(args.tmdb_cache_file, tmdb_cache)
+            except Exception as e:
+                print(f"[WARN] TMDB 缓存写入失败: {e}")
+
         if args.source == "calendar":
             titles = calendar_titles
             source_url = calendar_source_url
         elif args.source == "maoyan":
             titles = maoyan_titles
             source_url = maoyan_source_url
+        elif args.source == "douban":
+            titles = douban_titles
+            source_url = douban_source_url
         else:
-            titles = merge_unique(calendar_titles, maoyan_titles)
-            source_url = f"calendar={calendar_source_url}; maoyan={maoyan_source_url}"
+            titles = merge_unique(merge_unique(calendar_titles, maoyan_titles), douban_titles)
+            source_url = f"calendar={calendar_source_url}; maoyan={maoyan_source_url}; douban={douban_source_url}"
 
         titles = dedupe_titles_normalized(titles)
         titles_before_append = len(titles)
@@ -1434,6 +1575,9 @@ def main() -> int:
             if bool(args.include_maoyan_web_heat):
                 print(f"[INFO] 网播热度链接: {(args.maoyan_web_heat_url or MAOYAN_WEB_HEAT_URL).strip()}")
                 print(f"[INFO] 网播热度前N: {int(args.maoyan_web_heat_top_n or 0) if int(args.maoyan_web_heat_top_n or 0) > 0 else '不限制'}")
+        if args.source in ("douban", "all"):
+            print(f"[INFO] 豆瓣链接: {(args.douban_url or DOUBAN_AMERICAN_TV_URL).strip()}")
+            print(f"[INFO] 豆瓣前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
         print(f"[INFO] 提取剧名数: {len(titles)}")
         if skipped_existing_titles:
             print(f"[INFO] 已跳过历史已监控剧名: {len(skipped_existing_titles)}")

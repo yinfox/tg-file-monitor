@@ -19,7 +19,8 @@
                         <select class="form-select form-select-sm" id="drama_source" name="drama_source">
                             <option value="calendar" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'calendar' %}selected{% endif %}>追剧日历（blog.922928.de）</option>
                             <option value="maoyan" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'maoyan' %}selected{% endif %}>猫眼票房（piaofang.maoyan.com）</option>
-                            <option value="all" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'all' %}selected{% endif %}>全部（追剧日历 + 猫眼）</option>
+                            <option value="douban" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'douban' %}selected{% endif %}>豆瓣热播美剧（m.douban.com）</option>
+                            <option value="all" {% if config.get('drama_calendar', {}).get('source', 'calendar') == 'all' %}selected{% endif %}>全部（追剧日历 + 猫眼 + 豆瓣热播美剧）</option>
                         </select>
                     </div>
 
@@ -43,6 +44,21 @@
                             value="{{ config.get('drama_calendar', {}).get('maoyan_top_n', 0) }}"
                             placeholder="0 表示不限制">
                         <div class="form-text">填写 0 表示提取全部；填写 10 表示只提取前 10 名。</div>
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_douban_url">豆瓣热播美剧 URL</label>
+                        <input type="text" class="form-control form-control-sm" id="drama_douban_url" name="drama_douban_url"
+                            value="{{ config.get('drama_calendar', {}).get('douban_url', 'https://m.douban.com/subject_collection/tv_american') }}"
+                            placeholder="https://m.douban.com/subject_collection/tv_american">
+                    </div>
+
+                    <div class="mb-2">
+                        <label class="form-label small" for="drama_douban_top_n">豆瓣热播美剧前N名（仅豆瓣来源生效）</label>
+                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_douban_top_n" name="drama_douban_top_n"
+                            value="{{ config.get('drama_calendar', {}).get('douban_top_n', 0) }}"
+                            placeholder="0 表示不限制">
+                        <div class="form-text">填写 0 表示提取全部；填写 20 表示只提取前 20 个。</div>
                     </div>
 
                     <div class="mb-3">

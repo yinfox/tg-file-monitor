@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.64-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.65-orange.svg)](.)
 
 </div>
 
@@ -34,7 +34,7 @@
 - Login protection
 
 ### 📺 Drama Calendar & Regex Sync
-- Multi-source ingestion (`calendar`, `maoyan`, web-heat, and merged `all` mode)
+- Multi-source ingestion (`calendar`, `maoyan`, `douban`, web-heat, and merged `all` mode)
 - Automatic scheduling with interval mode and Cron expressions
 - Finished-show filtering via keyword / TMDB / hybrid strategies (with year tolerance and confidence score)
 - Movie age pruning for Maoyan source using TMDB premiere dates (customizable day threshold)

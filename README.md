@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.64-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.65-orange.svg)](.)
 
 </div>
 
@@ -189,7 +189,7 @@ python scripts/update_drama_calendar_env.py \
 ```
 
 可选参数：
-- `--source`：数据源，`calendar`(追剧日历) 或 `maoyan`(猫眼票房)
+- `--source`：数据源，`calendar`(追剧日历) / `maoyan`(猫眼票房) / `douban`(豆瓣热播美剧) / `all`(三者合并)
 - `--post-url`：手动指定某篇追剧日历文章
 - `--maoyan-url`：猫眼票房页面地址
 - `--maoyan-top-n`：猫眼仅提取前 N 名（0 表示不限制）
