@@ -30,7 +30,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.69"
+VERSION = "0.4.70"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
@@ -364,7 +364,7 @@ def _clean_extracted_title(title: str) -> str:
     s = s.replace('\u3000', ' ')
     s = re.sub(r'\s+第[一二三四五六七八九十百零两0-9]+季$', '', s).strip()
     s = re.sub(r'[`~!@#$%^&*=|\\\\/;\"\'<>,.?•…\\-—_]', '', s)
-    s = re.sub(r'[！＠＃￥％……＆＊［\\[\\]］【】｛{}｝「」『』《》〈〉〔〕〖〗“”‘’、，。；？～｜]', '', s)
+    s = re.sub(r'[！＠＃￥％……＆＊［\\[\\]］【】｛{}｝「」『』《》〈〉〔〕〖〗“”‘’、，。；？～｜×✕]', '', s)
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
