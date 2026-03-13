@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.66-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.67-orange.svg)](.)
 
 </div>
 
@@ -173,7 +173,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.66 (2026-03-12) - Current
+### v0.4.67 (2026-03-13) - Current
+- Fixed Drama regex append behavior so appended rules are rebuilt as `|`-joined regex instead of comma-separated fragments
+- Normalized legacy escaped title tokens during append merges, preventing stale patterns like `\\(` and `\\)` from spreading
+
+### v0.4.66 (2026-03-12)
 - Reworked the Drama Calendar page with multi-select sources, source tabs, a compact layout, and a top-right scheduler status card
 - Fixed Drama Calendar TMDB routing and Douban source normalization, and added run concurrency protection plus dynamic timeouts
 - Added structured run summaries, clearer Drama logs, and a one-click action to clear target env variable contents

@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.66-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.67-orange.svg)](.)
 
 </div>
 
@@ -327,7 +327,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.66 (2026-03-12) - 当前版本
+### v0.4.67 (2026-03-13) - 当前版本
+- ✅ 修复追剧正则追加格式：不再把规则按 `,` 追加，统一重建为 `|` 分隔的正则表达式
+- ✅ 追加写入时自动清理历史转义噪音（如 `海贼王\\(真人版\\)`），避免旧脏数据继续扩散
+
+### v0.4.66 (2026-03-12)
 - ✅ 追剧配置页重构：数据源支持多选、卡片选择、来源参数 Tabs、顶部调度状态卡与更紧凑布局
 - ✅ 追剧同步稳定性增强：修复 TMDB 电视剧/电影请求串线、自动纠正异常豆瓣合集 URL、增加任务并发保护与动态超时
 - ✅ 追剧摘要与日志增强：新增结构化顶部摘要、清空环境变量内容按钮，并让日志优先保留提取数/剔除数/写入结果等关键信息

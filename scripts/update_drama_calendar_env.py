@@ -942,11 +942,40 @@ def _extract_titles_from_regex_value(regex_value: str) -> List[str]:
     for token in re.findall(r"\^\(\?=\.\*(.*?)\)\.\*\$", regex_value):
         # 将 re.escape 产生的反斜杠恢复为原始字符。
         title = re.sub(r"\\(.)", r"\1", token).strip()
+        title = _clean_extracted_title(title)
         if not title or title in seen:
             continue
         seen.add(title)
         found.append(title)
     return found
+
+
+def _merge_regex_values(existing_value: str, add_value: str, remove_values: Sequence[str]) -> str:
+    existing_titles = _extract_titles_from_regex_value(existing_value)
+    remove_norms: Set[str] = set()
+    for old_value in remove_values or []:
+        for title in _extract_titles_from_regex_value(old_value):
+            norm = _normalize_title_for_match(title)
+            if norm:
+                remove_norms.add(norm)
+
+    kept_titles: List[str] = []
+    kept_norms: Set[str] = set()
+    for title in existing_titles:
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in remove_norms or norm in kept_norms:
+            continue
+        kept_titles.append(title)
+        kept_norms.add(norm)
+
+    for title in _extract_titles_from_regex_value(add_value):
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in kept_norms:
+            continue
+        kept_titles.append(title)
+        kept_norms.add(norm)
+
+    return build_regex_from_titles(kept_titles)
 
 
 def _collect_existing_monitored_titles(env_files: Sequence[str], env_key: str) -> Set[str]:
@@ -1189,12 +1218,7 @@ def _replace_managed_append_value(
         found_key = True
         quote_style = _detect_quote_style(raw_v)
         current = _strip_quotes(raw_v)
-        for old in old_values:
-            current = _remove_value_from_csv(current, old)
-        if current:
-            merged = current if new_value in [x.strip() for x in current.split(",") if x.strip()] else f"{current},{new_value}"
-        else:
-            merged = new_value
+        merged = _merge_regex_values(current, new_value, old_values)
         replaced_lines.append(f"{left}={_format_env_value(merged, quote_style)}")
 
     if not found_key:
