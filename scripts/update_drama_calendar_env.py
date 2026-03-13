@@ -76,6 +76,64 @@ def _normalize_douban_collection_url(raw_url: str, fallback_url: str = DOUBAN_AM
     return fallback_url
 
 
+def _parse_keyword_filters(raw_keywords: str) -> List[str]:
+    if not raw_keywords:
+        return []
+    items: List[str] = []
+    seen: Set[str] = set()
+    for part in re.split(r"[\n,]+", str(raw_keywords or "")):
+        keyword = _clean_extracted_title(part)
+        if not keyword or keyword in seen:
+            continue
+        items.append(keyword)
+        seen.add(keyword)
+    return items
+
+
+def _apply_source_keyword_filters(
+    titles: Sequence[str],
+    *,
+    source_name: str,
+    whitelist_keywords: Sequence[str],
+    blacklist_keywords: Sequence[str],
+) -> Tuple[List[str], List[Tuple[str, str]], List[Tuple[str, str]]]:
+    whitelist = [str(item).strip() for item in (whitelist_keywords or []) if str(item).strip()]
+    blacklist = [str(item).strip() for item in (blacklist_keywords or []) if str(item).strip()]
+    if not whitelist and not blacklist:
+        return list(titles), [], []
+
+    kept: List[str] = []
+    removed_by_whitelist: List[Tuple[str, str]] = []
+    removed_by_blacklist: List[Tuple[str, str]] = []
+
+    for title in titles:
+        current = str(title or "").strip()
+        if not current:
+            continue
+        if whitelist:
+            matched_whitelist = next((keyword for keyword in whitelist if keyword in current), "")
+            if not matched_whitelist:
+                removed_by_whitelist.append((current, "未命中任何白名单"))
+                continue
+        matched_blacklist = next((keyword for keyword in blacklist if keyword in current), "")
+        if matched_blacklist:
+            removed_by_blacklist.append((current, matched_blacklist))
+            continue
+        kept.append(current)
+
+    print(
+        f"[INFO] {source_name} 过滤: whitelist={len(whitelist)} blacklist={len(blacklist)} "
+        f"removed_by_whitelist={len(removed_by_whitelist)} removed_by_blacklist={len(removed_by_blacklist)} kept={len(kept)}"
+    )
+    if removed_by_whitelist:
+        for item, reason in removed_by_whitelist[:10]:
+            print(f"  - whitelist剔除: {item} [原因: {reason}]")
+    if removed_by_blacklist:
+        for item, reason in removed_by_blacklist[:10]:
+            print(f"  - blacklist剔除: {item} [命中: {reason}]")
+    return kept, removed_by_whitelist, removed_by_blacklist
+
+
 def _clean_extracted_title(title: str) -> str:
     s = (title or "").strip()
     if not s:
@@ -86,7 +144,7 @@ def _clean_extracted_title(title: str) -> str:
     s = re.sub(r"\s+第[一二三四五六七八九十百零两0-9]+季$", "", s).strip()
     # 去掉常见装饰性括号和特殊符号，只保留中英文、数字与空格。
     s = re.sub(r"[`~!@#$%^&*=|\\\\/;\"'<>,.?•…\-—_]", "", s)
-    s = re.sub(r"[！＠＃￥％……＆＊（）()［\[\]］【】｛{}｝「」『』《》〈〉〔〕〖〗“”‘’、，。；？～｜]", "", s)
+    s = re.sub(r"[！＠＃￥％……＆＊［\[\]］【】｛{}｝「」『』《》〈〉〔〕〖〗“”‘’、，。；？～｜]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -128,6 +186,49 @@ def _normalize_title_for_match(title: str) -> str:
     t = (title or "").strip().lower()
     t = re.sub(r"[\s\-_:：·\.\,，。\(\)\[\]【】]+", "", t)
     return t
+
+
+def _parse_title_alias_map(raw: str) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    if not raw:
+        return mapping
+    for line in str(raw).splitlines():
+        text = line.strip()
+        if not text:
+            continue
+        sep = None
+        for token in ("=>", "->", "=", "：", ":"):
+            if token in text:
+                sep = token
+                break
+        if not sep:
+            continue
+        left, right = text.split(sep, 1)
+        key = _clean_extracted_title(left)
+        val = _clean_extracted_title(right)
+        if not key or not val:
+            continue
+        mapping[_normalize_title_for_match(key)] = val
+    return mapping
+
+
+def _apply_title_aliases(titles: Sequence[str], alias_map: Dict[str, str]) -> Tuple[List[str], int]:
+    if not titles:
+        return [], 0
+    if not alias_map:
+        return list(titles), 0
+    replaced = 0
+    result: List[str] = []
+    for title in titles:
+        norm = _normalize_title_for_match(title)
+        alias = alias_map.get(norm)
+        if alias:
+            if alias != title:
+                replaced += 1
+            result.append(alias)
+        else:
+            result.append(title)
+    return result, replaced
 
 
 def _load_tmdb_cache(cache_file: str) -> Dict[str, Any]:
@@ -1162,6 +1263,36 @@ def _save_state(state_file: str, data: Dict[str, object]) -> None:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def _update_state_source_titles(
+    state_file: str,
+    env_files: Sequence[str],
+    env_key: str,
+    source_title_map: Dict[str, Sequence[str]],
+) -> None:
+    if not state_file:
+        return
+    state = _load_state(state_file)
+    source_titles = state.get("source_titles") if isinstance(state, dict) else None
+    if not isinstance(source_titles, dict):
+        source_titles = {}
+
+    for env_path in env_files:
+        abs_env = os.path.abspath(env_path)
+        env_entry = source_titles.get(abs_env)
+        if not isinstance(env_entry, dict):
+            env_entry = {}
+        key_entry = env_entry.get(env_key)
+        if not isinstance(key_entry, dict):
+            key_entry = {}
+        for source, titles in (source_title_map or {}).items():
+            key_entry[source] = list(titles or [])
+        env_entry[env_key] = key_entry
+        source_titles[abs_env] = env_entry
+
+    state["source_titles"] = source_titles
+    _save_state(state_file, state)
+
+
 def _remove_value_from_csv(existing: str, value: str) -> str:
     items = [x.strip() for x in (existing or "").split(",") if x.strip()]
     kept = [x for x in items if x != value]
@@ -1335,6 +1466,63 @@ def _make_backup_if_needed(env_path: str) -> str:
     return backup_path
 
 
+def normalize_env_regex_file(
+    env_path: str,
+    key: str,
+    *,
+    dry_run: bool,
+    backup: bool,
+    require_existing: bool,
+) -> bool:
+    env_exists = os.path.exists(env_path)
+    if require_existing and not env_exists:
+        raise RuntimeError(f"目标 .env 不存在，已阻止写入: {env_path}")
+
+    original = ""
+    if env_exists:
+        with open(env_path, "r", encoding="utf-8") as f:
+            original = f.read()
+
+    current = _extract_env_value_by_key(original, key)
+    if not current:
+        return False
+
+    normalized = build_regex_from_titles(_extract_titles_from_regex_value(current))
+    if normalized == current:
+        return False
+
+    updated = update_env_content(original, key, normalized)
+
+    before_non_target_keys = _collect_non_target_env_keys(original, key)
+    after_non_target_keys = _collect_non_target_env_keys(updated, key)
+    lost_keys = sorted(before_non_target_keys - after_non_target_keys)
+    if lost_keys:
+        preview = ", ".join(lost_keys[:8])
+        if len(lost_keys) > 8:
+            preview += ", ..."
+        raise RuntimeError(
+            "检测到规范化将导致其他环境变量丢失，已中止写入。"
+            f" 丢失键: {preview}"
+        )
+
+    if dry_run:
+        print(f"[DRY-RUN] 将规范化 {env_path}: {key}")
+        return True
+
+    os.makedirs(os.path.dirname(env_path) or ".", exist_ok=True)
+    if env_exists:
+        emergency_backup = f"{env_path}.autosnap_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        shutil.copy2(env_path, emergency_backup)
+        print(f"[INFO] 已创建应急快照: {emergency_backup}")
+    if backup and env_exists:
+        backup_path = _make_backup_if_needed(env_path)
+        print(f"[INFO] 已备份: {backup_path}")
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write(updated)
+    print(f"[OK] 已规范化 {os.path.abspath(env_path)}: {key}")
+    return True
+
+
 def _extract_env_key_from_line(line: str) -> Optional[str]:
     stripped = (line or "").strip()
     if not stripped or stripped.startswith("#"):
@@ -1399,6 +1587,10 @@ def write_env_file(
     else:
         updated = update_env_content(original, key, value)
 
+    if updated == original:
+        print(f"[INFO] 已无变化，跳过写入: {os.path.abspath(env_path)}")
+        return
+
     # 防误清空保护：任何情况下都不允许非目标键数量下降。
     before_non_target_keys = _collect_non_target_env_keys(original, key)
     after_non_target_keys = _collect_non_target_env_keys(updated, key)
@@ -1435,13 +1627,31 @@ def main() -> int:
     )
     parser.add_argument("--home-url", default=HOME_URL, help="博客首页 URL")
     parser.add_argument("--post-url", default="", help="指定文章 URL（不传则自动取最新追剧日历）")
+    parser.add_argument("--calendar-whitelist-keywords", default="", help="追剧日历白名单关键词，逗号或换行分隔")
+    parser.add_argument("--calendar-blacklist-keywords", default="", help="追剧日历黑名单关键词，逗号或换行分隔")
     parser.add_argument("--maoyan-url", default=MAOYAN_BOX_OFFICE_URL, help="猫眼票房 URL")
     parser.add_argument("--maoyan-top-n", type=int, default=0, help="猫眼票房仅提取前N名，0表示不限制")
     parser.add_argument("--include-maoyan-web-heat", action="store_true", help="猫眼来源时同时抓取网播热度榜")
     parser.add_argument("--maoyan-web-heat-url", default=MAOYAN_WEB_HEAT_URL, help="猫眼网播热度 URL")
     parser.add_argument("--maoyan-web-heat-top-n", type=int, default=0, help="猫眼网播热度仅提取前N名，0表示不限制")
+    parser.add_argument("--maoyan-whitelist-keywords", default="", help="猫眼来源白名单关键词，逗号或换行分隔")
+    parser.add_argument("--maoyan-blacklist-keywords", default="", help="猫眼来源黑名单关键词，逗号或换行分隔")
     parser.add_argument("--douban-url", default=DOUBAN_AMERICAN_TV_URL, help="豆瓣热播美剧 URL")
     parser.add_argument("--douban-top-n", type=int, default=0, help="豆瓣热播美剧仅提取前N名，0表示不限制")
+    parser.add_argument("--douban-asia-top-n", type=int, default=None, help="豆瓣日韩剧仅提取前N名，默认跟随 douban-top-n")
+    parser.add_argument("--douban-domestic-top-n", type=int, default=None, help="豆瓣国产剧仅提取前N名，默认跟随 douban-top-n")
+    parser.add_argument("--douban-variety-top-n", type=int, default=None, help="豆瓣综艺仅提取前N名，默认跟随 douban-top-n")
+    parser.add_argument("--douban-animation-top-n", type=int, default=None, help="豆瓣动漫仅提取前N名，默认跟随 douban-top-n")
+    parser.add_argument("--douban-whitelist-keywords", default="", help="豆瓣美剧白名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-blacklist-keywords", default="", help="豆瓣美剧黑名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-asia-whitelist-keywords", default="", help="豆瓣日韩剧白名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-asia-blacklist-keywords", default="", help="豆瓣日韩剧黑名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-domestic-whitelist-keywords", default="", help="豆瓣国产剧白名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-domestic-blacklist-keywords", default="", help="豆瓣国产剧黑名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-variety-whitelist-keywords", default="", help="豆瓣综艺白名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-variety-blacklist-keywords", default="", help="豆瓣综艺黑名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-animation-whitelist-keywords", default="", help="豆瓣动漫白名单关键词，逗号或换行分隔")
+    parser.add_argument("--douban-animation-blacklist-keywords", default="", help="豆瓣动漫黑名单关键词，逗号或换行分隔")
     parser.add_argument("--remove-movie-premiere-after-days", type=int, default=365, help="仅猫眼来源生效：电影首映超过多少天后移除；-1表示不移除，默认365")
     parser.add_argument("--remove-finished-after-days", type=int, default=-1, help="仅对追剧日历生效：完结多少天后从结果中移除；-1表示不移除")
     parser.add_argument(
@@ -1482,6 +1692,11 @@ def main() -> int:
         help="用于筛选行的关键词，逗号分隔（默认：上线,开播）",
     )
     parser.add_argument(
+        "--title-alias-map",
+        default="",
+        help="识别词替换映射，每行一个，格式: 原名=新名 或 原名=>新名",
+    )
+    parser.add_argument(
         "--env-files",
         required=True,
         help="目标 .env 文件路径，多个用逗号分隔",
@@ -1512,6 +1727,8 @@ def main() -> int:
     finish_exclude_keywords = [k.strip() for k in str(args.finish_exclude_keywords or '').split(',') if k.strip()]
     if not finish_exclude_keywords:
         finish_exclude_keywords = list(FINISH_EXCLUDE_KEYWORDS)
+
+    title_alias_map = _parse_title_alias_map(args.title_alias_map)
 
     env_files = [p.strip() for p in args.env_files.split(",") if p.strip()]
     if not env_files:
@@ -1655,7 +1872,16 @@ def main() -> int:
                 if finish_detect_mode in ("tmdb", "hybrid"):
                     print("[INFO] 已关闭完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
 
-            calendar_titles = titles
+            calendar_titles, _, _ = _apply_source_keyword_filters(
+                titles,
+                source_name="追剧日历",
+                whitelist_keywords=_parse_keyword_filters(args.calendar_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.calendar_blacklist_keywords),
+            )
+            if title_alias_map:
+                calendar_titles, alias_count = _apply_title_aliases(calendar_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(追剧日历): {alias_count}")
             calendar_source_url = post_url
 
         if tmdb_cache_dirty:
@@ -1730,7 +1956,16 @@ def main() -> int:
             else:
                 print("[INFO] 已关闭电影首映日期剔除(remove_movie_premiere_after_days=-1)")
 
-            maoyan_titles = merge_unique(box_titles, web_heat_titles)
+            maoyan_titles, _, _ = _apply_source_keyword_filters(
+                merge_unique(box_titles, web_heat_titles),
+                source_name="猫眼来源",
+                whitelist_keywords=_parse_keyword_filters(args.maoyan_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.maoyan_blacklist_keywords),
+            )
+            if title_alias_map:
+                maoyan_titles, alias_count = _apply_title_aliases(maoyan_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(猫眼): {alias_count}")
             maoyan_source_url = maoyan_url
 
         if "douban" in selected_sources or include_all_sources:
@@ -1768,16 +2003,27 @@ def main() -> int:
                 if finish_detect_mode in ("tmdb", "hybrid"):
                     print("[INFO] 豆瓣来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
 
+            douban_titles, _, _ = _apply_source_keyword_filters(
+                douban_titles,
+                source_name="豆瓣美剧",
+                whitelist_keywords=_parse_keyword_filters(args.douban_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.douban_blacklist_keywords),
+            )
+            if title_alias_map:
+                douban_titles, alias_count = _apply_title_aliases(douban_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(豆瓣美剧): {alias_count}")
             douban_source_url = douban_url
 
         if "douban_asia" in selected_sources or include_all_sources:
-            req_count = int(args.douban_top_n or 0)
+            top_n_asia = args.douban_asia_top_n if args.douban_asia_top_n is not None else args.douban_top_n
+            req_count = int(top_n_asia or 0)
             if req_count <= 0:
                 req_count = 100
             korean_titles = fetch_douban_collection_titles(DOUBAN_KOREAN_TV_URL, count=req_count, timeout=20)
             japanese_titles = fetch_douban_collection_titles(DOUBAN_JAPANESE_TV_URL, count=req_count, timeout=20)
             titles = merge_unique(korean_titles, japanese_titles)
-            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+            titles = apply_top_n(titles, int(top_n_asia or 0))
 
             remove_days = int(args.remove_finished_after_days or -1)
             if remove_days >= 0:
@@ -1806,14 +2052,25 @@ def main() -> int:
                 if finish_detect_mode in ("tmdb", "hybrid"):
                     print("[INFO] 豆瓣日韩来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
 
+            douban_asia_titles, _, _ = _apply_source_keyword_filters(
+                douban_asia_titles,
+                source_name="豆瓣日韩剧",
+                whitelist_keywords=_parse_keyword_filters(args.douban_asia_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.douban_asia_blacklist_keywords),
+            )
+            if title_alias_map:
+                douban_asia_titles, alias_count = _apply_title_aliases(douban_asia_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(豆瓣日韩): {alias_count}")
             douban_asia_source_url = f"{DOUBAN_KOREAN_TV_URL},{DOUBAN_JAPANESE_TV_URL}"
 
         if "douban_domestic" in selected_sources or include_all_sources:
-            req_count = int(args.douban_top_n or 0)
+            top_n_domestic = args.douban_domestic_top_n if args.douban_domestic_top_n is not None else args.douban_top_n
+            req_count = int(top_n_domestic or 0)
             if req_count <= 0:
                 req_count = 100
             titles = fetch_douban_collection_titles(DOUBAN_DOMESTIC_TV_URL, count=req_count, timeout=20)
-            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+            titles = apply_top_n(titles, int(top_n_domestic or 0))
 
             remove_days = int(args.remove_finished_after_days or -1)
             if remove_days >= 0:
@@ -1842,14 +2099,25 @@ def main() -> int:
                 if finish_detect_mode in ("tmdb", "hybrid"):
                     print("[INFO] 豆瓣国产剧来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
 
+            douban_domestic_titles, _, _ = _apply_source_keyword_filters(
+                douban_domestic_titles,
+                source_name="豆瓣国产剧",
+                whitelist_keywords=_parse_keyword_filters(args.douban_domestic_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.douban_domestic_blacklist_keywords),
+            )
+            if title_alias_map:
+                douban_domestic_titles, alias_count = _apply_title_aliases(douban_domestic_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(豆瓣国产剧): {alias_count}")
             douban_domestic_source_url = DOUBAN_DOMESTIC_TV_URL
 
         if "douban_variety" in selected_sources or include_all_sources:
-            req_count = int(args.douban_top_n or 0)
+            top_n_variety = args.douban_variety_top_n if args.douban_variety_top_n is not None else args.douban_top_n
+            req_count = int(top_n_variety or 0)
             if req_count <= 0:
                 req_count = 100
             titles = fetch_douban_collection_titles(DOUBAN_VARIETY_SHOW_URL, count=req_count, timeout=20)
-            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+            titles = apply_top_n(titles, int(top_n_variety or 0))
 
             remove_days = int(args.remove_finished_after_days or -1)
             if remove_days >= 0:
@@ -1878,14 +2146,25 @@ def main() -> int:
                 if finish_detect_mode in ("tmdb", "hybrid"):
                     print("[INFO] 豆瓣综艺来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
 
+            douban_variety_titles, _, _ = _apply_source_keyword_filters(
+                douban_variety_titles,
+                source_name="豆瓣综艺",
+                whitelist_keywords=_parse_keyword_filters(args.douban_variety_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.douban_variety_blacklist_keywords),
+            )
+            if title_alias_map:
+                douban_variety_titles, alias_count = _apply_title_aliases(douban_variety_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(豆瓣综艺): {alias_count}")
             douban_variety_source_url = DOUBAN_VARIETY_SHOW_URL
 
         if "douban_animation" in selected_sources or include_all_sources:
-            req_count = int(args.douban_top_n or 0)
+            top_n_animation = args.douban_animation_top_n if args.douban_animation_top_n is not None else args.douban_top_n
+            req_count = int(top_n_animation or 0)
             if req_count <= 0:
                 req_count = 100
             titles = fetch_douban_collection_titles(DOUBAN_ANIMATION_URL, count=req_count, timeout=20)
-            titles = apply_top_n(titles, int(args.douban_top_n or 0))
+            titles = apply_top_n(titles, int(top_n_animation or 0))
 
             remove_days = int(args.remove_finished_after_days or -1)
             if remove_days >= 0:
@@ -1914,6 +2193,16 @@ def main() -> int:
                 if finish_detect_mode in ("tmdb", "hybrid"):
                     print("[INFO] 豆瓣动漫来源未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
 
+            douban_animation_titles, _, _ = _apply_source_keyword_filters(
+                douban_animation_titles,
+                source_name="豆瓣动漫",
+                whitelist_keywords=_parse_keyword_filters(args.douban_animation_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.douban_animation_blacklist_keywords),
+            )
+            if title_alias_map:
+                douban_animation_titles, alias_count = _apply_title_aliases(douban_animation_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(豆瓣动漫): {alias_count}")
             douban_animation_source_url = DOUBAN_ANIMATION_URL
 
         if tmdb_cache_dirty:
@@ -1922,46 +2211,43 @@ def main() -> int:
             except Exception as e:
                 print(f"[WARN] TMDB 缓存写入失败: {e}")
 
-        if args.source == ["calendar"]:
-            titles = calendar_titles
-            source_url = calendar_source_url
-        elif args.source == ["maoyan"]:
-            titles = maoyan_titles
-            source_url = maoyan_source_url
-        elif args.source == ["douban"]:
-            titles = douban_titles
-            source_url = douban_source_url
-        elif args.source == ["douban_asia"]:
-            titles = douban_asia_titles
-            source_url = douban_asia_source_url
-        elif args.source == ["douban_domestic"]:
-            titles = douban_domestic_titles
-            source_url = douban_domestic_source_url
-        elif args.source == ["douban_variety"]:
-            titles = douban_variety_titles
-            source_url = douban_variety_source_url
-        elif args.source == ["douban_animation"]:
-            titles = douban_animation_titles
-            source_url = douban_animation_source_url
+        source_results = {
+            "calendar": (calendar_titles, calendar_source_url),
+            "maoyan": (maoyan_titles, maoyan_source_url),
+            "douban": (douban_titles, douban_source_url),
+            "douban_asia": (douban_asia_titles, douban_asia_source_url),
+            "douban_domestic": (douban_domestic_titles, douban_domestic_source_url),
+            "douban_variety": (douban_variety_titles, douban_variety_source_url),
+            "douban_animation": (douban_animation_titles, douban_animation_source_url),
+        }
+
+        if len(args.source) == 1 and args.source[0] != "all":
+            merge_order = [args.source[0]]
         else:
-            source_results = {
-                "calendar": (calendar_titles, calendar_source_url),
-                "maoyan": (maoyan_titles, maoyan_source_url),
-                "douban": (douban_titles, douban_source_url),
-                "douban_asia": (douban_asia_titles, douban_asia_source_url),
-                "douban_domestic": (douban_domestic_titles, douban_domestic_source_url),
-                "douban_variety": (douban_variety_titles, douban_variety_source_url),
-                "douban_animation": (douban_animation_titles, douban_animation_source_url),
-            }
             merge_order = [name for name in SOURCE_CHOICES if name != "all" and (include_all_sources or name in selected_sources)]
-            titles = []
-            source_url_parts: List[str] = []
+
+        source_url_parts: List[str] = []
+        if len(merge_order) == 1:
+            source_url = source_results[merge_order[0]][1]
+        else:
             for name in merge_order:
-                part_titles, part_url = source_results[name]
-                titles = merge_unique(titles, part_titles)
-                source_url_parts.append(f"{name}={part_url}")
+                source_url_parts.append(f"{name}={source_results[name][1]}")
             source_url = "; ".join(source_url_parts)
 
+        source_title_map: Dict[str, List[str]] = {}
+        seen_norm: Set[str] = set()
+        for name in merge_order:
+            part_titles = dedupe_titles_normalized(source_results[name][0])
+            for title in part_titles:
+                norm = _normalize_title_for_match(title)
+                if not norm or norm in seen_norm:
+                    continue
+                seen_norm.add(norm)
+                source_title_map.setdefault(name, []).append(title)
+
+        titles = []
+        for name in merge_order:
+            titles.extend(source_title_map.get(name, []))
         titles = dedupe_titles_normalized(titles)
         titles_before_append = len(titles)
 
@@ -1969,16 +2255,20 @@ def main() -> int:
         if bool(args.append):
             existing_monitored_norm = _collect_existing_monitored_titles(env_files, args.env_key)
             if existing_monitored_norm:
-                filtered: List[str] = []
                 for title in titles:
                     norm = _normalize_title_for_match(title)
                     if norm and norm in existing_monitored_norm:
                         skipped_existing_titles.append(title)
-                        continue
-                    filtered.append(title)
-                titles = filtered
 
         regex = build_regex_from_titles(titles)
+
+        if not args.dry_run:
+            _update_state_source_titles(
+                args.state_file or DEFAULT_STATE_FILE,
+                env_files,
+                args.env_key,
+                source_title_map,
+            )
 
         source_label = ",".join(args.source)
         print(f"[INFO] 数据源: {source_label}")
@@ -2004,17 +2294,21 @@ def main() -> int:
             print(f"[INFO] 豆瓣链接: {(args.douban_url or DOUBAN_AMERICAN_TV_URL).strip()}")
             print(f"[INFO] 豆瓣前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
         if "douban_asia" in selected_sources or include_all_sources:
+            top_n_asia = args.douban_asia_top_n if args.douban_asia_top_n is not None else args.douban_top_n
             print(f"[INFO] 豆瓣日韩链接: {DOUBAN_KOREAN_TV_URL},{DOUBAN_JAPANESE_TV_URL}")
-            print(f"[INFO] 豆瓣日韩前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+            print(f"[INFO] 豆瓣日韩前N: {int(top_n_asia or 0) if int(top_n_asia or 0) > 0 else '不限制'}")
         if "douban_domestic" in selected_sources or include_all_sources:
+            top_n_domestic = args.douban_domestic_top_n if args.douban_domestic_top_n is not None else args.douban_top_n
             print(f"[INFO] 豆瓣国产剧链接: {DOUBAN_DOMESTIC_TV_URL}")
-            print(f"[INFO] 豆瓣国产剧前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+            print(f"[INFO] 豆瓣国产剧前N: {int(top_n_domestic or 0) if int(top_n_domestic or 0) > 0 else '不限制'}")
         if "douban_variety" in selected_sources or include_all_sources:
+            top_n_variety = args.douban_variety_top_n if args.douban_variety_top_n is not None else args.douban_top_n
             print(f"[INFO] 豆瓣综艺链接: {DOUBAN_VARIETY_SHOW_URL}")
-            print(f"[INFO] 豆瓣综艺前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+            print(f"[INFO] 豆瓣综艺前N: {int(top_n_variety or 0) if int(top_n_variety or 0) > 0 else '不限制'}")
         if "douban_animation" in selected_sources or include_all_sources:
+            top_n_animation = args.douban_animation_top_n if args.douban_animation_top_n is not None else args.douban_top_n
             print(f"[INFO] 豆瓣动漫链接: {DOUBAN_ANIMATION_URL}")
-            print(f"[INFO] 豆瓣动漫前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")
+            print(f"[INFO] 豆瓣动漫前N: {int(top_n_animation or 0) if int(top_n_animation or 0) > 0 else '不限制'}")
         print(f"[INFO] 提取剧名数: {len(titles)}")
         if skipped_existing_titles:
             print(f"[INFO] 已跳过历史已监控剧名: {len(skipped_existing_titles)}")
@@ -2033,7 +2327,22 @@ def main() -> int:
         if not titles:
             # 有些场景并非抓取失败，而是“全部命中去重/剔除规则后无需更新”。
             if titles_before_append > 0 or skipped_existing_titles or removed_finished_titles:
-                print("[INFO] 本次无新增剧名可写入，已跳过 .env 更新")
+                normalized_count = 0
+                if bool(args.append):
+                    for env_path in env_files:
+                        changed = normalize_env_regex_file(
+                            env_path,
+                            args.env_key,
+                            dry_run=args.dry_run,
+                            backup=args.backup,
+                            require_existing=(not bool(args.allow_create_env)),
+                        )
+                        if changed:
+                            normalized_count += 1
+                if normalized_count > 0:
+                    print(f"[INFO] 本次无新增剧名可写入，已规范化 {normalized_count} 个 .env")
+                else:
+                    print("[INFO] 本次无新增剧名可写入，已跳过 .env 更新")
                 return 0
             print("[WARN] 未提取到任何剧名，不更新 .env", file=sys.stderr)
             return 1

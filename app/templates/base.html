@@ -311,6 +311,14 @@
                 overlay.classList.remove('active');
             });
         }
+
+        // Auto-dismiss flash alerts
+        setTimeout(() => {
+            document.querySelectorAll('.alert.alert-dismissible').forEach((el) => {
+                const instance = bootstrap.Alert.getOrCreateInstance(el);
+                instance.close();
+            });
+        }, 3500);
     </script>
     {% block scripts %}{% endblock %}
 </body>

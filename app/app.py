@@ -30,7 +30,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.67"
+VERSION = "0.4.68"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
@@ -92,16 +92,35 @@ def load_config():
             "source": "calendar",
             "home_url": "https://blog.922928.de/",
             "post_url": "",
+            "calendar_whitelist_keywords": "",
+            "calendar_blacklist_keywords": "",
             "maoyan_url": "https://piaofang.maoyan.com/box-office?ver=normal",
             "maoyan_top_n": 0,
             "include_maoyan_web_heat": True,
             "maoyan_web_heat_url": "https://piaofang.maoyan.com/web-heat",
             "maoyan_web_heat_top_n": 0,
+            "maoyan_whitelist_keywords": "",
+            "maoyan_blacklist_keywords": "",
             "douban_url": "https://m.douban.com/subject_collection/tv_american",
             "douban_top_n": 0,
+            "douban_asia_top_n": 0,
+            "douban_domestic_top_n": 0,
+            "douban_variety_top_n": 0,
+            "douban_animation_top_n": 0,
+            "douban_whitelist_keywords": "",
+            "douban_blacklist_keywords": "",
+            "douban_asia_whitelist_keywords": "",
+            "douban_asia_blacklist_keywords": "",
+            "douban_domestic_whitelist_keywords": "",
+            "douban_domestic_blacklist_keywords": "",
+            "douban_variety_whitelist_keywords": "",
+            "douban_variety_blacklist_keywords": "",
+            "douban_animation_whitelist_keywords": "",
+            "douban_animation_blacklist_keywords": "",
             "remove_movie_premiere_after_days": 365,
             "remove_finished_after_days": -1,
             "line_keywords": "上线,开播",
+            "title_alias_map": "",
             "env_files": "",
             "env_key": "DRAMA_CALENDAR_REGEX",
             "backup_before_write": True,
@@ -140,7 +159,16 @@ def load_config():
                     config["drama_calendar"] = default_config["drama_calendar"].copy()
                 else:
                     merged_drama = default_config["drama_calendar"].copy()
-                    merged_drama.update(config.get("drama_calendar") or {})
+                    raw_drama = config.get("drama_calendar") or {}
+                    merged_drama.update(raw_drama)
+                    for key in (
+                        "douban_asia_top_n",
+                        "douban_domestic_top_n",
+                        "douban_variety_top_n",
+                        "douban_animation_top_n",
+                    ):
+                        if key not in raw_drama:
+                            merged_drama[key] = int(merged_drama.get("douban_top_n", 0) or 0)
                     merged_drama["douban_url"] = _normalize_douban_collection_url(
                         str(merged_drama.get("douban_url") or ""),
                         fallback_url=default_config["drama_calendar"]["douban_url"],
@@ -311,6 +339,338 @@ def _make_env_backup_if_needed(env_path: str) -> str:
     return backup_path
 
 
+def _extract_env_value_by_key(env_content: str, key: str) -> str:
+    for line in (env_content or '').splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or '=' not in line:
+            continue
+        left, raw_v = line.split('=', 1)
+        if left.strip() == key:
+            return _strip_env_quotes(raw_v)
+    return ''
+
+
+def _normalize_title_for_match(title: str) -> str:
+    t = (title or '').strip().lower()
+    t = re.sub(r'[\s\-_:：·\.\,，。\(\)\[\]【】]+', '', t)
+    return t
+
+
+def _clean_extracted_title(title: str) -> str:
+    s = (title or '').strip()
+    if not s:
+        return ''
+    s = html.unescape(s)
+    s = s.replace('\u3000', ' ')
+    s = re.sub(r'\s+第[一二三四五六七八九十百零两0-9]+季$', '', s).strip()
+    s = re.sub(r'[`~!@#$%^&*=|\\\\/;\"\'<>,.?•…\\-—_]', '', s)
+    s = re.sub(r'[！＠＃￥％……＆＊［\\[\\]］【】｛{}｝「」『』《》〈〉〔〕〖〗“”‘’、，。；？～｜]', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def _extract_titles_from_regex_value(regex_value: str) -> list:
+    if not regex_value:
+        return []
+    found = []
+    seen = set()
+    for token in re.findall(r'\^\(\?=\.\*(.*?)\)\.\*\$', regex_value):
+        title = re.sub(r'\\(.)', r'\1', token).strip()
+        title = _clean_extracted_title(title)
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        found.append(title)
+    return found
+
+
+def _build_regex_from_titles(titles: list) -> str:
+    if not titles:
+        return ''
+    escaped = [re.escape(t) for t in titles if str(t).strip()]
+    if not escaped:
+        return ''
+    escaped.sort(key=len, reverse=True)
+    return '|'.join([f'^(?=.*{item}).*$' for item in escaped])
+
+
+def _load_drama_calendar_state() -> dict:
+    if not DRAMA_CALENDAR_STATE_FILE or not os.path.exists(DRAMA_CALENDAR_STATE_FILE):
+        return {'records': []}
+    try:
+        with open(DRAMA_CALENDAR_STATE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict) and isinstance(data.get('records'), list):
+            return data
+    except Exception:
+        pass
+    return {'records': []}
+
+
+def _save_drama_calendar_state(state: dict) -> None:
+    try:
+        os.makedirs(os.path.dirname(DRAMA_CALENDAR_STATE_FILE) or '.', exist_ok=True)
+        with open(DRAMA_CALENDAR_STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump(state, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _merge_regex_values(existing_value: str, add_value: str, remove_values: list) -> str:
+    existing_titles = _extract_titles_from_regex_value(existing_value)
+    remove_norms = set()
+    for old_value in remove_values or []:
+        for title in _extract_titles_from_regex_value(old_value):
+            norm = _normalize_title_for_match(title)
+            if norm:
+                remove_norms.add(norm)
+
+    kept_titles = []
+    kept_norms = set()
+    for title in existing_titles:
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in remove_norms or norm in kept_norms:
+            continue
+        kept_titles.append(title)
+        kept_norms.add(norm)
+
+    for title in _extract_titles_from_regex_value(add_value):
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in kept_norms:
+            continue
+        kept_titles.append(title)
+        kept_norms.add(norm)
+
+    return _build_regex_from_titles(kept_titles)
+
+
+def _replace_managed_append_value_in_memory(
+    env_content: str,
+    key: str,
+    source_tag: str,
+    env_path: str,
+    new_value: str,
+    records: list,
+    managed_scope: str,
+) -> tuple:
+    target_env = os.path.abspath(env_path)
+    old_values = []
+    new_records = []
+    for rec in records or []:
+        if not isinstance(rec, dict):
+            continue
+        rec_env = os.path.abspath(str(rec.get('env_path') or ''))
+        rec_key = str(rec.get('key') or '')
+        rec_source = str(rec.get('source') or '')
+        rec_value = str(rec.get('value') or '')
+        should_replace = False
+        if managed_scope == 'key':
+            should_replace = (rec_env == target_env and rec_key == key)
+        else:
+            should_replace = (rec_env == target_env and rec_key == key and rec_source == source_tag)
+
+        if should_replace:
+            if rec_value:
+                old_values.append(rec_value)
+            continue
+        new_records.append(rec)
+
+    lines = (env_content or '').splitlines()
+    replaced_lines = []
+    found_key = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith('#') or '=' not in line:
+            replaced_lines.append(line)
+            continue
+        left, raw_v = line.split('=', 1)
+        if left.strip() != key:
+            replaced_lines.append(line)
+            continue
+        found_key = True
+        quote_style = _detect_env_quote_style(raw_v)
+        current = _strip_env_quotes(raw_v)
+        merged = _merge_regex_values(current, new_value, old_values)
+        replaced_lines.append(f"{left}={_format_env_value(merged, quote_style)}")
+
+    if not found_key:
+        if replaced_lines and replaced_lines[-1].strip() != '':
+            replaced_lines.append('')
+        replaced_lines.append(f'{key}="{new_value}"')
+
+    new_records.append(
+        {
+            'env_path': target_env,
+            'key': key,
+            'source': source_tag,
+            'value': new_value,
+            'updated_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        }
+    )
+    return '\n'.join(replaced_lines) + '\n', new_records
+
+
+def _label_for_source_tag(source_tag: str) -> str:
+    base_labels = {
+        'calendar': '追剧日历',
+        'maoyan': '猫眼',
+        'douban': '豆瓣美剧',
+        'douban_asia': '豆瓣日韩',
+        'douban_domestic': '豆瓣国产剧',
+        'douban_variety': '豆瓣综艺',
+        'douban_animation': '豆瓣动漫',
+        'all': '全部来源',
+        'manual': '手动/未归档',
+        'key': '全部自动值',
+    }
+    tag = (source_tag or '').strip()
+    if not tag:
+        return '未知来源'
+    if tag in base_labels:
+        return base_labels[tag]
+    if ',' in tag:
+        parts = [p.strip() for p in tag.split(',') if p.strip()]
+        labels = [base_labels.get(p, p) for p in parts]
+        return '合并：' + ' + '.join(labels)
+    return f'来源：{tag}'
+
+
+def _build_env_edit_source_view(drama_cfg: dict) -> tuple:
+    env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
+    env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
+    state = _load_drama_calendar_state()
+    records = state.get('records') if isinstance(state, dict) else []
+    if not isinstance(records, list):
+        records = []
+    source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
+    if not isinstance(source_titles_state, dict):
+        source_titles_state = {}
+
+    sources_map = {}
+    env_errors = []
+    group_index = 0
+
+    def _ensure_source(tag: str) -> dict:
+        if tag not in sources_map:
+            sources_map[tag] = {
+                'tag': tag,
+                'label': _label_for_source_tag(tag),
+                'env_groups': [],
+            }
+        return sources_map[tag]
+
+    for env_path in env_files_list:
+        abs_env = os.path.abspath(env_path)
+        if not os.path.exists(abs_env):
+            env_errors.append({'env_display': env_path, 'error': '目标 .env 不存在'})
+            continue
+
+        try:
+            with open(abs_env, 'r', encoding='utf-8') as f:
+                env_content = f.read()
+        except Exception:
+            env_errors.append({'env_display': env_path, 'error': '读取 .env 失败'})
+            continue
+
+        current_value = _extract_env_value_by_key(env_content, env_key)
+        current_titles = _extract_titles_from_regex_value(current_value)
+        current_norms = set()
+        for t in current_titles:
+            norm = _normalize_title_for_match(t)
+            if norm:
+                current_norms.add(norm)
+        used_norms = set()
+        source_titles_map = {}
+
+        source_map_for_env = {}
+        if source_titles_state:
+            env_entry = source_titles_state.get(abs_env)
+            if isinstance(env_entry, dict):
+                key_entry = env_entry.get(env_key)
+                if isinstance(key_entry, dict):
+                    source_map_for_env = key_entry
+
+        if source_map_for_env:
+            for source_tag, titles in source_map_for_env.items():
+                if not isinstance(titles, list):
+                    continue
+                cleaned = []
+                for t in titles:
+                    norm = _normalize_title_for_match(t)
+                    if not norm or norm in used_norms or norm not in current_norms:
+                        continue
+                    used_norms.add(norm)
+                    cleaned.append(t)
+                if cleaned:
+                    source_titles_map.setdefault(source_tag, []).extend(cleaned)
+        else:
+            for rec in records:
+                if not isinstance(rec, dict):
+                    continue
+                rec_env = os.path.abspath(str(rec.get('env_path') or ''))
+                rec_key = str(rec.get('key') or '')
+                if rec_env != abs_env or rec_key != env_key:
+                    continue
+                source_tag = str(rec.get('source') or '').strip() or 'unknown'
+                value = str(rec.get('value') or '')
+                titles = _extract_titles_from_regex_value(value)
+                cleaned = []
+                for t in titles:
+                    norm = _normalize_title_for_match(t)
+                    if not norm or norm in used_norms:
+                        continue
+                    used_norms.add(norm)
+                    cleaned.append(t)
+                if cleaned:
+                    source_titles_map.setdefault(source_tag, []).extend(cleaned)
+
+        untracked = []
+        for t in current_titles:
+            norm = _normalize_title_for_match(t)
+            if norm and norm not in used_norms:
+                untracked.append(t)
+        if untracked:
+            source_titles_map.setdefault('manual', []).extend(untracked)
+
+        for tag, titles in source_titles_map.items():
+            if not titles:
+                continue
+            group_index += 1
+            source_entry = _ensure_source(tag)
+            source_entry['env_groups'].append(
+                {
+                    'id': f'g{group_index}',
+                    'tag': tag,
+                    'env_path': abs_env,
+                    'env_display': env_path,
+                    'titles': titles,
+                }
+            )
+
+    order = [
+        'calendar',
+        'maoyan',
+        'douban',
+        'douban_asia',
+        'douban_domestic',
+        'douban_variety',
+        'douban_animation',
+        'all',
+        'manual',
+        'key',
+        'unknown',
+    ]
+    def _source_sort(item: dict) -> tuple:
+        tag = item.get('tag')
+        return (order.index(tag) if tag in order else len(order), item.get('label') or '')
+
+    sources = sorted(sources_map.values(), key=_source_sort)
+    for source in sources:
+        source['env_groups'].sort(key=lambda g: g.get('env_display') or '')
+
+    return sources, env_errors
+
+
 def _clear_drama_calendar_state_records(env_path: str, key: str) -> None:
     if not DRAMA_CALENDAR_STATE_FILE or not os.path.exists(DRAMA_CALENDAR_STATE_FILE):
         return
@@ -331,6 +691,13 @@ def _clear_drama_calendar_state_records(env_path: str, key: str) -> None:
                 continue
             filtered.append(rec)
         state['records'] = filtered
+        source_titles = state.get('source_titles') if isinstance(state, dict) else None
+        if isinstance(source_titles, dict):
+            env_entry = source_titles.get(target_env)
+            if isinstance(env_entry, dict) and key in env_entry:
+                env_entry.pop(key, None)
+                source_titles[target_env] = env_entry
+            state['source_titles'] = source_titles
         with open(DRAMA_CALENDAR_STATE_FILE, 'w', encoding='utf-8') as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception:
@@ -615,19 +982,38 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         DRAMA_CALENDAR_SCRIPT,
         '--source', _drama_sources_csv(drama_cfg.get('source')),
         '--home-url', (drama_cfg.get('home_url') or 'https://blog.922928.de/').strip(),
+        '--calendar-whitelist-keywords', (drama_cfg.get('calendar_whitelist_keywords') or '').strip(),
+        '--calendar-blacklist-keywords', (drama_cfg.get('calendar_blacklist_keywords') or '').strip(),
         '--maoyan-url', (drama_cfg.get('maoyan_url') or 'https://piaofang.maoyan.com/box-office?ver=normal').strip(),
         '--maoyan-top-n', str(int(drama_cfg.get('maoyan_top_n', 0) or 0)),
         '--maoyan-web-heat-url', (drama_cfg.get('maoyan_web_heat_url') or 'https://piaofang.maoyan.com/web-heat').strip(),
         '--maoyan-web-heat-top-n', str(int(drama_cfg.get('maoyan_web_heat_top_n', 0) or 0)),
+        '--maoyan-whitelist-keywords', (drama_cfg.get('maoyan_whitelist_keywords') or '').strip(),
+        '--maoyan-blacklist-keywords', (drama_cfg.get('maoyan_blacklist_keywords') or '').strip(),
         '--douban-url', _normalize_douban_collection_url(
             str(drama_cfg.get('douban_url') or ''),
             fallback_url='https://m.douban.com/subject_collection/tv_american',
         ),
         '--douban-top-n', str(int(drama_cfg.get('douban_top_n', 0) or 0)),
+        '--douban-asia-top-n', str(int(drama_cfg.get('douban_asia_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-domestic-top-n', str(int(drama_cfg.get('douban_domestic_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-variety-top-n', str(int(drama_cfg.get('douban_variety_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-animation-top-n', str(int(drama_cfg.get('douban_animation_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-whitelist-keywords', (drama_cfg.get('douban_whitelist_keywords') or '').strip(),
+        '--douban-blacklist-keywords', (drama_cfg.get('douban_blacklist_keywords') or '').strip(),
+        '--douban-asia-whitelist-keywords', (drama_cfg.get('douban_asia_whitelist_keywords') or '').strip(),
+        '--douban-asia-blacklist-keywords', (drama_cfg.get('douban_asia_blacklist_keywords') or '').strip(),
+        '--douban-domestic-whitelist-keywords', (drama_cfg.get('douban_domestic_whitelist_keywords') or '').strip(),
+        '--douban-domestic-blacklist-keywords', (drama_cfg.get('douban_domestic_blacklist_keywords') or '').strip(),
+        '--douban-variety-whitelist-keywords', (drama_cfg.get('douban_variety_whitelist_keywords') or '').strip(),
+        '--douban-variety-blacklist-keywords', (drama_cfg.get('douban_variety_blacklist_keywords') or '').strip(),
+        '--douban-animation-whitelist-keywords', (drama_cfg.get('douban_animation_whitelist_keywords') or '').strip(),
+        '--douban-animation-blacklist-keywords', (drama_cfg.get('douban_animation_blacklist_keywords') or '').strip(),
         '--remove-movie-premiere-after-days', str(int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)),
         '--remove-finished-after-days', str(int(drama_cfg.get('remove_finished_after_days', -1) if drama_cfg.get('remove_finished_after_days', -1) is not None else -1)),
         '--finish-detect-mode', (drama_cfg.get('finish_detect_mode') or 'hybrid').strip(),
         '--line-keywords', (drama_cfg.get('line_keywords') or '上线,开播').strip(),
+        '--title-alias-map', (drama_cfg.get('title_alias_map') or '').strip(),
         '--env-files', ','.join(env_files_list),
         '--env-key', (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip(),
         '--managed-scope', ('source' if bool(drama_cfg.get('managed_scope_source_only', True)) else 'key'),
@@ -739,12 +1125,35 @@ def _set_drama_scheduler_state(**kwargs):
 
 
 def get_drama_scheduler_state() -> dict:
+    _ensure_drama_scheduler_started()
     with _DRAMA_SCHEDULER_LOCK:
         return dict(_DRAMA_SCHEDULER_STATE)
 
 
 def _normalize_cron_expr(expr: str) -> str:
     return (expr or '').strip()
+
+
+def _ensure_drama_scheduler_started():
+    if _DRAMA_SCHEDULER_THREAD and _DRAMA_SCHEDULER_THREAD.is_alive():
+        return
+    try:
+        config = load_config()
+        cfg = config.get('drama_calendar', {}) if isinstance(config, dict) else {}
+        enabled = bool(cfg.get('auto_sync_enabled', False))
+        cron_expr = _normalize_cron_expr(str(cfg.get('auto_sync_cron_expr', '') or ''))
+        if enabled:
+            start_drama_scheduler()
+            _set_drama_scheduler_state(
+                enabled=True,
+                running=False,
+                schedule_mode=('cron' if cron_expr else 'interval'),
+                next_run_at='即将启动',
+            )
+        else:
+            _set_drama_scheduler_state(enabled=False, running=False, schedule_mode='interval', next_run_at='未启用')
+    except Exception:
+        pass
 
 
 def _cron_expr_valid(expr: str) -> bool:
@@ -1640,6 +2049,8 @@ def drama_calendar_settings():
             drama['source'] = _normalize_drama_sources(request.form.getlist('drama_source'))
             drama['home_url'] = (request.form.get('drama_home_url') or '').strip() or 'https://blog.922928.de/'
             drama['post_url'] = (request.form.get('drama_post_url') or '').strip()
+            drama['calendar_whitelist_keywords'] = (request.form.get('drama_calendar_whitelist_keywords') or '').strip()
+            drama['calendar_blacklist_keywords'] = (request.form.get('drama_calendar_blacklist_keywords') or '').strip()
             drama['maoyan_url'] = (request.form.get('drama_maoyan_url') or '').strip() or 'https://piaofang.maoyan.com/box-office?ver=normal'
             try:
                 drama['maoyan_top_n'] = max(0, int((request.form.get('drama_maoyan_top_n') or '0').strip() or 0))
@@ -1651,14 +2062,42 @@ def drama_calendar_settings():
                 drama['maoyan_web_heat_top_n'] = max(0, int((request.form.get('drama_maoyan_web_heat_top_n') or '0').strip() or 0))
             except Exception:
                 drama['maoyan_web_heat_top_n'] = 0
+            drama['maoyan_whitelist_keywords'] = (request.form.get('drama_maoyan_whitelist_keywords') or '').strip()
+            drama['maoyan_blacklist_keywords'] = (request.form.get('drama_maoyan_blacklist_keywords') or '').strip()
             drama['douban_url'] = _normalize_douban_collection_url(
                 (request.form.get('drama_douban_url') or '').strip(),
                 fallback_url='https://m.douban.com/subject_collection/tv_american',
             )
-            try:
-                drama['douban_top_n'] = max(0, int((request.form.get('drama_douban_top_n') or '0').strip() or 0))
-            except Exception:
-                drama['douban_top_n'] = 0
+            raw_douban_top_n = request.form.get('drama_douban_top_n')
+            if raw_douban_top_n is None:
+                drama['douban_top_n'] = int(drama.get('douban_top_n', 0) or 0)
+            else:
+                try:
+                    drama['douban_top_n'] = max(0, int((raw_douban_top_n or '0').strip() or 0))
+                except Exception:
+                    drama['douban_top_n'] = int(drama.get('douban_top_n', 0) or 0)
+            def _parse_optional_top_n(field_name: str, fallback_key: str) -> int:
+                raw_value = request.form.get(field_name)
+                if raw_value is None:
+                    return int(drama.get(fallback_key, drama.get('douban_top_n', 0)) or 0)
+                try:
+                    return max(0, int((raw_value or '0').strip() or 0))
+                except Exception:
+                    return int(drama.get(fallback_key, drama.get('douban_top_n', 0)) or 0)
+            drama['douban_asia_top_n'] = _parse_optional_top_n('drama_douban_asia_top_n', 'douban_asia_top_n')
+            drama['douban_domestic_top_n'] = _parse_optional_top_n('drama_douban_domestic_top_n', 'douban_domestic_top_n')
+            drama['douban_variety_top_n'] = _parse_optional_top_n('drama_douban_variety_top_n', 'douban_variety_top_n')
+            drama['douban_animation_top_n'] = _parse_optional_top_n('drama_douban_animation_top_n', 'douban_animation_top_n')
+            drama['douban_whitelist_keywords'] = (request.form.get('drama_douban_whitelist_keywords') or '').strip()
+            drama['douban_blacklist_keywords'] = (request.form.get('drama_douban_blacklist_keywords') or '').strip()
+            drama['douban_asia_whitelist_keywords'] = (request.form.get('drama_douban_asia_whitelist_keywords') or '').strip()
+            drama['douban_asia_blacklist_keywords'] = (request.form.get('drama_douban_asia_blacklist_keywords') or '').strip()
+            drama['douban_domestic_whitelist_keywords'] = (request.form.get('drama_douban_domestic_whitelist_keywords') or '').strip()
+            drama['douban_domestic_blacklist_keywords'] = (request.form.get('drama_douban_domestic_blacklist_keywords') or '').strip()
+            drama['douban_variety_whitelist_keywords'] = (request.form.get('drama_douban_variety_whitelist_keywords') or '').strip()
+            drama['douban_variety_blacklist_keywords'] = (request.form.get('drama_douban_variety_blacklist_keywords') or '').strip()
+            drama['douban_animation_whitelist_keywords'] = (request.form.get('drama_douban_animation_whitelist_keywords') or '').strip()
+            drama['douban_animation_blacklist_keywords'] = (request.form.get('drama_douban_animation_blacklist_keywords') or '').strip()
             try:
                 drama['remove_movie_premiere_after_days'] = int((request.form.get('drama_remove_movie_premiere_after_days') or '365').strip() or 365)
             except Exception:
@@ -1668,6 +2107,7 @@ def drama_calendar_settings():
             except Exception:
                 drama['remove_finished_after_days'] = -1
             drama['line_keywords'] = (request.form.get('drama_line_keywords') or '').strip() or '上线,开播'
+            drama['title_alias_map'] = (request.form.get('drama_title_alias_map') or '').strip()
             drama['env_files'] = (request.form.get('drama_env_files') or '').strip()
             drama['env_key'] = (request.form.get('drama_env_key') or '').strip() or 'DRAMA_CALENDAR_REGEX'
             drama['backup_before_write'] = request.form.get('drama_backup_before_write') == 'on'
@@ -1704,12 +2144,176 @@ def drama_calendar_settings():
             drama = _drama_cfg_from_form(config.get('drama_calendar', {}))
             config['drama_calendar'] = drama
             save_config(config)
+            _ensure_drama_scheduler_started()
             auto_tip = '已开启' if bool(drama.get('auto_sync_enabled')) else '未开启'
             if drama.get('auto_sync_cron_expr'):
                 plan_tip = f"Cron: {drama.get('auto_sync_cron_expr')}"
             else:
                 plan_tip = f"间隔 {int(drama.get('auto_sync_interval_minutes', 60) or 60)} 分钟"
             flash(f'追剧日历配置已保存。自动抓取：{auto_tip}（{plan_tip}）', 'success')
+
+        elif action == 'update_drama_env_titles':
+            drama_cfg = config.get('drama_calendar', {})
+            env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
+            env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
+            if not env_files_list:
+                flash('请先在追剧日历配置中填写至少一个 .env 路径。', 'error')
+            else:
+                allowed = {os.path.abspath(p): p for p in env_files_list}
+                group_ids = request.form.getlist('env_group_id')
+                if not group_ids:
+                    flash('没有可更新的条目。', 'warning')
+                else:
+                    updates_by_env = {}
+                    totals_by_env = {}
+                    source_titles_updates = {}
+                    for gid in group_ids:
+                        tag = (request.form.get(f'group_tag_{gid}') or '').strip() or 'manual'
+                        env_path = (request.form.get(f'group_env_{gid}') or '').strip()
+                        if not env_path:
+                            continue
+                        env_abs = os.path.abspath(env_path)
+                        if env_abs not in allowed:
+                            continue
+                        orig_list = request.form.getlist(f'orig_{gid}[]')
+                        title_list = request.form.getlist(f'title_{gid}[]')
+                        remove_list = set(request.form.getlist(f'remove_{gid}[]'))
+                        new_titles = []
+                        seen_norm = set()
+                        totals = totals_by_env.setdefault(env_abs, {'before': 0, 'after': 0})
+                        totals['before'] += len(orig_list)
+                        for orig, new in zip(orig_list, title_list):
+                            if orig in remove_list:
+                                continue
+                            cleaned = (new or '').strip()
+                            if not cleaned:
+                                continue
+                            norm = _normalize_title_for_match(cleaned)
+                            if not norm or norm in seen_norm:
+                                continue
+                            seen_norm.add(norm)
+                            new_titles.append(cleaned)
+                        totals['after'] += len(new_titles)
+                        updates_by_env.setdefault(env_abs, []).append(
+                            (tag, _build_regex_from_titles(new_titles), _build_regex_from_titles(orig_list))
+                        )
+                        source_titles_updates.setdefault(env_abs, {})[tag] = new_titles
+
+                    if not updates_by_env:
+                        flash('没有可更新的条目。', 'warning')
+                    else:
+                        managed_scope = 'source' if bool(drama_cfg.get('managed_scope_source_only', True)) else 'key'
+                        state = _load_drama_calendar_state()
+                        records = state.get('records') if isinstance(state, dict) else []
+                        if not isinstance(records, list):
+                            records = []
+                        source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
+                        if not isinstance(source_titles_state, dict):
+                            source_titles_state = {}
+                        had_change = False
+
+                        for env_abs, updates in updates_by_env.items():
+                            if not os.path.exists(env_abs):
+                                flash(f'目标 .env 不存在：{env_abs}', 'error')
+                                continue
+                            try:
+                                with open(env_abs, 'r', encoding='utf-8') as f:
+                                    original = f.read()
+                            except Exception as e:
+                                flash(f'读取 .env 失败：{env_abs} ({e})', 'error')
+                                continue
+
+                            if managed_scope == 'key':
+                                combined_titles = []
+                                seen_norm = set()
+                                for _, regex_value, _ in updates:
+                                    for title in _extract_titles_from_regex_value(regex_value):
+                                        norm = _normalize_title_for_match(title)
+                                        if not norm or norm in seen_norm:
+                                            continue
+                                        seen_norm.add(norm)
+                                        combined_titles.append(title)
+                                current_value = _extract_env_value_by_key(original, env_key)
+                                updates = [('key', _build_regex_from_titles(combined_titles), current_value)]
+
+                            updated = original
+                            for tag, regex_value, old_regex in updates:
+                                target_env_abs = os.path.abspath(env_abs)
+                                has_record = False
+                                for rec in records:
+                                    if not isinstance(rec, dict):
+                                        continue
+                                    rec_env = os.path.abspath(str(rec.get('env_path') or ''))
+                                    rec_key = str(rec.get('key') or '')
+                                    rec_source = str(rec.get('source') or '')
+                                    if managed_scope == 'key':
+                                        if rec_env == target_env_abs and rec_key == env_key:
+                                            has_record = True
+                                            break
+                                    else:
+                                        if rec_env == target_env_abs and rec_key == env_key and rec_source == tag:
+                                            has_record = True
+                                            break
+                                if not has_record and old_regex:
+                                    records.append(
+                                        {
+                                            'env_path': target_env_abs,
+                                            'key': env_key,
+                                            'source': tag,
+                                            'value': old_regex,
+                                            'updated_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                                        }
+                                    )
+                                updated, records = _replace_managed_append_value_in_memory(
+                                    env_content=updated,
+                                    key=env_key,
+                                    source_tag=tag,
+                                    env_path=env_abs,
+                                    new_value=regex_value,
+                                    records=records,
+                                    managed_scope=managed_scope,
+                                )
+
+                            if updated == original:
+                                flash(f'未检测到变更：{env_abs}', 'info')
+                                continue
+
+                            try:
+                                emergency_backup = f"{env_abs}.autosnap_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                                shutil.copy2(env_abs, emergency_backup)
+                                if bool(drama_cfg.get('backup_before_write', False)):
+                                    _make_env_backup_if_needed(env_abs)
+                                with open(env_abs, 'w', encoding='utf-8') as f:
+                                    f.write(updated)
+                                had_change = True
+                                totals = totals_by_env.get(os.path.abspath(env_abs), {'before': 0, 'after': 0})
+                                flash(
+                                    f'已更新 .env：{env_abs}（{totals.get("before", 0)} → {totals.get("after", 0)}）',
+                                    'success',
+                                )
+                                ts = time.strftime('%Y-%m-%d %H:%M:%S')
+                                _append_drama_calendar_log([
+                                    f'[{ts}] [INFO] [DRAMA][ENV-EDIT] {env_abs} key={env_key} {totals.get("before", 0)}->{totals.get("after", 0)}',
+                                ])
+                            except Exception as e:
+                                flash(f'写入 .env 失败：{env_abs} ({e})', 'error')
+
+                        state['records'] = records
+                        for env_abs, per_source in source_titles_updates.items():
+                            env_entry = source_titles_state.get(env_abs)
+                            if not isinstance(env_entry, dict):
+                                env_entry = {}
+                            key_entry = env_entry.get(env_key)
+                            if not isinstance(key_entry, dict):
+                                key_entry = {}
+                            for tag, titles in per_source.items():
+                                key_entry[tag] = list(titles or [])
+                            env_entry[env_key] = key_entry
+                            source_titles_state[env_abs] = env_entry
+                        state['source_titles'] = source_titles_state
+                        _save_drama_calendar_state(state)
+                        if not had_change:
+                            flash('未检测到需要写入的变更。', 'info')
 
         elif action == 'run_drama_calendar':
             drama_cfg = config.get('drama_calendar', {})
@@ -1773,7 +2377,14 @@ def drama_calendar_settings():
 
         return redirect(url_for('drama_calendar_settings'))
 
-    return render_template('drama_calendar.html', config=config, scheduler_state=get_drama_scheduler_state())
+    env_edit_sources, env_edit_errors = _build_env_edit_source_view(config.get('drama_calendar', {}))
+    return render_template(
+        'drama_calendar.html',
+        config=config,
+        scheduler_state=get_drama_scheduler_state(),
+        env_edit_sources=env_edit_sources,
+        env_edit_errors=env_edit_errors,
+    )
 
 @app.route('/monitor_action', methods=['POST'])
 @login_required
