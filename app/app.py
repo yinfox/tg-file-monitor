@@ -30,7 +30,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.68"
+VERSION = "0.4.69"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
@@ -384,10 +384,25 @@ def _extract_titles_from_regex_value(regex_value: str) -> list:
     return found
 
 
+def _escape_title_for_regex(title: str) -> str:
+    return re.sub(r'([.^$*+?{}\\[\\]\\\\|()])', r'\\\\\\1', title)
+
+
 def _build_regex_from_titles(titles: list) -> str:
     if not titles:
         return ''
-    escaped = [re.escape(t) for t in titles if str(t).strip()]
+    unique_titles = []
+    seen_norm = set()
+    for t in titles:
+        s = (t or '').strip()
+        if not s:
+            continue
+        norm = _normalize_title_for_match(s)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        unique_titles.append(s)
+    escaped = [_escape_title_for_regex(t) for t in unique_titles]
     if not escaped:
         return ''
     escaped.sort(key=len, reverse=True)

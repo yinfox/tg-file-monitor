@@ -1234,11 +1234,28 @@ def _remove_old_movie_titles_by_tmdb(
     return kept, removed, cache_dirty
 
 
+def _escape_title_for_regex(title: str) -> str:
+    # Escape regex meta characters, but keep spaces readable.
+    return re.sub(r"([.^$*+?{}\\[\\]\\\\|()])", r"\\\\\\1", title)
+
+
 def build_regex_from_titles(titles: Sequence[str]) -> str:
     if not titles:
         return ""
 
-    escaped = [re.escape(t) for t in titles]
+    unique_titles: List[str] = []
+    seen_norm: Set[str] = set()
+    for t in titles:
+        s = (t or "").strip()
+        if not s:
+            continue
+        norm = _normalize_title_for_match(s)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        unique_titles.append(s)
+
+    escaped = [_escape_title_for_regex(t) for t in unique_titles]
     escaped.sort(key=len, reverse=True)
     # Keep legacy style for compatibility with existing ENV_FILTER_115 rules.
     return "|".join([f"^(?=.*{item}).*$" for item in escaped])
