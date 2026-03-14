@@ -6,6 +6,7 @@ import traceback
 import sys
 import sqlite3
 import re
+import codecs
 import shutil
 from collections import deque
 from dataclasses import dataclass
@@ -250,7 +251,7 @@ def save_config(config: dict):
 # --- Regex & Types ---
 REAL_URL_RE = re.compile(r"https?://[^\s\"<>']+", re.IGNORECASE)
 HDHIVE_115_URL_RE = re.compile(
-    r"https?://(?:www\.)?hdhive\.com/resource/115/[0-9a-fA-F]{32}",
+    r"(?:https?://)?(?:www\.)?hdhive\.[a-z]{2,}/resource/115/[0-9A-Za-z]{16,64}",
     re.IGNORECASE,
 )
 
@@ -265,7 +266,7 @@ class HdhiveLinkHit:
 def _extract_hdhive_slug(hdhive_url: str) -> Optional[str]:
     if not hdhive_url:
         return None
-    m = re.search(r"/resource/115/([0-9a-fA-F]{32})", hdhive_url)
+    m = re.search(r"/resource/115/([0-9A-Za-z]{16,64})", hdhive_url)
     if m:
         return m.group(1)
     # Best-effort fallback
@@ -284,37 +285,72 @@ HDHIVE_ACTION_ENCRYPTE_ID = HDHIVE_ACTION_ENCRYPTE_ID_DEFAULT
 
 _HDHIVE_ACTION_IDS_LAST_REFRESH_TS = 0.0
 _HDHIVE_ACTION_IDS_REFRESH_TTL_SECONDS = 6 * 60 * 60
+_HDHIVE_ROUTER_STATE_CACHE: Dict[str, Tuple[float, str]] = {}
+_HDHIVE_ROUTER_STATE_TTL_SECONDS = 6 * 60 * 60
+_HDHIVE_UNLOCK_ACTION_ID: Optional[str] = None
+_HDHIVE_UNLOCK_ACTION_ID_LAST_REFRESH_TS = 0.0
+_HDHIVE_UNLOCK_ACTION_ID_TTL_SECONDS = 6 * 60 * 60
 
 
 def _refresh_hdhive_action_ids_if_needed():
     global HDHIVE_ACTION_DECRYPT_ID, HDHIVE_ACTION_ENCRYPTE_ID, _HDHIVE_ACTION_IDS_LAST_REFRESH_TS
 
     now = time.time()
-    if _HDHIVE_ACTION_IDS_LAST_REFRESH_TS and (now - _HDHIVE_ACTION_IDS_LAST_REFRESH_TS) < _HDHIVE_ACTION_IDS_REFRESH_TTL_SECONDS:
+    needs_refresh = (
+        HDHIVE_ACTION_DECRYPT_ID == HDHIVE_ACTION_DECRYPT_ID_DEFAULT
+        or HDHIVE_ACTION_ENCRYPTE_ID == HDHIVE_ACTION_ENCRYPTE_ID_DEFAULT
+    )
+    if not needs_refresh and _HDHIVE_ACTION_IDS_LAST_REFRESH_TS and (now - _HDHIVE_ACTION_IDS_LAST_REFRESH_TS) < _HDHIVE_ACTION_IDS_REFRESH_TTL_SECONDS:
         return
-
-    _HDHIVE_ACTION_IDS_LAST_REFRESH_TS = now
     try:
         html_text = requests.get(
             "https://hdhive.com/",
-            timeout=15,
+            timeout=20,
             headers={"User-Agent": "Mozilla/5.0"},
         ).text
-        chunk_paths = sorted(set(re.findall(r"(/_next/static/[^\"<> ]+\\.js)", html_text)))
+    except Exception:
+        return
+
+    try:
+        chunk_paths = sorted(set(re.findall(r"(/_next/static/[^\"<> ]+\.js)", html_text)))
         if not chunk_paths:
+            # Fallback: broader match for any .js under /_next/static
+            chunk_paths = sorted(set(re.findall(r"(/_next/static/[^\s\"'<>]+?\.js)", html_text, re.IGNORECASE)))
+        if not chunk_paths:
+            snippet = (html_text[:160] if isinstance(html_text, str) else "").replace("\n", " ")
+            plain_count = html_text.count("/_next/static/") if isinstance(html_text, str) else 0
+            debug_log(
+                f"[HDHive] action id refresh: no chunk paths found (len={len(html_text)} "
+                f"plain_count={plain_count}). Snippet: {snippet}"
+            )
             return
 
         decrypt_id = None
         encrypte_id = None
-        pat_decrypt = re.compile(r"createServerReference\(\"([0-9a-f]{40,})\"[^\)]*\"decrypt\"\)")
-        pat_encrypte = re.compile(r"createServerReference\(\"([0-9a-f]{40,})\"[^\)]*\"encrypte\"\)")
+        # Support multiple minified forms:
+        # 1) createServerReference("id", ..., "decrypt")
+        # 2) createServerReference)("id", ..., "decrypt")
+        # 3) (0,t.createServerReference)("id", ..., "encrypte")
+        # Also allow single quotes.
+        pat_decrypt = re.compile(
+            r"createServerReference[^\(]*\(\s*[\"']([0-9a-f]{40,})[\"'][^\)]*[\"']decrypt[\"']"
+        )
+        pat_encrypte = re.compile(
+            r"createServerReference[^\(]*\(\s*[\"']([0-9a-f]{40,})[\"'][^\)]*[\"']encrypte[\"']"
+        )
+        pat_encrypt = re.compile(
+            r"createServerReference[^\(]*\(\s*[\"']([0-9a-f]{40,})[\"'][^\)]*[\"']encrypt[\"']"
+        )
 
-        for p in chunk_paths[:120]:
-            js_text = requests.get(
-                f"https://hdhive.com{p}",
-                timeout=15,
-                headers={"User-Agent": "Mozilla/5.0"},
-            ).text
+        for p in chunk_paths[:200]:
+            try:
+                js_text = requests.get(
+                    f"https://hdhive.com{p}",
+                    timeout=20,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                ).text
+            except Exception:
+                continue
             if decrypt_id is None:
                 m = pat_decrypt.search(js_text)
                 if m:
@@ -323,19 +359,147 @@ def _refresh_hdhive_action_ids_if_needed():
                 m = pat_encrypte.search(js_text)
                 if m:
                     encrypte_id = m.group(1)
+            if encrypte_id is None:
+                m = pat_encrypt.search(js_text)
+                if m:
+                    encrypte_id = m.group(1)
             if decrypt_id and encrypte_id:
                 break
 
+        refreshed = False
         if decrypt_id:
             HDHIVE_ACTION_DECRYPT_ID = decrypt_id
+            refreshed = True
         if encrypte_id:
             HDHIVE_ACTION_ENCRYPTE_ID = encrypte_id
+            refreshed = True
+        if not refreshed:
+            debug_log("[HDHive] action id refresh: no action ids found in chunks")
+        if refreshed:
+            _HDHIVE_ACTION_IDS_LAST_REFRESH_TS = now
+            debug_log(
+                f"[HDHive] action ids refreshed decrypt={HDHIVE_ACTION_DECRYPT_ID[:8]} "
+                f"encrypte={HDHIVE_ACTION_ENCRYPTE_ID[:8]}"
+            )
     except Exception:
         # Keep defaults on any failure
         return
 
 
+def _refresh_hdhive_unlock_action_id_if_needed(slug: str) -> Optional[str]:
+    global _HDHIVE_UNLOCK_ACTION_ID, _HDHIVE_UNLOCK_ACTION_ID_LAST_REFRESH_TS
+    now = time.time()
+    if (
+        _HDHIVE_UNLOCK_ACTION_ID
+        and _HDHIVE_UNLOCK_ACTION_ID_LAST_REFRESH_TS
+        and (now - _HDHIVE_UNLOCK_ACTION_ID_LAST_REFRESH_TS) < _HDHIVE_UNLOCK_ACTION_ID_TTL_SECONDS
+    ):
+        return _HDHIVE_UNLOCK_ACTION_ID
+
+    try:
+        html_text = requests.get(
+            f"https://hdhive.com/resource/115/{slug}",
+            timeout=30,
+            headers={"User-Agent": "Mozilla/5.0"},
+        ).text
+    except Exception:
+        return _HDHIVE_UNLOCK_ACTION_ID
+
+    try:
+        # Extract chunk paths from resource page
+        chunk_paths = sorted(set(re.findall(r"(/_next/static/[^\"<> ]+\.js)", html_text)))
+        if not chunk_paths:
+            return _HDHIVE_UNLOCK_ACTION_ID
+
+        pat_action = re.compile(
+            r"createServerReference[^\(]*\(\s*[\"']([0-9a-f]{40,})[\"'][^\)]*?[\"']([A-Za-z0-9_]+)[\"']"
+        )
+        unlock_id = None
+        for p in chunk_paths[:200]:
+            try:
+                js_text = requests.get(
+                    f"https://hdhive.com{p}",
+                    timeout=20,
+                    headers={"User-Agent": "Mozilla/5.0"},
+                ).text
+            except Exception:
+                continue
+            for m in pat_action.finditer(js_text):
+                action_id = m.group(1)
+                action_name = m.group(2)
+                if action_name == "unlockResource":
+                    unlock_id = action_id
+                    break
+            if unlock_id:
+                break
+
+        if unlock_id:
+            _HDHIVE_UNLOCK_ACTION_ID = unlock_id
+            _HDHIVE_UNLOCK_ACTION_ID_LAST_REFRESH_TS = now
+            debug_log(f"[HDHive] unlock action id refreshed {unlock_id[:8]}")
+        return _HDHIVE_UNLOCK_ACTION_ID
+    except Exception:
+        return _HDHIVE_UNLOCK_ACTION_ID
+
+
 _HDHIVE_NEXT_ROUTER_STATE_TREE_JSON = "[]"
+
+
+def _get_hdhive_router_state_tree_json(slug: str) -> str:
+    if not slug:
+        return _HDHIVE_NEXT_ROUTER_STATE_TREE_JSON
+
+    now = time.time()
+    cached = _HDHIVE_ROUTER_STATE_CACHE.get(slug)
+    if cached:
+        ts, tree_json = cached
+        if (now - ts) < _HDHIVE_ROUTER_STATE_TTL_SECONDS and tree_json:
+            return tree_json
+
+    headers = {'User-Agent': 'Mozilla/5.0'}
+    try:
+        for attempt in range(2):
+            html_text = requests.get(
+                f"https://hdhive.com/resource/115/{slug}",
+                timeout=30,
+                headers=headers,
+            ).text
+            # New Next.js format: embedded flight data in self.__next_f.push([1,"..."])
+            parts = re.findall(r'self\.__next_f\.push\(\[1,"([\s\S]*?)"\]\)', html_text)
+            # Fallback to legacy pattern if new format is not found
+            if not parts:
+                parts = re.findall(r"__next_f\.push\(\[\d+,\\\"(.*?)\\\"\\]\)", html_text)
+            if not parts:
+                continue
+
+            joined = "\n".join(parts)
+            try:
+                joined = joined.encode("utf-8").decode("unicode_escape")
+            except Exception:
+                pass
+
+            for line in joined.splitlines():
+                if not line.startswith("0:"):
+                    continue
+                payload = line[2:]
+                try:
+                    data = json.loads(payload)
+                except Exception:
+                    continue
+                f = data.get("f") if isinstance(data, dict) else None
+                if not (isinstance(f, list) and f):
+                    continue
+                first = f[0]
+                if not (isinstance(first, list) and first):
+                    continue
+                tree = first[0]
+                tree_json = json.dumps(tree, ensure_ascii=False)
+                _HDHIVE_ROUTER_STATE_CACHE[slug] = (now, tree_json)
+                return tree_json
+    except Exception:
+        return _HDHIVE_NEXT_ROUTER_STATE_TREE_JSON
+
+    return _HDHIVE_NEXT_ROUTER_STATE_TREE_JSON
 
 
 _hdhive_resolve_cache: Dict[str, Tuple[float, Optional[str]]] = {}
@@ -678,36 +842,78 @@ def _hdhive_next_action_call_sync(
     }
 
     # Next.js adds a cache-busting param `_rsc`; value doesn't matter.
-    rsc_url = f"https://hdhive.com/?_rsc={int(time.time() * 1000)}"
+    rsc_token = int(time.time() * 1000)
     body = json.dumps(action_args, ensure_ascii=False)
+    rsc_url = f"https://hdhive.com/?_rsc={rsc_token}"
     resp = requests.post(rsc_url, data=body.encode('utf-8'), timeout=25, headers=headers)
-    return _parse_next_action_rsc_result(resp.text)
+    parsed = _parse_next_action_rsc_result(resp.text)
+    if parsed is not None:
+        return parsed
+    # Fallback: try page path as endpoint (some deployments require scoped URL)
+    try:
+        alt_url = f"https://hdhive.com{page_path}?_rsc={rsc_token}"
+        resp2 = requests.post(alt_url, data=body.encode('utf-8'), timeout=25, headers=headers)
+        return _parse_next_action_rsc_result(resp2.text)
+    except Exception:
+        return None
+
+
+def _force_refresh_hdhive_state(slug: str):
+    global _HDHIVE_ACTION_IDS_LAST_REFRESH_TS
+    _HDHIVE_ACTION_IDS_LAST_REFRESH_TS = 0
+    try:
+        _HDHIVE_ROUTER_STATE_CACHE.pop(slug, None)
+    except Exception:
+        pass
+    _refresh_hdhive_action_ids_if_needed()
 
 
 def _hdhive_decrypt_sync(cookie_header: str, slug: str, ciphertext: str):
     _refresh_hdhive_action_ids_if_needed()
     page_path = f"/resource/115/{slug}"
-    router_state_tree_json = _HDHIVE_NEXT_ROUTER_STATE_TREE_JSON
-    return _hdhive_next_action_call_sync(
+    router_state_tree_json = _get_hdhive_router_state_tree_json(slug)
+    result = _hdhive_next_action_call_sync(
         cookie_header=cookie_header,
         action_id=HDHIVE_ACTION_DECRYPT_ID,
         page_path=page_path,
         router_state_tree_json=router_state_tree_json,
         action_args=[ciphertext],
     )
+    if result is None:
+        _force_refresh_hdhive_state(slug)
+        router_state_tree_json = _get_hdhive_router_state_tree_json(slug)
+        result = _hdhive_next_action_call_sync(
+            cookie_header=cookie_header,
+            action_id=HDHIVE_ACTION_DECRYPT_ID,
+            page_path=page_path,
+            router_state_tree_json=router_state_tree_json,
+            action_args=[ciphertext],
+        )
+    return result
 
 
 def _hdhive_encrypte_sync(cookie_header: str, slug: str, plaintext_json: str):
     _refresh_hdhive_action_ids_if_needed()
     page_path = f"/resource/115/{slug}"
-    router_state_tree_json = _HDHIVE_NEXT_ROUTER_STATE_TREE_JSON
-    return _hdhive_next_action_call_sync(
+    router_state_tree_json = _get_hdhive_router_state_tree_json(slug)
+    result = _hdhive_next_action_call_sync(
         cookie_header=cookie_header,
         action_id=HDHIVE_ACTION_ENCRYPTE_ID,
         page_path=page_path,
         router_state_tree_json=router_state_tree_json,
         action_args=[plaintext_json],
     )
+    if result is None:
+        _force_refresh_hdhive_state(slug)
+        router_state_tree_json = _get_hdhive_router_state_tree_json(slug)
+        result = _hdhive_next_action_call_sync(
+            cookie_header=cookie_header,
+            action_id=HDHIVE_ACTION_ENCRYPTE_ID,
+            page_path=page_path,
+            router_state_tree_json=router_state_tree_json,
+            action_args=[plaintext_json],
+        )
+    return result
 
 
 def _hdhive_go_api_get_url_info_sync(cookie_header: str, slug: str) -> Optional[dict]:
@@ -718,7 +924,9 @@ def _hdhive_go_api_get_url_info_sync(cookie_header: str, slug: str) -> Optional[
     }, ensure_ascii=False)
     encrypted_query = _hdhive_encrypte_sync(cookie_header, slug, payload)
     if not isinstance(encrypted_query, str) or not encrypted_query:
-        return None
+        return {
+            "__error": "加密参数生成失败"
+        }
 
     headers = {
         'User-Agent': 'Mozilla/5.0',
@@ -731,6 +939,18 @@ def _hdhive_go_api_get_url_info_sync(cookie_header: str, slug: str) -> Optional[
         raw = resp.json()
     except Exception:
         return None
+    if isinstance(raw, dict) and raw.get('success') is False:
+        msg = raw.get('message') or raw.get('description') or "go-api error"
+        data = {
+            "__error": msg
+        }
+        try:
+            m = re.search(r"(\d+)\s*积分", str(msg))
+            if m:
+                data["__unlock_points"] = int(m.group(1))
+        except Exception:
+            pass
+        return data
     ciphertext = raw.get('data') if isinstance(raw, dict) else None
     if not ciphertext:
         return None
@@ -752,16 +972,51 @@ def _hdhive_go_api_unlock_sync(cookie_header: str, slug: str) -> Optional[dict]:
     if isinstance(encrypted_body, str) and encrypted_body:
         resp = requests.post(url, json={'data': encrypted_body}, timeout=25, headers=headers)
     else:
-        resp = requests.post(url, timeout=25, headers=headers)
+        return {
+            "__error": "加密参数生成失败"
+        }
     try:
         raw = resp.json()
     except Exception:
         return None
+    if isinstance(raw, dict) and raw.get('success') is False:
+        return {
+            "__error": raw.get('message') or raw.get('description') or "go-api error"
+        }
     ciphertext = raw.get('data') if isinstance(raw, dict) else None
     if not ciphertext:
         return None
     decrypted = _hdhive_decrypt_sync(cookie_header, slug, ciphertext)
     return decrypted if isinstance(decrypted, dict) else None
+
+
+def _hdhive_unlock_resource_sync(cookie_header: str, slug: str) -> Optional[dict]:
+    """Unlock via Next.js server action (unlockResource)."""
+    unlock_id = _refresh_hdhive_unlock_action_id_if_needed(slug)
+    if not unlock_id:
+        return {
+            "__error": "无法获取解锁 action id"
+        }
+    page_path = f"/resource/115/{slug}"
+    router_state_tree_json = _get_hdhive_router_state_tree_json(slug)
+    result = _hdhive_next_action_call_sync(
+        cookie_header=cookie_header,
+        action_id=unlock_id,
+        page_path=page_path,
+        router_state_tree_json=router_state_tree_json,
+        action_args=[slug],
+    )
+    # Expected shape: {"response": {"success": True/False, "data": {...}, "message": "...", ...}}
+    if isinstance(result, dict) and isinstance(result.get("response"), dict):
+        resp = result.get("response") or {}
+        if resp.get("success") is True:
+            data = resp.get("data") or {}
+            if isinstance(data, dict):
+                return data
+            return {"__error": "解锁返回格式异常"}
+        msg = resp.get("message") or resp.get("description") or "unlock error"
+        return {"__error": msg}
+    return {"__error": "解锁响应异常"}
 
 
 def _normalize_115_url(u: str) -> str:
@@ -770,10 +1025,15 @@ def _normalize_115_url(u: str) -> str:
     u = html.unescape(u).strip()
     # Some strings may contain trailing fragments/artifacts from templates
     u = u.replace('\\', '')
+    # Strip trailing status suffix like ;307 (often appended by redirectors)
+    # Apply for both plain URLs and ones with query/fragment.
+    u = re.sub(r';\d+(?=[?#]|$)', '', u)
     while u.endswith('&#') or u.endswith('&'):
         u = u[:-1]
     if u.endswith('#') and '?#' not in u:
         u = u[:-1]
+    # Clean stray trailing semicolons
+    u = re.sub(r';+$', '', u)
 
     # Normalize query param name: access_code -> password
     try:
@@ -794,7 +1054,15 @@ def _normalize_115_url(u: str) -> str:
 def _extract_hdhive_urls_from_text(text: str) -> List[str]:
     if not text:
         return []
-    return list(dict.fromkeys(m.group(0) for m in HDHIVE_115_URL_RE.finditer(text)))
+    urls: List[str] = []
+    for m in HDHIVE_115_URL_RE.finditer(text):
+        u = m.group(0)
+        if not u:
+            continue
+        if not u.lower().startswith('http'):
+            u = f"https://{u}"
+        urls.append(u)
+    return list(dict.fromkeys(urls))
 
 
 def _extract_hdhive_hits_from_message(msg) -> List[HdhiveLinkHit]:
@@ -807,15 +1075,20 @@ def _extract_hdhive_hits_from_message(msg) -> List[HdhiveLinkHit]:
     entities = getattr(msg, 'entities', None) or []
     for ent in entities:
         url = getattr(ent, 'url', None)
-        if not url or not HDHIVE_115_URL_RE.search(url):
-            continue
         try:
             offset = int(getattr(ent, 'offset', 0))
             length = int(getattr(ent, 'length', 0))
             display = text[offset:offset + length] if length else url
         except Exception:
             display = url
-        hits.append(HdhiveLinkHit(hdhive_url=url, display_text=display or url, source='entity'))
+        candidate = url or display
+        if not candidate:
+            continue
+        if not HDHIVE_115_URL_RE.search(candidate):
+            continue
+        if not candidate.lower().startswith('http'):
+            candidate = f"https://{candidate}"
+        hits.append(HdhiveLinkHit(hdhive_url=candidate, display_text=display or candidate, source='entity'))
 
     reply_markup = getattr(msg, 'reply_markup', None)
     rows = getattr(reply_markup, 'rows', None) if reply_markup else None
@@ -827,7 +1100,24 @@ def _extract_hdhive_hits_from_message(msg) -> List[HdhiveLinkHit]:
                 if not btn_url or not HDHIVE_115_URL_RE.search(btn_url):
                     continue
                 btn_text = getattr(btn, 'text', None) or btn_url
+                if not btn_url.lower().startswith('http'):
+                    btn_url = f"https://{btn_url}"
                 hits.append(HdhiveLinkHit(hdhive_url=btn_url, display_text=btn_text, source='button'))
+
+    # Webpage preview URL (when message text is empty but has a link preview)
+    try:
+        if isinstance(getattr(msg, 'media', None), MessageMediaWebPage):
+            wp = getattr(msg.media, 'webpage', None)
+            wp_url = getattr(wp, 'url', None) if wp else None
+            wp_display = getattr(wp, 'display_url', None) if wp else None
+            for candidate in (wp_url, wp_display):
+                if candidate and HDHIVE_115_URL_RE.search(candidate):
+                    if not candidate.lower().startswith('http'):
+                        candidate = f"https://{candidate}"
+                    hits.append(HdhiveLinkHit(hdhive_url=candidate, display_text=candidate, source='webpage'))
+                    break
+    except Exception:
+        pass
 
     # de-dup, keep first display/source
     seen: set[str] = set()
@@ -846,6 +1136,8 @@ def _pick_real_url_from_response(resp: requests.Response) -> Optional[str]:
         if resp.url and ('/login' in resp.url.lower() or 'redirect=' in resp.url.lower()):
             return None
         if resp.url and not HDHIVE_115_URL_RE.search(resp.url) and 'hdhive.com' not in resp.url.lower():
+            if '115.com' in resp.url or '115cdn' in resp.url:
+                return _normalize_115_url(resp.url)
             return resp.url
     except Exception:
         pass
@@ -868,7 +1160,7 @@ def _pick_real_url_from_response(resp: requests.Response) -> Optional[str]:
                     for m in REAL_URL_RE.finditer(item):
                         u = m.group(0)
                         if '115.com' in u or '115cdn' in u:
-                            return u
+                            return _normalize_115_url(u)
         except Exception:
             pass
     else:
@@ -888,7 +1180,7 @@ def _pick_real_url_from_response(resp: requests.Response) -> Optional[str]:
             if '115.com' in u or '115cdn' in u:
                 candidates.append(u)
         if candidates:
-            return candidates[0]
+            return _normalize_115_url(candidates[0])
 
     return None
 
@@ -932,6 +1224,19 @@ def _resolve_hdhive_115_url_sync(hdhive_url: str) -> Optional[str]:
             except Exception:
                 threshold = 0
 
+            locked_required = False
+            unlock_failed = False
+
+            api_error = None
+            unlock_points = None
+            if isinstance(url_info, dict) and url_info.get("__error"):
+                api_error = str(url_info.get("__error") or "").strip()
+                try:
+                    if url_info.get("__unlock_points") is not None:
+                        unlock_points = int(url_info.get("__unlock_points"))
+                except Exception:
+                    unlock_points = unlock_points
+
             if isinstance(url_info, dict):
                 unlock_points_raw = url_info.get('unlock_points')
                 try:
@@ -942,6 +1247,10 @@ def _resolve_hdhive_115_url_sync(hdhive_url: str) -> Optional[str]:
                 full_url = url_info.get('full_url')
                 url = url_info.get('url')
                 access_code = url_info.get('access_code')
+                already_owned = bool(url_info.get('already_owned', False))
+
+                if unlock_points is not None and unlock_points > 0 and not already_owned:
+                    locked_required = True
 
                 if isinstance(full_url, str) and full_url.startswith('http'):
                     real_url = _normalize_115_url(full_url)
@@ -968,8 +1277,11 @@ def _resolve_hdhive_115_url_sync(hdhive_url: str) -> Optional[str]:
                 # If we got a URL but it might be the pre-unlock placeholder, unlocking still yields full_url.
                 if should_try_unlock:
                     log_message(f"INFO: 正在尝试自动解锁 HDHive 资源 (所需积分: {unlock_points if unlock_points is not None else '未知'}, 阈值: {threshold})")
-                    unlocked = _hdhive_go_api_unlock_sync(cookie, slug)
-                    if isinstance(unlocked, dict):
+                    unlocked = _hdhive_unlock_resource_sync(cookie, slug)
+                    if isinstance(unlocked, dict) and unlocked.get("__error"):
+                        log_message(f"警告: HDHive 自动解锁失败（{unlocked.get('__error')}）")
+                        unlock_failed = True
+                    elif isinstance(unlocked, dict):
                         full_url2 = unlocked.get('full_url')
                         url2 = unlocked.get('url')
                         access_code2 = unlocked.get('access_code')
@@ -984,8 +1296,19 @@ def _resolve_hdhive_115_url_sync(hdhive_url: str) -> Optional[str]:
 
                         if real_url:
                             log_message(f"成功: HDHive 解锁成功，真实链接: {real_url}")
+                        else:
+                            unlock_failed = True
                     else:
                         log_message("警告: HDHive 自动解锁失败（可能积分不足/资源失效/登录态异常）。")
+                        unlock_failed = True
+
+                # If resource is locked and unlock did not succeed, avoid returning placeholder links
+                if locked_required and (unlock_failed or not should_try_unlock):
+                    real_url = None
+
+                # If API error occurred and no unlock points, avoid trusting redirect placeholders
+                if api_error and unlock_points is None:
+                    real_url = None
         except Exception as e:
             debug_log(f"[HDHive] go-api/action resolver failed: {e}")
 
@@ -1021,6 +1344,7 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
 
     # 1) Try read url info
     url_info = None
+    api_error = None
     try:
         url_info = _hdhive_go_api_get_url_info_sync(cookie, slug)
     except Exception:
@@ -1028,13 +1352,24 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
 
     unlock_points = None
     already_owned = False
+    locked_required = False
     if isinstance(url_info, dict):
+        if url_info.get("__error"):
+            api_error = str(url_info.get("__error") or "").strip()
+            # Try extract points from error message
+            try:
+                if url_info.get("__unlock_points") is not None:
+                    unlock_points = int(url_info.get("__unlock_points"))
+            except Exception:
+                unlock_points = unlock_points
         try:
             if url_info.get('unlock_points') is not None:
                 unlock_points = int(url_info.get('unlock_points'))
         except Exception:
             unlock_points = None
         already_owned = bool(url_info.get('already_owned', False))
+        if unlock_points is not None and unlock_points > 0 and not already_owned:
+            locked_required = True
 
         full_url = url_info.get('full_url')
         url = url_info.get('url')
@@ -1057,6 +1392,10 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
             if unlock_points > threshold:
                 return None, f"需要 {unlock_points} 积分 > 阈值 {threshold}，未自动解锁"
 
+    # If API error occurred and no unlock points were extracted, abort early
+    if api_error and unlock_points is None:
+        return None, f"解析失败（{api_error}，可能登录失效/接口变更）"
+
     # 2) Attempt unlock if allowed (free or within threshold)
     should_unlock = False
     if unlock_points is None:
@@ -1070,9 +1409,11 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
     if should_unlock:
         unlocked = None
         try:
-            unlocked = _hdhive_go_api_unlock_sync(cookie, slug)
+            unlocked = _hdhive_unlock_resource_sync(cookie, slug)
         except Exception:
             unlocked = None
+        if isinstance(unlocked, dict) and unlocked.get("__error"):
+            return None, f"尝试自动解锁失败（{unlocked.get('__error')}）"
         if isinstance(unlocked, dict):
             full_url2 = unlocked.get('full_url')
             url2 = unlocked.get('url')
@@ -1100,7 +1441,7 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
 
     if unlock_points is not None and unlock_points > 0:
         return None, f"需要 {unlock_points} 积分，未解锁"
-    return None, "解析失败"
+    return None, "解析失败（可能登录失效/接口变更）"
 
 
 async def resolve_hdhive_115_url_with_note(hdhive_url: str) -> Tuple[Optional[str], str]:
@@ -1119,7 +1460,27 @@ async def convert_message_hdhive_links(msg) -> Tuple[bool, str]:
     original_text = getattr(msg, 'message', None) or ""
     hits = _extract_hdhive_hits_from_message(msg)
     if not hits:
+        # If text or web preview hints HDHive but regex didn't match, log for diagnostics
+        hint_sources = []
+        if original_text:
+            hint_sources.append(original_text)
+        try:
+            if isinstance(getattr(msg, 'media', None), MessageMediaWebPage):
+                wp = getattr(msg.media, 'webpage', None)
+                wp_url = getattr(wp, 'url', None) if wp else None
+                wp_display = getattr(wp, 'display_url', None) if wp else None
+                if wp_url:
+                    hint_sources.append(str(wp_url))
+                if wp_display:
+                    hint_sources.append(str(wp_display))
+        except Exception:
+            pass
+        hint_text = " | ".join(hint_sources)
+        if 'hdhive' in hint_text.lower() or '/resource/115/' in hint_text.lower():
+            log_message(f"[HDHive] 未匹配到链接，text='{original_text[:200]}'")
         return False, original_text
+
+    log_message(f"[HDHive] 命中 {len(hits)} 个链接，开始解析。")
 
     resolved_map: Dict[str, Optional[str]] = {}
     note_map: Dict[str, str] = {}
@@ -1127,6 +1488,7 @@ async def convert_message_hdhive_links(msg) -> Tuple[bool, str]:
         if hit.hdhive_url in resolved_map:
             continue
         real_url, note = await resolve_hdhive_115_url_with_note(hit.hdhive_url)
+        log_message(f"[HDHive] 解析结果: {hit.hdhive_url} -> {real_url or 'None'} | {note}")
         resolved_map[hit.hdhive_url] = real_url
         note_map[hit.hdhive_url] = note
 
@@ -1614,6 +1976,15 @@ async def new_message_handler(event):
                 media_type_detected = 'document'
             
             debug_log(f" 消息类型: {media_type_detected}")
+
+            # --- Pre-check HDHive hits (used to override monitor type mismatch) ---
+            target_user_ids_for_hdhive = restricted_entry.get('target_user_ids', [])
+            has_hdhive_hit = False
+            try:
+                if target_user_ids_for_hdhive:
+                    has_hdhive_hit = bool(_extract_hdhive_hits_from_message(msg))
+            except Exception:
+                has_hdhive_hit = False
             
             # --- Check Monitor Type ---
             monitor_types = restricted_entry.get('monitor_types')
@@ -1624,16 +1995,22 @@ async def new_message_handler(event):
                 normalized_types = [single_type] if single_type else ['all']
 
             if 'all' not in normalized_types and media_type_detected not in normalized_types:
-                if getattr(msg, 'media', None):
-                    trace_log(
-                        f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=monitor_type_mismatch "
-                        f"configured={normalized_types} detected={media_type_detected} | {media_trace}"
+                if has_hdhive_hit:
+                    debug_log(
+                        f" 频道监控类型为 '{','.join(normalized_types)}'，"
+                        f"但检测到 HDHive 链接，继续处理。"
                     )
-                debug_log(
-                    f" 频道监控类型为 '{','.join(normalized_types)}'，"
-                    f"与消息类型 '{media_type_detected}' 不匹配，跳过。"
-                )
-                return
+                else:
+                    if getattr(msg, 'media', None):
+                        trace_log(
+                            f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=monitor_type_mismatch "
+                            f"configured={normalized_types} detected={media_type_detected} | {media_trace}"
+                        )
+                    debug_log(
+                        f" 频道监控类型为 '{','.join(normalized_types)}'，"
+                        f"与消息类型 '{media_type_detected}' 不匹配，跳过。"
+                    )
+                    return
 
             # --- Enable Forward/Download Flags ---
             download_directory = restricted_entry.get('download_directory', '').strip()
@@ -1643,12 +2020,8 @@ async def new_message_handler(event):
 
             # Special case: if message contains HDHive 115 links (explicit/implicit/buttons),
             # always send the resolved real link(s) to configured target users.
-            try:
-                target_user_ids_for_hdhive = restricted_entry.get('target_user_ids', [])
-                if target_user_ids_for_hdhive and _extract_hdhive_hits_from_message(msg):
-                    should_forward = True
-            except Exception:
-                pass
+            if has_hdhive_hit:
+                should_forward = True
             
             debug_log(f" 配置读取 - 转发开关(keep_video_message): {should_forward}, 下载目录: '{download_directory}'")
             debug_log(f" 最终判定 - 下载: {should_download}, 转发: {should_forward}")
