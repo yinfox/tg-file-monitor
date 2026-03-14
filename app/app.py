@@ -13,6 +13,8 @@ import time
 import re
 import datetime
 import shutil
+import requests
+from urllib.parse import quote_plus
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError
@@ -42,6 +44,8 @@ DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
 DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
 DRAMA_RUN_BUSY_MESSAGE = '当前已有追剧任务在运行（可能是自动调度），请稍后重试。'
+MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
+SELF_SERVICE_LOG_FILE = os.path.join(LOG_DIR, 'self_service.log')
 
 # Log performance safeguards
 LOG_TAIL_LINES = 200
@@ -50,6 +54,8 @@ LOG_FILE_MAX_BYTES = 50 * 1024 * 1024
 LOG_FILE_TRIM_BYTES = 5 * 1024 * 1024
 LOG_FILE_SIZE_CHECK_INTERVAL = 15
 LOG_REFRESH_INTERVAL_DEFAULT = 10
+
+_MESSAGE_QUEUE_LOCK = threading.Lock()
 
 # Load environment variables from config/.env
 try:
@@ -84,6 +90,9 @@ def load_config():
         "log_auto_refresh_enabled": False,
         "log_tail_lines": LOG_TAIL_LINES,
         "log_tail_max_bytes": LOG_TAIL_MAX_BYTES,
+        "self_service_enabled": False,
+        "self_service_target_user_ids": "",
+        "self_service_search_max_results": 5,
         "allowed_browse_path": os.getcwd(),
         "restricted_channels": [],
         "proxy": {},
@@ -174,6 +183,12 @@ def load_config():
                     config["log_tail_lines"] = default_config["log_tail_lines"]
                 if "log_tail_max_bytes" not in config:
                     config["log_tail_max_bytes"] = default_config["log_tail_max_bytes"]
+                if "self_service_enabled" not in config:
+                    config["self_service_enabled"] = default_config["self_service_enabled"]
+                if "self_service_target_user_ids" not in config:
+                    config["self_service_target_user_ids"] = default_config["self_service_target_user_ids"]
+                if "self_service_search_max_results" not in config:
+                    config["self_service_search_max_results"] = default_config["self_service_search_max_results"]
                 if "proxy" not in config:
                     config["proxy"] = {}
                 if "trace_media_detection" not in config:
@@ -1246,6 +1261,183 @@ def _tail_file_lines(path: str, max_lines: int = LOG_TAIL_LINES, max_bytes: int 
     return [line.decode('utf-8', errors='replace') for line in lines]
 
 
+def _append_self_service_log(lines):
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(SELF_SERVICE_LOG_FILE, 'a', encoding='utf-8') as f:
+            for line in (lines or []):
+                f.write(str(line).rstrip('\n') + '\n')
+    except Exception:
+        pass
+
+
+def _parse_target_user_ids(raw) -> list:
+    if raw is None:
+        return []
+    items = []
+    if isinstance(raw, (list, tuple, set)):
+        items = list(raw)
+    else:
+        text = str(raw)
+        items = re.split(r'[\n,]+', text)
+    result = []
+    for item in items:
+        s = str(item or '').strip()
+        if not s:
+            continue
+        if s.lstrip('-').isdigit():
+            try:
+                result.append(int(s))
+                continue
+            except Exception:
+                pass
+        result.append(s)
+    return result
+
+
+def _enqueue_message(chat_id, text: str) -> bool:
+    if not chat_id or not text:
+        return False
+    record = {"chat_id": chat_id, "text": text}
+    with _MESSAGE_QUEUE_LOCK:
+        pending = []
+        try:
+            if os.path.exists(MESSAGE_QUEUE_FILE):
+                with open(MESSAGE_QUEUE_FILE, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    pending = data
+        except Exception:
+            pending = []
+        pending.append(record)
+        tmp_path = MESSAGE_QUEUE_FILE + '.tmp'
+        try:
+            os.makedirs(os.path.dirname(MESSAGE_QUEUE_FILE) or '.', exist_ok=True)
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(pending, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, MESSAGE_QUEUE_FILE)
+            return True
+        except Exception:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+    return False
+
+
+def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header: str = "") -> list:
+    query = (query or "").strip()
+    if not query:
+        return []
+    encoded = quote_plus(query)
+    search_urls = [
+        f"https://hdhive.com/search?keyword={encoded}",
+        f"https://hdhive.com/search?q={encoded}",
+        f"https://hdhive.com/search?query={encoded}",
+        f"https://hdhive.com/?keyword={encoded}",
+        f"https://hdhive.com/?q={encoded}",
+        f"https://hdhive.com/search/{encoded}",
+    ]
+    headers = {"User-Agent": "Mozilla/5.0"}
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+
+    pattern = re.compile(r"/resource/115/([0-9A-Za-z]{16,64})", re.IGNORECASE)
+    results = []
+    for url in search_urls:
+        try:
+            resp = requests.get(url, timeout=20, headers=headers)
+        except Exception:
+            continue
+        if resp.status_code != 200 or not resp.text:
+            continue
+        for slug in pattern.findall(resp.text):
+            full_url = f"https://hdhive.com/resource/115/{slug}"
+            if full_url not in results:
+                results.append(full_url)
+                if len(results) >= max_results:
+                    return results
+        if results:
+            break
+    return results
+
+
+def _run_self_service_request(payload: dict) -> None:
+    ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    query = payload.get("query", "")
+    target_ids = payload.get("targets", [])
+    max_results = int(payload.get("max_results", 5) or 5)
+    max_results = max(1, min(max_results, 20))
+    hdhive_cookie = payload.get("hdhive_cookie", "") or ""
+    request_type = payload.get("type", "")
+    request_year = payload.get("year", "")
+    request_note = payload.get("note", "")
+
+    _append_self_service_log([f"[{ts}] [INFO] submit query={query} targets={target_ids}"])
+
+    if not target_ids:
+        _append_self_service_log([f"[{ts}] [WARN] no targets configured"])
+        return
+
+    candidates = _search_hdhive_resource_urls(query, max_results=max_results, cookie_header=hdhive_cookie)
+    if not candidates:
+        msg_lines = [
+            "❌ 自助观影申请未找到匹配资源",
+            f"关键词: {query}",
+        ]
+        if request_type:
+            msg_lines.append(f"类型: {request_type}")
+        if request_year:
+            msg_lines.append(f"年份: {request_year}")
+        if request_note:
+            msg_lines.append(f"备注: {request_note}")
+        msg = "\n".join(msg_lines)
+        for tid in target_ids:
+            _enqueue_message(tid, msg)
+        _append_self_service_log([f"[{ts}] [WARN] no results for query={query}"])
+        return
+
+    primary = candidates[0]
+    real_url = None
+    note = ""
+    try:
+        import telegram_monitor as tg_monitor
+        tg_monitor.current_config = tg_monitor.load_config()
+        real_url, note = tg_monitor._resolve_hdhive_115_url_with_note_sync(primary)
+    except Exception as e:
+        real_url = None
+        note = f"解析异常: {e}"
+
+    msg_lines = [
+        "🎬 自助观影申请结果",
+        f"关键词: {query}",
+    ]
+    if request_type:
+        msg_lines.append(f"类型: {request_type}")
+    if request_year:
+        msg_lines.append(f"年份: {request_year}")
+    if request_note:
+        msg_lines.append(f"备注: {request_note}")
+    msg_lines.append(f"影巢资源: {primary}")
+    if real_url:
+        msg_lines.append(f"115 链接: {real_url}")
+    else:
+        msg_lines.append("115 链接: 未解析")
+    if note:
+        msg_lines.append(f"说明: {note}")
+    if len(candidates) > 1:
+        msg_lines.append("候选资源:")
+        for idx, url in enumerate(candidates[:max_results], start=1):
+            msg_lines.append(f"{idx}. {url}")
+
+    msg = "\n".join(msg_lines)
+    for tid in target_ids:
+        _enqueue_message(tid, msg)
+
+    _append_self_service_log([f"[{ts}] [INFO] done query={query} primary={primary} ok={bool(real_url)} note={note}"])
+
+
 def _resolve_log_view_config(cfg: dict):
     interval = cfg.get("log_refresh_interval_seconds", LOG_REFRESH_INTERVAL_DEFAULT)
     try:
@@ -2166,6 +2358,22 @@ def manage_config():
                 flash("HDHive Cookie 已清除。", "info")
             save_config(config)
 
+        elif action == 'update_self_service':
+            enabled = request.form.get('self_service_enabled') == 'on'
+            target_user_ids = (request.form.get('self_service_target_user_ids') or '').strip()
+            max_results_raw = (request.form.get('self_service_search_max_results') or '').strip()
+            try:
+                max_results = int(max_results_raw) if max_results_raw != '' else 5
+            except Exception:
+                max_results = 5
+            max_results = max(1, min(max_results, 20))
+
+            config['self_service_enabled'] = enabled
+            config['self_service_target_user_ids'] = target_user_ids
+            config['self_service_search_max_results'] = max_results
+            save_config(config)
+            flash("自助观影申请配置已更新！", "success")
+
         elif action == 'clear_proxy':
             config['proxy'] = {}
             save_config(config)
@@ -3063,6 +3271,65 @@ def downloader_log():
 def downloader_clear_log():
     downloader.clear_logs()
     return jsonify({"success": True})
+
+
+@app.route('/self_service', methods=['GET', 'POST'])
+@login_required
+def self_service_request():
+    config = load_config()
+    enabled = bool(config.get("self_service_enabled", False))
+    targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
+    max_results = int(config.get("self_service_search_max_results", 5) or 5)
+    max_results = max(1, min(max_results, 20))
+    hdhive_cookie = (config.get("hdhive_cookie") or "").strip()
+
+    if request.method == 'POST':
+        if not enabled:
+            flash("自助观影申请功能未启用，请先在配置页开启。", "warning")
+            return redirect(url_for('self_service_request'))
+        if not hdhive_cookie:
+            flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
+            return redirect(url_for('self_service_request'))
+        if not targets:
+            flash("未配置接收用户，请先在配置页填写目标用户 ID。", "error")
+            return redirect(url_for('self_service_request'))
+
+        title = (request.form.get('title') or '').strip()
+        if not title:
+            flash("请填写影片或电视剧名称。", "warning")
+            return redirect(url_for('self_service_request'))
+
+        request_type = (request.form.get('type') or '').strip()
+        request_year = (request.form.get('year') or '').strip()
+        request_note = (request.form.get('note') or '').strip()
+
+        query_parts = [title]
+        if request_year:
+            query_parts.append(request_year)
+        if request_type:
+            query_parts.append(request_type)
+        query = " ".join([p for p in query_parts if p])
+
+        payload = {
+            "query": query,
+            "targets": targets,
+            "max_results": max_results,
+            "hdhive_cookie": hdhive_cookie,
+            "type": request_type,
+            "year": request_year,
+            "note": request_note,
+        }
+        threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
+        flash("已提交申请，后台处理中。解析结果将发送到指定用户。", "success")
+        return redirect(url_for('self_service_request'))
+
+    return render_template(
+        'self_service_request.html',
+        enabled=enabled,
+        target_display=", ".join([str(t) for t in targets]) if targets else "未配置",
+        max_results=max_results,
+        has_cookie=bool(hdhive_cookie),
+    )
 
 @app.route('/api/download', methods=['POST'])
 @login_required

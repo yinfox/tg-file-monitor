@@ -17,6 +17,9 @@
   "log_auto_refresh_enabled": false,
   "log_tail_lines": 200,
   "log_tail_max_bytes": 2097152,
+  "self_service_enabled": false,
+  "self_service_target_user_ids": "",
+  "self_service_search_max_results": 5,
   "restricted_channels": [],
   "proxy": {},
   "downloader": {

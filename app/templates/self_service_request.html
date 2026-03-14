@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+
+{% block title %}自助观影申请{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card shadow-sm mb-3">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="bi bi-ticket-perforated me-2"></i>自助观影申请</h5>
+            </div>
+            <div class="card-body">
+                {% if not enabled %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle me-2"></i>当前未启用自助观影申请功能，请在配置页开启。
+                </div>
+                {% endif %}
+                {% if not has_cookie %}
+                <div class="alert alert-danger">
+                    <i class="bi bi-shield-exclamation me-2"></i>未配置 HDHive Cookie，无法自动解锁/解析。
+                </div>
+                {% endif %}
+
+                <form method="post" action="{{ url_for('self_service_request') }}">
+                    <div class="mb-3">
+                        <label class="form-label">影片/剧集名称</label>
+                        <input type="text" class="form-control" name="title" placeholder="例如：沙丘2 / 绝命毒师">
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label">类型</label>
+                            <select class="form-select" name="type">
+                                <option value="">不指定</option>
+                                <option value="电影">电影</option>
+                                <option value="电视剧">电视剧</option>
+                                <option value="综艺">综艺</option>
+                                <option value="动画">动画</option>
+                                <option value="纪录片">纪录片</option>
+                            </select>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">年份</label>
+                            <input type="text" class="form-control" name="year" placeholder="如 2024">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label">候选数</label>
+                            <input type="text" class="form-control" value="{{ max_results }}" disabled>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label">备注</label>
+                        <textarea class="form-control" name="note" rows="3"
+                            placeholder="例如：希望 4K / 国配 / 完整季"></textarea>
+                    </div>
+
+                    <div class="mb-3">
+                        <div class="small text-muted">结果将发送到：</div>
+                        <div class="fw-semibold">{{ target_display }}</div>
+                    </div>
+
+                    <button type="submit" class="btn btn-info w-100">提交申请</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -553,6 +553,38 @@
                 </div>
 
                 <div class="card mb-3 shadow-sm">
+                    <div class="card-header bg-info text-white">
+                        <h5 class="mb-0 small"><i class="bi bi-ticket-perforated me-2"></i>自助观影申请</h5>
+                    </div>
+                    <div class="card-body p-3">
+                        <form action="{{ url_for('manage_config') }}" method="POST">
+                            <input type="hidden" name="action" value="update_self_service">
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="self_service_enabled"
+                                    name="self_service_enabled" {% if config.get('self_service_enabled', False) %}checked{% endif %}>
+                                <label class="form-check-label small" for="self_service_enabled">启用自助观影申请</label>
+                            </div>
+                            <div class="mb-2">
+                                <label for="self_service_target_user_ids" class="form-label small">接收用户 ID:</label>
+                                <input type="text" class="form-control form-control-sm" id="self_service_target_user_ids"
+                                    name="self_service_target_user_ids"
+                                    value="{{ config.get('self_service_target_user_ids', '') }}"
+                                    placeholder="123, @user (逗号分隔)">
+                                <div class="form-text">提交申请后的解析结果将发送到这些用户/群。</div>
+                            </div>
+                            <div class="mb-2">
+                                <label for="self_service_search_max_results" class="form-label small">搜索候选数:</label>
+                                <input type="number" class="form-control form-control-sm" id="self_service_search_max_results"
+                                    name="self_service_search_max_results" min="1" max="20" step="1"
+                                    value="{{ config.get('self_service_search_max_results', 5) }}">
+                                <div class="form-text">用于搜索候选资源的最大数量，默认 5。</div>
+                            </div>
+                            <button type="submit" class="btn btn-info btn-sm w-100">保存自助观影配置</button>
+                        </form>
+                    </div>
+                </div>
+
+                <div class="card mb-3 shadow-sm">
                     <div class="card-header bg-dark text-white">
                         <h5 class="mb-0 small"><i class="bi bi-robot me-2"></i>Bot Token 配置</h5>
                     </div>

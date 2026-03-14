@@ -258,6 +258,10 @@
                 href="{{ url_for('downloader_page') }}">
                 <i class="bi bi-cloud-arrow-down"></i>视频万能下载
             </a>
+            <a class="nav-link {% if request.endpoint == 'self_service_request' %}active{% endif %}"
+                href="{{ url_for('self_service_request') }}">
+                <i class="bi bi-ticket-perforated"></i>自助观影申请
+            </a>
         </nav>
 
         <div class="sidebar-footer">
