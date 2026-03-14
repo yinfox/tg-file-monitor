@@ -33,23 +33,59 @@ except Exception:
 # 全局 DEBUG 标志
 DEBUG_MODE = False
 
-def load_config():
-    if not os.path.exists(CONFIG_FILE): return {"file_monitoring_tasks": [], "debug_mode": False}
+_DEFAULT_CONFIG = {
+    "file_monitoring_tasks": [],
+    "debug_mode": False,
+    "file_monitor_scan_interval": 5,
+    "file_monitor_dir_state_check_interval": 0,
+}
+
+_CONFIG_CACHE = None
+_CONFIG_MTIME = None
+_CONFIG_LAST_CHECK = 0.0
+_CONFIG_CHECK_INTERVAL = 2.0
+
+
+def _load_config_from_disk():
+    if not os.path.exists(CONFIG_FILE):
+        return dict(_DEFAULT_CONFIG)
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
-            
-            # 环境变量覆盖（敏感信息优先）
-            if os.environ.get('COOKIE_115'):
-                 config['115_cookie'] = os.environ.get('COOKIE_115')
-            elif os.environ.get('WEB_115_COOKIE'):
-                 config['115_cookie'] = os.environ.get('WEB_115_COOKIE')
-            
-            # 读取 debug 模式设置
-            global DEBUG_MODE
-            DEBUG_MODE = config.get('debug_mode', False)
-            return config
-    except: return {"file_monitoring_tasks": [], "debug_mode": False}
+        if not isinstance(config, dict):
+            return dict(_DEFAULT_CONFIG)
+
+        # 环境变量覆盖（敏感信息优先）
+        if os.environ.get('COOKIE_115'):
+            config['115_cookie'] = os.environ.get('COOKIE_115')
+        elif os.environ.get('WEB_115_COOKIE'):
+            config['115_cookie'] = os.environ.get('WEB_115_COOKIE')
+
+        return config
+    except Exception:
+        return dict(_DEFAULT_CONFIG)
+
+
+def load_config():
+    global _CONFIG_CACHE, _CONFIG_MTIME, _CONFIG_LAST_CHECK, DEBUG_MODE
+    now = time.monotonic()
+    if _CONFIG_CACHE is not None and (now - _CONFIG_LAST_CHECK) < _CONFIG_CHECK_INTERVAL:
+        return _CONFIG_CACHE
+
+    _CONFIG_LAST_CHECK = now
+    try:
+        mtime = os.path.getmtime(CONFIG_FILE)
+    except Exception:
+        mtime = None
+
+    if _CONFIG_CACHE is not None and mtime == _CONFIG_MTIME:
+        return _CONFIG_CACHE
+
+    config = _load_config_from_disk()
+    _CONFIG_CACHE = config
+    _CONFIG_MTIME = mtime
+    DEBUG_MODE = bool(config.get('debug_mode', False))
+    return config
 
 def log_message(message, level="INFO"):
     """输出日志，level 可以是 INFO, DEBUG, ERROR，支持 ANSI 颜色"""
@@ -149,7 +185,7 @@ def resolve_destination_path(destination_dir, filename, handle_duplicate="rename
 def copy_with_mid_check(filepath, filename, destination_dir, handle_duplicate, client_115, file_sha1, file_size, target, check_interval, chunk_size):
     target_path = resolve_destination_path(destination_dir, filename, handle_duplicate)
     temp_path = f"{target_path}.part"
-    last_check = time.time()
+    last_check = time.monotonic()
 
     try:
         with open(filepath, 'rb') as src, open(temp_path, 'wb') as dst:
@@ -159,7 +195,7 @@ def copy_with_mid_check(filepath, filename, destination_dir, handle_duplicate, c
                     break
                 dst.write(data)
 
-                now = time.time()
+                now = time.monotonic()
                 if now - last_check >= check_interval:
                     last_check = now
                     check = client_115.check_file_exists(
@@ -326,6 +362,22 @@ def monitor_files():
     while True:
         config = load_config()
         tasks = config.get("file_monitoring_tasks", [])
+        scan_seen = set()
+        scan_interval = _DEFAULT_CONFIG.get("file_monitor_scan_interval", 5)
+        try:
+            scan_interval = int(config.get("file_monitor_scan_interval", scan_interval) or scan_interval)
+        except Exception:
+            scan_interval = _DEFAULT_CONFIG.get("file_monitor_scan_interval", 5)
+        scan_interval = max(1, scan_interval)
+        global_dir_state_interval = _DEFAULT_CONFIG.get("file_monitor_dir_state_check_interval", 0)
+        try:
+            global_dir_state_interval = float(
+                config.get("file_monitor_dir_state_check_interval", global_dir_state_interval) or global_dir_state_interval
+            )
+        except Exception:
+            global_dir_state_interval = _DEFAULT_CONFIG.get("file_monitor_dir_state_check_interval", 0)
+        if global_dir_state_interval < 0:
+            global_dir_state_interval = 0.0
         if DEBUG_MODE:
             current_task_count = len(tasks)
             if last_reported_task_count is None or current_task_count != last_reported_task_count:
@@ -338,6 +390,10 @@ def monitor_files():
                 client_115 = Client115(cookie=cookie_115)
                 debug_log("115 客户端已初始化")
         
+        if not tasks:
+            time.sleep(max(3, scan_interval))
+            continue
+
         for task in tasks:
             source_dir = task.get("source_dir")
             destination_dir = task.get("destination_dir")
@@ -346,147 +402,150 @@ def monitor_files():
             enable_mid_copy_check = task.get("enable_mid_copy_check", False)
             mid_copy_check_interval = task.get("mid_copy_check_interval", 30)
             mid_copy_chunk_size = task.get("mid_copy_chunk_size", 8 * 1024 * 1024)
+            dir_state_check_interval = task.get("dir_state_check_interval", 0)
+            try:
+                dir_state_check_interval = float(dir_state_check_interval or 0)
+            except Exception:
+                dir_state_check_interval = global_dir_state_interval
+            if dir_state_check_interval < 0:
+                dir_state_check_interval = global_dir_state_interval
+            if dir_state_check_interval <= 0:
+                dir_state_check_interval = global_dir_state_interval
             
-            if not source_dir or not os.path.isdir(source_dir): continue
+            if not source_dir or not os.path.isdir(source_dir):
+                continue
 
-            for filename in os.listdir(source_dir):
-                if filename.startswith('.'): continue
-                filepath = os.path.join(source_dir, filename)
-                
-                # 检查是文件还是文件夹
-                is_file = os.path.isfile(filepath)
-                is_dir = os.path.isdir(filepath)
-                if not is_file and not is_dir: continue # 跳过管道等特殊文件
-                
-                # 对于文件使用大小和修改时间，对于文件夹递归检查内部文件修改时间
-                if is_file:
-                    file_size = os.path.getsize(filepath)
-                    file_mtime = os.path.getmtime(filepath)
-                    current_state = {"size": file_size, "mtime": file_mtime}
-                else:
-                    # 对于目录，综合最近修改时间 + 文件数 + 总大小判断是否稳定
-                    current_state = get_directory_state(filepath)
-
-                if filepath not in monitored_file_states:
-                    monitored_file_states[filepath] = {
-                        "state": current_state, 
-                        "time": time.time(), 
-                        "is_dir": is_dir,
-                        "last_check": 0, 
-                        "last_success": 0
-                    }
-                    debug_log(f"新{'目录' if is_dir else '文件'}进入监控: {filename} (state: {current_state})")
-                    continue
-                
-                # 跳过已完成的文件
-                if monitored_file_states[filepath].get("completed"):
-                    continue
-                
-                prev = monitored_file_states[filepath]
-                state_unchanged = current_state == prev['state']
-                file_stable_time = task.get('stable_time', 10)
-                dir_stable_time = task.get('dir_stable_time', max(file_stable_time, 30))
-                effective_stable_time = dir_stable_time if is_dir else file_stable_time
-                time_stable = (time.time() - prev['time']) >= effective_stable_time
-                
-                if state_unchanged and time_stable:
-                    debug_log(f"检测到稳定{'目录' if is_dir else '文件'}: {filename}")
-                    debug_log(
-                        f"信息: state={current_state}, stable_time={time.time() - prev['time']:.1f}s"
-                        f" / 阈值={effective_stable_time}s"
-                    )
-
-                    enable_second_transfer = task.get('enable_second_transfer', True)
-                    target_cid = (task.get('target_cid') or '').strip()
-                    target = f"U_1_{target_cid}" if target_cid else task.get('target', 'U_1_0')
-                    
-                    # 文件夹无法秒传，跳过 115 秒传逻辑直接本地同步
-                    if is_dir or not client_115 or not enable_second_transfer:
-                        log_message(f"{'目录跳过秒传' if is_dir else '秒传被禁用 or 未配置'}，执行本地 {action_type} 操作: {filename}")
-                        if perform_local_action(
-                            filepath,
-                            filename,
-                            destination_dir,
-                            action_type,
-                            handle_duplicate,
-                            enable_mid_copy_check=enable_mid_copy_check if not is_dir else False,
-                            client_115=client_115,
-                            file_sha1=None,
-                            file_size=current_state['size'] if is_file else 0,
-                            target=None,
-                            check_interval=mid_copy_check_interval,
-                            chunk_size=mid_copy_chunk_size,
-                            delete_source_after_transfer=task.get('delete_source_after_transfer', False)
-                        ):
-                            monitored_file_states[filepath] = {"completed": True}
-                        continue
-                    
-                    try:
-                        cooldown = task.get('second_transfer_cooldown', 300)
-                        now = time.time()
-                        state = monitored_file_states.get(filepath, {})
-                        
-                        if now - state.get('last_check', 0) < cooldown:
-                            remaining = int(cooldown - (now - state.get('last_check', 0)))
-                            debug_log(f"⏰ 秒传冷却中（剩余{remaining}秒），等待: {filename}")
+            try:
+                with os.scandir(source_dir) as entries:
+                    for entry in entries:
+                        if entry.name.startswith('.'):
                             continue
+                        filename = entry.name
+                        filepath = entry.path
+                        scan_seen.add(filepath)
+
+                        # 检查是文件还是文件夹
+                        try:
+                            is_file = entry.is_file()
+                            is_dir = entry.is_dir()
+                        except OSError:
+                            continue
+                        if not is_file and not is_dir:
+                            continue  # 跳过管道等特殊文件
+
+                        now_mono = time.monotonic()
+                        prev = monitored_file_states.get(filepath)
+
+                        if is_dir and prev and dir_state_check_interval > 0:
+                            last_dir_check = prev.get('dir_state_last_check', 0.0)
+                            if now_mono - last_dir_check < dir_state_check_interval:
+                                continue
+
+                        # 对于文件使用大小和修改时间，对于文件夹递归检查内部文件修改时间
+                        if is_file:
+                            try:
+                                stat = entry.stat()
+                            except FileNotFoundError:
+                                continue
+                            current_state = {"size": stat.st_size, "mtime": stat.st_mtime}
+                        else:
+                            # 对于目录，综合最近修改时间 + 文件数 + 总大小判断是否稳定
+                            current_state = get_directory_state(filepath)
+
+                        if is_dir and prev is not None:
+                            prev['dir_state_last_check'] = now_mono
+
+                        if prev is None:
+                            monitored_file_states[filepath] = {
+                                "state": current_state,
+                                "time": now_mono,
+                                "is_dir": is_dir,
+                                "last_check": 0.0,
+                                "last_success": 0.0,
+                                "dir_state_last_check": now_mono if is_dir else 0.0,
+                            }
+                            debug_log(f"新{'目录' if is_dir else '文件'}进入监控: {filename} (state: {current_state})")
+                            continue
+                        # 跳过已完成的文件
+                        if monitored_file_states[filepath].get("completed"):
+                            continue
+
+                        state_unchanged = current_state == prev['state']
+                        file_stable_time = task.get('stable_time', 10)
+                        dir_stable_time = task.get('dir_stable_time', max(file_stable_time, 30))
+                        effective_stable_time = dir_stable_time if is_dir else file_stable_time
+                        time_stable = (now_mono - prev['time']) >= effective_stable_time
                         
-                        # 执行秒传检查（只有文件能进这里，is_dir已经在上方过滤了）
-                        debug_log(f"🔍 检查秒传: {filename}")
-                        debug_log(f"计算 SHA1: {filename}")
-                        sha1 = compute_sha1(filepath)
-                        file_size = current_state.get('size', 0) if is_file else 0
-                        debug_log(f"SHA1: {sha1}, 文件大小: {file_size} bytes, 目标: {target}")
-                        check = client_115.check_file_exists(
-                            sha1, 
-                            file_size, 
-                            filename, 
-                            target=target,
-                            file_path=filepath  # 传入文件路径用于秒传上传
-                        )
-                        monitored_file_states[filepath]['last_check'] = now
-                        debug_log(f"秒传检查结果: {check}")
-                        # ...
-                        
-                        # 秒传成功（文件已在115服务器）
-                        if check.get('success') and check.get('can_transfer') and check.get('already_exists'):
-                            delete_source_after_transfer = task.get('delete_source_after_transfer', False)
-                            # 检查是否已经传输到目标文件夹
-                            if check.get('transferred'):
-                                # 新的秒传方式：upload_file已经直接传到目标文件夹了
-                                log_message(f"✅ 秒传成功！文件已秒传到目标文件夹: {filename} ({action_type})")
-                                monitored_file_states[filepath] = {"completed": True}
+                        if state_unchanged and time_stable:
+                            debug_log(f"检测到稳定{'目录' if is_dir else '文件'}: {filename}")
+                            debug_log(
+                                f"信息: state={current_state}, stable_time={now_mono - prev['time']:.1f}s"
+                                f" / 阈值={effective_stable_time}s"
+                            )
+
+                            enable_second_transfer = task.get('enable_second_transfer', True)
+                            target_cid = (task.get('target_cid') or '').strip()
+                            target = f"U_1_{target_cid}" if target_cid else task.get('target', 'U_1_0')
+                            
+                            # 文件夹无法秒传，跳过 115 秒传逻辑直接本地同步
+                            if is_dir or not client_115 or not enable_second_transfer:
+                                log_message(f"{'目录跳过秒传' if is_dir else '秒传被禁用 or 未配置'}，执行本地 {action_type} 操作: {filename}")
+                                if perform_local_action(
+                                    filepath,
+                                    filename,
+                                    destination_dir,
+                                    action_type,
+                                    handle_duplicate,
+                                    enable_mid_copy_check=enable_mid_copy_check if not is_dir else False,
+                                    client_115=client_115,
+                                    file_sha1=None,
+                                    file_size=current_state['size'] if is_file else 0,
+                                    target=None,
+                                    check_interval=mid_copy_check_interval,
+                                    chunk_size=mid_copy_chunk_size,
+                                    delete_source_after_transfer=task.get('delete_source_after_transfer', False)
+                                ):
+                                    monitored_file_states[filepath] = {"completed": True}
+                                continue
+                            
+                            try:
+                                cooldown = task.get('second_transfer_cooldown', 300)
+                                now_check = time.monotonic()
+                                state = monitored_file_states.get(filepath, {})
                                 
-                                # 核心逻辑：如果是 'move' / 'copy_and_delete' 或者是 'copy' 且配置了“删除源文件”，则执行删除
-                                should_delete_after_115 = (action_type in ["move", "copy_and_delete"]) or delete_source_after_transfer
-                                if should_delete_after_115 and os.path.exists(filepath):
-                                    try:
-                                        os.remove(filepath)
-                                        log_message(f"🗑️  已根据策略 ( {action_type} ) 删除源文件: {filename}")
-                                        debug_log(f"删除文件路径: {filepath}")
-                                    except Exception as e:
-                                        log_message(f"⚠️  根据策略删除源文件失败: {filename}, 原因: {e}", level="ERROR")
-                            else:
-                                # 旧方式：需要复制
-                                log_message(f"✅ 秒传成功，文件已在115: {filename} ({action_type})")
+                                if now_check - state.get('last_check', 0.0) < cooldown:
+                                    remaining = int(cooldown - (now_check - state.get('last_check', 0.0)))
+                                    debug_log(f"⏰ 秒传冷却中（剩余{remaining}秒），等待: {filename}")
+                                    continue
                                 
-                                # 获取file_id并复制到目标文件夹
-                                file_id = check.get('file_id')
-                                if file_id:
-                                    log_message(f"📋 找到File ID: {file_id}，开始复制到目标文件夹...")
-                                    
-                                    # 调用copy_file_to_folder将文件添加到目标文件夹
-                                    copy_result = client_115.copy_file_to_folder(
-                                        file_id=file_id,
-                                        target_cid=target_cid,  # 使用原始CID
-                                        file_name=filename
-                                    )
-                                    
-                                    if copy_result.get('success') and copy_result.get('transferred'):
-                                        log_message(f"✅ 完整秒传成功！文件已添加到目标文件夹: {filename}")
+                                # 执行秒传检查（只有文件能进这里，is_dir已经在上方过滤了）
+                                debug_log(f"🔍 检查秒传: {filename}")
+                                debug_log(f"计算 SHA1: {filename}")
+                                sha1 = compute_sha1(filepath)
+                                file_size = current_state.get('size', 0) if is_file else 0
+                                debug_log(f"SHA1: {sha1}, 文件大小: {file_size} bytes, 目标: {target}")
+                                check = client_115.check_file_exists(
+                                    sha1, 
+                                    file_size, 
+                                    filename, 
+                                    target=target,
+                                    file_path=filepath  # 传入文件路径用于秒传上传
+                                )
+                                monitored_file_states[filepath]['last_check'] = now_check
+                                debug_log(f"秒传检查结果: {check}")
+                                # ...
+                                
+                                # 秒传成功（文件已在115服务器）
+                                if check.get('success') and check.get('can_transfer') and check.get('already_exists'):
+                                    delete_source_after_transfer = task.get('delete_source_after_transfer', False)
+                                    # 检查是否已经传输到目标文件夹
+                                    if check.get('transferred'):
+                                        # 新的秒传方式：upload_file已经直接传到目标文件夹了
+                                        log_message(f"✅ 秒传成功！文件已秒传到目标文件夹: {filename} ({action_type})")
                                         monitored_file_states[filepath] = {"completed": True}
                                         
-                                        # 秒传成功后删除源文件
+                                        # 核心逻辑：如果是 'move' / 'copy_and_delete' 或者是 'copy' 且配置了“删除源文件”，则执行删除
+                                        should_delete_after_115 = (action_type in ["move", "copy_and_delete"]) or delete_source_after_transfer
                                         if should_delete_after_115 and os.path.exists(filepath):
                                             try:
                                                 os.remove(filepath)
@@ -495,44 +554,83 @@ def monitor_files():
                                             except Exception as e:
                                                 log_message(f"⚠️  根据策略删除源文件失败: {filename}, 原因: {e}", level="ERROR")
                                     else:
-                                        error_msg = copy_result.get('message', '未知错误')
-                                        log_message(f"❌ 文件复制失败: {filename}\n原因: {error_msg}", level="ERROR")
-                                        log_message(f"⚠️  文件ID已找到但未能添加到目标文件夹，保留源文件")
+                                        # 旧方式：需要复制
+                                        log_message(f"✅ 秒传成功，文件已在115: {filename} ({action_type})")
+                                        
+                                        # 获取file_id并复制到目标文件夹
+                                        file_id = check.get('file_id')
+                                        if file_id:
+                                            log_message(f"📋 找到File ID: {file_id}，开始复制到目标文件夹...")
+                                            
+                                            # 调用copy_file_to_folder将文件添加到目标文件夹
+                                            copy_result = client_115.copy_file_to_folder(
+                                                file_id=file_id,
+                                                target_cid=target_cid,  # 使用原始CID
+                                                file_name=filename
+                                            )
+                                            
+                                            if copy_result.get('success') and copy_result.get('transferred'):
+                                                log_message(f"✅ 完整秒传成功！文件已添加到目标文件夹: {filename}")
+                                                monitored_file_states[filepath] = {"completed": True}
+                                                
+                                                # 秒传成功后删除源文件
+                                                if should_delete_after_115 and os.path.exists(filepath):
+                                                    try:
+                                                        os.remove(filepath)
+                                                        log_message(f"🗑️  已根据策略 ( {action_type} ) 删除源文件: {filename}")
+                                                        debug_log(f"删除文件路径: {filepath}")
+                                                    except Exception as e:
+                                                        log_message(f"⚠️  根据策略删除源文件失败: {filename}, 原因: {e}", level="ERROR")
+                                            else:
+                                                error_msg = copy_result.get('message', '未知错误')
+                                                log_message(f"❌ 文件复制失败: {filename}\n原因: {error_msg}", level="ERROR")
+                                                log_message(f"⚠️  文件ID已找到但未能添加到目标文件夹，保留源文件")
+                                        else:
+                                            log_message(f"⚠️  秒传成功但未返回file_id，保留源文件: {filename}")
+                                        
                                 else:
-                                    log_message(f"⚠️  秒传成功但未返回file_id，保留源文件: {filename}")
-                                
+                                    # 秒传失败（文件不在115），执行本地同步
+                                    log_message(f"⚠️  秒传失败，执行本地 {action_type} 操作: {filename}")
+                                    if perform_local_action(
+                                        filepath,
+                                        filename,
+                                        destination_dir,
+                                        action_type,
+                                        handle_duplicate,
+                                        enable_mid_copy_check=enable_mid_copy_check,
+                                        client_115=client_115,
+                                        file_sha1=sha1,
+                                        file_size=file_size,
+                                        target=target,
+                                        check_interval=mid_copy_check_interval,
+                                        chunk_size=mid_copy_chunk_size,
+                                        delete_source_after_transfer=task.get('delete_source_after_transfer', False)
+                                    ):
+                                        monitored_file_states[filepath] = {"completed": True}
+                            except Exception as e:
+                                log_message(f"秒传检查异常，保留源文件: {e}")
                         else:
-                            # 秒传失败（文件不在115），执行本地同步
-                            log_message(f"⚠️  秒传失败，执行本地 {action_type} 操作: {filename}")
-                            if perform_local_action(
-                                filepath,
-                                filename,
-                                destination_dir,
-                                action_type,
-                                handle_duplicate,
-                                enable_mid_copy_check=enable_mid_copy_check,
-                                client_115=client_115,
-                                file_sha1=sha1,
-                                file_size=file_size,
-                                target=target,
-                                check_interval=mid_copy_check_interval,
-                                chunk_size=mid_copy_chunk_size,
-                                delete_source_after_transfer=task.get('delete_source_after_transfer', False)
-                            ):
-                                monitored_file_states[filepath] = {"completed": True}
-                    except Exception as e:
-                        log_message(f"秒传检查异常，保留源文件: {e}")
-                else:
-                    # 更新状态，如果状态没变则保持 initial time
-                    monitored_file_states[filepath] = {
-                        "state": current_state, 
-                        "time": prev['time'] if state_unchanged else time.time(),
-                        "is_dir": is_dir,
-                        "last_check": prev.get('last_check', 0),
-                        "last_success": prev.get('last_success', 0)
-                    }
+                            # 更新状态，如果状态没变则保持 initial time
+                            monitored_file_states[filepath] = {
+                                "state": current_state, 
+                                "time": prev['time'] if state_unchanged else now_mono,
+                                "is_dir": is_dir,
+                                "last_check": prev.get('last_check', 0.0),
+                                "last_success": prev.get('last_success', 0.0),
+                                "dir_state_last_check": now_mono if is_dir else prev.get('dir_state_last_check', 0.0),
+                            }
+            except Exception as e:
+                debug_log(f"无法扫描目录: {source_dir}, 原因: {e}")
+                continue
         
-        time.sleep(5)
+        if monitored_file_states:
+            for path in list(monitored_file_states.keys()):
+                if path in scan_seen:
+                    continue
+                if not os.path.exists(path):
+                    monitored_file_states.pop(path, None)
+
+        time.sleep(scan_interval)
 
 if __name__ == '__main__':
     monitor_files()

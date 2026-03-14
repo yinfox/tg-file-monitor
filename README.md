@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.70-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.71-orange.svg)](.)
 
 </div>
 
@@ -327,7 +327,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.70 (2026-03-13) - 当前版本
+### v0.4.71 (2026-03-14) - 当前版本
+- ✅ 红包相关设置独立卡片：自动点击开关、关键词、按钮文本与通知目标更易配置
+- ✅ 未填写下载目录时启用红包/自动点击，将自动切换为“文本”监控以便保存配置
+- ✅ 自动点击兼容 Telethon `Message.click` 参数差异（`i/j` 与 `row/column`）
+
+### v0.4.70 (2026-03-13)
 - ✅ 追剧标题清洗优化：保留括号、移除 `×/✕` 等装饰符，避免“脏标题”写入正则
 
 ### v0.4.69 (2026-03-13)

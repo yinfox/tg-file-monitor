@@ -190,6 +190,7 @@ def load_config() -> dict:
             "api_hash": "",
             "session_name": "telegram_monitor",
         },
+        "download_concurrency": 2,
         "restricted_channels": [],
         "proxy": {},
         "debug_mode": False,
@@ -219,6 +220,8 @@ def load_config() -> dict:
             return default_config
         if 'telegram' not in config:
             config['telegram'] = default_config['telegram']
+        if 'download_concurrency' not in config:
+            config['download_concurrency'] = default_config['download_concurrency']
         if 'restricted_channels' not in config:
             config['restricted_channels'] = []
         if 'proxy' not in config:
@@ -1559,8 +1562,33 @@ client = None
 current_config = load_config()
 
 # Semaphore for concurrency limiting
-# Limit to 2 concurrent "expensive" operations (download/forward)
-concurrency_semaphore = asyncio.Semaphore(2)
+# Limit concurrent "expensive" operations (download/forward)
+def _resolve_download_concurrency(cfg: dict) -> int:
+    raw = None
+    if isinstance(cfg, dict):
+        raw = cfg.get('download_concurrency')
+    if raw is None:
+        raw = os.environ.get('TELEGRAM_DOWNLOAD_CONCURRENCY') or os.environ.get('DOWNLOAD_CONCURRENCY')
+    try:
+        val = int(raw)
+    except Exception:
+        val = 2
+    return max(1, min(val, 8))
+
+
+DOWNLOAD_CONCURRENCY = _resolve_download_concurrency(current_config)
+concurrency_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+
+
+def _apply_download_concurrency(cfg: dict, *, announce: bool = False) -> None:
+    global DOWNLOAD_CONCURRENCY, concurrency_semaphore
+    new_val = _resolve_download_concurrency(cfg)
+    if new_val == DOWNLOAD_CONCURRENCY:
+        return
+    DOWNLOAD_CONCURRENCY = new_val
+    concurrency_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+    if announce:
+        log_message(f"下载并发已更新: {DOWNLOAD_CONCURRENCY}")
 
 async def ensure_client_connected():
     """Ensures the Telethon client is connected and authenticated."""
@@ -1861,6 +1889,179 @@ def match_keyword(pattern, text):
         pass
     return False
 
+
+AUTO_CLICK_HISTORY: Dict[Tuple[int, int], float] = {}
+AUTO_CLICK_HISTORY_TTL_SECONDS = 30
+
+
+def _normalize_keyword_list(value) -> List[str]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        items = value
+    elif isinstance(value, str):
+        items = [v.strip() for v in value.split(',')]
+    else:
+        items = [str(value).strip()]
+    return [str(v).strip() for v in items if str(v).strip()]
+
+
+def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, List[str]]:
+    keywords = _normalize_keyword_list(restricted_entry.get('auto_click_keywords'))
+    button_texts = _normalize_keyword_list(restricted_entry.get('auto_click_button_texts'))
+    notify_targets = _normalize_keyword_list(restricted_entry.get('auto_click_notify_targets'))
+
+    # Backward-compatible quick toggle: auto_click_redpacket=true uses default keyword
+    if restricted_entry.get('auto_click_redpacket') and not keywords:
+        keywords = ['发了一个红包']
+
+    return {
+        "keywords": keywords,
+        "button_texts": button_texts,
+        "notify_targets": notify_targets,
+    }
+
+
+def _auto_click_recently(chat_id: int, msg_id: int) -> bool:
+    now = time.time()
+    # purge old entries
+    stale_keys = []
+    for k, ts in AUTO_CLICK_HISTORY.items():
+        if now - ts > AUTO_CLICK_HISTORY_TTL_SECONDS:
+            stale_keys.append(k)
+    for k in stale_keys:
+        AUTO_CLICK_HISTORY.pop(k, None)
+
+    key = (chat_id, msg_id)
+    ts = AUTO_CLICK_HISTORY.get(key)
+    return bool(ts and (now - ts) < AUTO_CLICK_HISTORY_TTL_SECONDS)
+
+
+def _mark_auto_clicked(chat_id: int, msg_id: int) -> None:
+    AUTO_CLICK_HISTORY[(chat_id, msg_id)] = time.time()
+
+
+def _iter_message_buttons(msg):
+    buttons = getattr(msg, 'buttons', None)
+    if not buttons:
+        reply_markup = getattr(msg, 'reply_markup', None)
+        rows = getattr(reply_markup, 'rows', None) if reply_markup else None
+        if rows:
+            buttons = []
+            for row in rows:
+                row_buttons = getattr(row, 'buttons', None) or []
+                buttons.append(row_buttons)
+    if not buttons:
+        return
+    for r_idx, row in enumerate(buttons):
+        for c_idx, btn in enumerate(row or []):
+            yield r_idx, c_idx, btn
+
+
+def _build_message_link(event, msg) -> str:
+    msg_id = getattr(msg, 'id', None)
+    if not msg_id:
+        return ''
+    username = None
+    try:
+        username = getattr(event.chat, 'username', None)
+    except Exception:
+        username = None
+    if username:
+        return f"https://t.me/{username}/{msg_id}"
+
+    chat_id = getattr(event, 'chat_id', None)
+    try:
+        chat_id = int(chat_id)
+    except Exception:
+        chat_id = None
+    if chat_id is None:
+        return ''
+    chat_id_str = str(chat_id)
+    if chat_id_str.startswith('-100') and len(chat_id_str) > 4:
+        return f"https://t.me/c/{chat_id_str[4:]}/{msg_id}"
+    return ''
+
+
+async def _maybe_auto_click_buttons(event, msg, restricted_entry: dict, message_text_for_filter: str) -> None:
+    rules = _get_auto_click_rules(restricted_entry)
+    keywords = rules.get('keywords') or []
+    if not keywords:
+        return
+
+    # Only handle incoming messages
+    if getattr(event, 'out', False):
+        return
+
+    if not message_text_for_filter:
+        return
+
+    matched = False
+    for keyword in keywords:
+        if match_keyword(keyword, message_text_for_filter):
+            matched = True
+            break
+    if not matched:
+        return
+
+    chat_id = getattr(event, 'chat_id', None)
+    msg_id = getattr(msg, 'id', None)
+    if chat_id is None or msg_id is None:
+        return
+
+    if _auto_click_recently(chat_id, msg_id):
+        debug_log(f" 自动点击已触发过，跳过: ch={chat_id} msg={msg_id}")
+        return
+
+    button_texts = rules.get('button_texts') or []
+    candidate = None
+    for r_idx, c_idx, btn in _iter_message_buttons(msg):
+        btn_text = getattr(btn, 'text', None) or ''
+        if button_texts:
+            for bt in button_texts:
+                if match_keyword(bt, btn_text):
+                    candidate = (r_idx, c_idx, btn_text)
+                    break
+        else:
+            candidate = (r_idx, c_idx, btn_text)
+        if candidate:
+            break
+
+    if not candidate:
+        debug_log(f" 自动点击未找到按钮: ch={chat_id} msg={msg_id}")
+        return
+
+    try:
+        r_idx, c_idx, btn_text = candidate
+        try:
+            await msg.click(i=r_idx, j=c_idx)
+        except TypeError:
+            try:
+                await msg.click(row=r_idx, column=c_idx)
+            except TypeError:
+                await msg.click(r_idx, c_idx)
+        _mark_auto_clicked(chat_id, msg_id)
+        log_message(f"已自动点击按钮: ch={chat_id} msg={msg_id} btn='{btn_text}'")
+
+        notify_targets = rules.get('notify_targets') or []
+        if notify_targets:
+            chat_title = None
+            try:
+                chat_title = getattr(event.chat, 'title', None)
+            except Exception:
+                chat_title = None
+            msg_link = _build_message_link(event, msg)
+            base_text = f"已自动点击红包按钮\n群: {chat_title or chat_id}\n消息ID: {msg_id}\n按钮: {btn_text or '-'}"
+            if msg_link:
+                base_text += f"\n链接: {msg_link}"
+            for target in notify_targets:
+                try:
+                    await client.send_message(target, base_text)
+                except Exception as e:
+                    log_message(f"自动点击通知失败: target={target} err={e}")
+    except Exception as e:
+        log_message(f"自动点击失败: ch={chat_id} msg={msg_id} err={e}")
+
 # --- Message Handler ---
 async def new_message_handler(event):
     try:
@@ -1932,6 +2133,12 @@ async def new_message_handler(event):
                             break
                 except Exception:
                     pass
+
+            # --- Auto Click Buttons (e.g., 红包) ---
+            try:
+                await _maybe_auto_click_buttons(event, msg, restricted_entry, message_text_for_filter)
+            except Exception as e:
+                debug_log(f" 自动点击处理异常: {e}")
 
             # --- Blacklist Check ---
             blacklist = restricted_entry.get('blacklist_keywords', [])
@@ -2346,6 +2553,7 @@ async def monitor_config_changes():
                             current_config = new_config
                             # Update Debug Mode
                             DEBUG_MODE = current_config.get('debug_mode', False)
+                            _apply_download_concurrency(current_config, announce=True)
                             initialized = False  # 重置标志，便于在模式切换时重新显示初始化日志
                             
                             last_config_mtime = mtime

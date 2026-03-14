@@ -30,7 +30,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.70"
+VERSION = "0.4.71"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
@@ -42,6 +42,14 @@ DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
 DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
 DRAMA_RUN_BUSY_MESSAGE = '当前已有追剧任务在运行（可能是自动调度），请稍后重试。'
+
+# Log performance safeguards
+LOG_TAIL_LINES = 200
+LOG_TAIL_MAX_BYTES = 2 * 1024 * 1024
+LOG_FILE_MAX_BYTES = 50 * 1024 * 1024
+LOG_FILE_TRIM_BYTES = 5 * 1024 * 1024
+LOG_FILE_SIZE_CHECK_INTERVAL = 15
+LOG_REFRESH_INTERVAL_DEFAULT = 10
 
 # Load environment variables from config/.env
 try:
@@ -69,6 +77,13 @@ def load_config():
         },
         "channels_to_forward": [],
         "file_monitoring_tasks": [],
+        "file_monitor_scan_interval": 5,
+        "file_monitor_dir_state_check_interval": 0,
+        "download_concurrency": 2,
+        "log_refresh_interval_seconds": LOG_REFRESH_INTERVAL_DEFAULT,
+        "log_auto_refresh_enabled": False,
+        "log_tail_lines": LOG_TAIL_LINES,
+        "log_tail_max_bytes": LOG_TAIL_MAX_BYTES,
         "allowed_browse_path": os.getcwd(),
         "restricted_channels": [],
         "proxy": {},
@@ -145,6 +160,20 @@ def load_config():
                     config["allowed_browse_path"] = os.getcwd()
                 if "restricted_channels" not in config:
                     config["restricted_channels"] = []
+                if "file_monitor_scan_interval" not in config:
+                    config["file_monitor_scan_interval"] = default_config["file_monitor_scan_interval"]
+                if "file_monitor_dir_state_check_interval" not in config:
+                    config["file_monitor_dir_state_check_interval"] = default_config["file_monitor_dir_state_check_interval"]
+                if "download_concurrency" not in config:
+                    config["download_concurrency"] = default_config["download_concurrency"]
+                if "log_refresh_interval_seconds" not in config:
+                    config["log_refresh_interval_seconds"] = default_config["log_refresh_interval_seconds"]
+                if "log_auto_refresh_enabled" not in config:
+                    config["log_auto_refresh_enabled"] = default_config["log_auto_refresh_enabled"]
+                if "log_tail_lines" not in config:
+                    config["log_tail_lines"] = default_config["log_tail_lines"]
+                if "log_tail_max_bytes" not in config:
+                    config["log_tail_max_bytes"] = default_config["log_tail_max_bytes"]
                 if "proxy" not in config:
                     config["proxy"] = {}
                 if "trace_media_detection" not in config:
@@ -968,10 +997,7 @@ def _read_drama_calendar_log_lines(max_lines: int = 2000):
     try:
         if not os.path.exists(DRAMA_CALENDAR_LOG_FILE):
             return []
-        with open(DRAMA_CALENDAR_LOG_FILE, 'r', encoding='utf-8') as f:
-            lines = [ln.rstrip('\n') for ln in f.readlines()]
-        if len(lines) > max_lines:
-            return lines[-max_lines:]
+        lines = _tail_file_lines(DRAMA_CALENDAR_LOG_FILE, max_lines=max_lines)
         return lines
     except Exception:
         return []
@@ -1187,6 +1213,66 @@ def _next_run_by_cron(expr: str, now_ts: float) -> float:
     return float(it.get_next(float))
 
 
+def _tail_file_lines(path: str, max_lines: int = LOG_TAIL_LINES, max_bytes: int = LOG_TAIL_MAX_BYTES):
+    if max_lines <= 0:
+        return []
+    try:
+        file_size = os.path.getsize(path)
+    except Exception:
+        return []
+
+    if file_size <= max_bytes:
+        try:
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                return [line.rstrip('\n') for line in f]
+        except Exception:
+            return []
+
+    chunk_size = 64 * 1024
+    buffer = b''
+    try:
+        with open(path, 'rb') as f:
+            f.seek(0, os.SEEK_END)
+            pos = f.tell()
+            while pos > 0 and buffer.count(b'\n') <= max_lines and len(buffer) < max_bytes:
+                read_size = chunk_size if pos >= chunk_size else pos
+                pos -= read_size
+                f.seek(pos)
+                buffer = f.read(read_size) + buffer
+    except Exception:
+        return []
+
+    lines = buffer.splitlines()[-max_lines:]
+    return [line.decode('utf-8', errors='replace') for line in lines]
+
+
+def _resolve_log_view_config(cfg: dict):
+    interval = cfg.get("log_refresh_interval_seconds", LOG_REFRESH_INTERVAL_DEFAULT)
+    try:
+        interval = int(interval or LOG_REFRESH_INTERVAL_DEFAULT)
+    except Exception:
+        interval = LOG_REFRESH_INTERVAL_DEFAULT
+    interval = max(2, min(interval, 60))
+
+    auto_refresh = bool(cfg.get("log_auto_refresh_enabled", False))
+
+    max_lines = cfg.get("log_tail_lines", LOG_TAIL_LINES)
+    try:
+        max_lines = int(max_lines or LOG_TAIL_LINES)
+    except Exception:
+        max_lines = LOG_TAIL_LINES
+    max_lines = max(50, min(max_lines, 2000))
+
+    max_bytes = cfg.get("log_tail_max_bytes", LOG_TAIL_MAX_BYTES)
+    try:
+        max_bytes = int(max_bytes or LOG_TAIL_MAX_BYTES)
+    except Exception:
+        max_bytes = LOG_TAIL_MAX_BYTES
+    max_bytes = max(256 * 1024, min(max_bytes, 10 * 1024 * 1024))
+
+    return interval, auto_refresh, max_lines, max_bytes
+
+
 def _drama_scheduler_loop():
     next_run_ts = 0.0
     last_signature = None
@@ -1375,6 +1461,14 @@ class ProcessManager:
         self.log_buffer_size = log_buffer_size
         self.log_file_path = os.path.join(LOG_DIR, f"{self.name.replace(' ', '_')}.log")
         self._log_file_lock = threading.Lock()
+        self._log_cache_mtime = None
+        self._log_cache_size = None
+        self._log_cache_lines = None
+        self._log_cache_max_lines = LOG_TAIL_LINES
+        self._log_cache_max_bytes = LOG_TAIL_MAX_BYTES
+        self._render_cache_key = None
+        self._render_cache_output = None
+        self._last_size_check = 0.0
 
     def _append_to_log_file(self, entry):
         try:
@@ -1382,16 +1476,73 @@ class ProcessManager:
             with self._log_file_lock:
                 with open(self.log_file_path, 'a', encoding='utf-8') as f:
                     f.write(entry + "\n")
+                self._trim_log_file_if_needed()
         except Exception:
             pass
 
-    def get_full_log_lines(self):
+    def _trim_log_file_if_needed(self):
+        now = time.monotonic()
+        if now - self._last_size_check < LOG_FILE_SIZE_CHECK_INTERVAL:
+            return
+        self._last_size_check = now
+        try:
+            size = os.path.getsize(self.log_file_path)
+        except Exception:
+            return
+        if size <= LOG_FILE_MAX_BYTES:
+            return
+
+        keep_bytes = min(LOG_FILE_TRIM_BYTES, size)
+        try:
+            with open(self.log_file_path, 'rb') as f:
+                if keep_bytes < size:
+                    f.seek(-keep_bytes, os.SEEK_END)
+                data = f.read()
+            with open(self.log_file_path, 'wb') as f:
+                f.write(data)
+            self._log_cache_mtime = None
+            self._log_cache_size = None
+            self._log_cache_lines = None
+        except Exception:
+            pass
+
+    def _current_log_cache_key(self):
+        try:
+            if os.path.exists(self.log_file_path):
+                mtime = os.path.getmtime(self.log_file_path)
+                size = os.path.getsize(self.log_file_path)
+                return ("file", int(mtime * 1000), size)
+        except Exception:
+            pass
+        return ("buffer", len(self.log_buffer))
+
+    def get_log_cache_key(self, max_lines: int = LOG_TAIL_LINES, max_bytes: int = LOG_TAIL_MAX_BYTES) -> str:
+        key = self._current_log_cache_key()
+        return f"{key[0]}:{key[1]}:{key[2] if len(key) > 2 else ''}:{max_lines}:{max_bytes}"
+
+    def get_full_log_lines(self, max_lines: int = LOG_TAIL_LINES, max_bytes: int = LOG_TAIL_MAX_BYTES):
         """读取日志，进度行只保留最新一条"""
         lines = []
         try:
             if os.path.exists(self.log_file_path):
-                with open(self.log_file_path, 'r', encoding='utf-8') as f:
-                    lines = [line.rstrip('\n') for line in f.readlines()]
+                mtime = os.path.getmtime(self.log_file_path)
+                size = os.path.getsize(self.log_file_path)
+                if (
+                    self._log_cache_lines is not None
+                    and self._log_cache_mtime == mtime
+                    and self._log_cache_size == size
+                    and self._log_cache_max_lines == max_lines
+                    and self._log_cache_max_bytes == max_bytes
+                ):
+                    lines = list(self._log_cache_lines)
+                else:
+                    self._trim_log_file_if_needed()
+                    lines = _tail_file_lines(self.log_file_path, max_lines=max_lines, max_bytes=max_bytes)
+                    self._log_cache_mtime = mtime
+                    self._log_cache_size = size
+                    self._log_cache_lines = list(lines)
+                    self._log_cache_max_lines = max_lines
+                    self._log_cache_max_bytes = max_bytes
         except Exception:
             pass
         if not lines:
@@ -1406,6 +1557,24 @@ class ProcessManager:
             else:
                 result.append(line)
         return result
+
+    def get_colored_log_output(self, colorizer, empty_text: str = "暂无日志。", max_lines: int = LOG_TAIL_LINES, max_bytes: int = LOG_TAIL_MAX_BYTES) -> str:
+        cache_key = self._current_log_cache_key()
+
+        render_key = (cache_key, max_lines, max_bytes)
+        if self._render_cache_key == render_key and self._render_cache_output is not None:
+            return self._render_cache_output
+
+        lines = self.get_full_log_lines(max_lines=max_lines, max_bytes=max_bytes)
+        if not lines:
+            output = empty_text
+        else:
+            colored_log_lines = [colorizer(line) for line in lines]
+            output = "\n".join(reversed(colored_log_lines))
+
+        self._render_cache_key = render_key
+        self._render_cache_output = output
+        return output
 
     def clear_logs(self):
         self.log_buffer.clear()
@@ -1493,6 +1662,15 @@ bot_monitor_mgr = ProcessManager('app/bot_monitor.py', 'Bot 监控程序')
 monitor_log_buffer = tg_monitor_mgr.log_buffer
 file_monitor_log_buffer = file_monitor_mgr.log_buffer
 
+def _has_file_monitor_tasks(cfg: dict) -> bool:
+    tasks = (cfg or {}).get('file_monitoring_tasks', [])
+    if not isinstance(tasks, list):
+        return False
+    for task in tasks:
+        if isinstance(task, dict) and (task.get('source_dir') or task.get('destination_dir')):
+            return True
+    return False
+
 def start_monitor_process(): return tg_monitor_mgr.start()
 def stop_monitor_process():
     if tg_monitor_mgr.stop():
@@ -1501,7 +1679,14 @@ def stop_monitor_process():
     return False
 def get_monitor_status(): return tg_monitor_mgr.status()
 
-def start_file_monitor_process(): return file_monitor_mgr.start()
+def start_file_monitor_process():
+    cfg = load_config()
+    if not _has_file_monitor_tasks(cfg):
+        # No tasks: keep process stopped to save CPU.
+        if file_monitor_mgr.process and file_monitor_mgr.process.poll() is None:
+            file_monitor_mgr.stop()
+        return False
+    return file_monitor_mgr.start()
 def stop_file_monitor_process():
     if file_monitor_mgr.stop():
         flash("文件监控程序已停止。", "info")
@@ -1531,6 +1716,9 @@ def colorize_log_line(line):
         '\033[96m': '<span style="color: #17a2b8;">',  # Cyan (Progress/秒传)
     }
     
+    if '\x1b[' not in line:
+        return html.escape(line)
+
     # Step 1: Replace ANSI codes with unique markers before HTML escaping
     markers = {}
     for ansi_code, html_tag in ansi_to_html.items():
@@ -1830,6 +2018,10 @@ def manage_config():
             # 获取关键字和监控类型
             blacklist_keywords = [k.strip() for k in request.form.get('blacklist_keywords', '').split(',') if k.strip()]
             whitelist_keywords = [k.strip() for k in request.form.get('whitelist_keywords', '').split(',') if k.strip()]
+            auto_click_redpacket = request.form.get('auto_click_redpacket') == 'on'
+            auto_click_keywords = [k.strip() for k in request.form.get('auto_click_keywords', '').split(',') if k.strip()]
+            auto_click_button_texts = [k.strip() for k in request.form.get('auto_click_button_texts', '').split(',') if k.strip()]
+            auto_click_notify_targets = [k.strip() for k in request.form.get('auto_click_notify_targets', '').split(',') if k.strip()]
             monitor_types = request.form.getlist('monitor_types')
             if not monitor_types:
                 monitor_types = ['video']  # 默认监控视频
@@ -1841,12 +2033,19 @@ def manage_config():
                 channel_id_int = int(channel_id)
                 target_user_ids_list = [uid.strip() for uid in target_user_ids_restricted.split(',') if uid.strip()]
 
+                auto_click_enabled = auto_click_redpacket or bool(auto_click_keywords)
+
                 # 如果不是转发模式，检查下载目录必须存在
                 if not keep_video_message and (not download_directory or not os.path.isdir(download_directory)):
                     # 如果 monitor_types 只包含 'text'，则不需要下载目录
                     if monitor_types != ['text']:
-                        flash(f"下载模式必须指定有效的下载目录。", "error")
-                        return redirect(url_for('manage_config'))
+                        # 仅做红包/自动点击且未配置下载目录时，自动降级为文本监控
+                        if auto_click_enabled and monitor_types == ['video']:
+                            monitor_types = ['text']
+                            flash("未指定下载目录，已自动切换为文本监控（用于红包自动点击）。", "info")
+                        else:
+                            flash("下载模式必须指定有效的下载目录。", "error")
+                            return redirect(url_for('manage_config'))
 
                 # Check if this is an update (old_channel_id is set)
                 if old_channel_id:
@@ -1871,6 +2070,10 @@ def manage_config():
                             entry['channel_name'] = channel_name
                             entry['blacklist_keywords'] = blacklist_keywords
                             entry['whitelist_keywords'] = whitelist_keywords
+                            entry['auto_click_redpacket'] = auto_click_redpacket
+                            entry['auto_click_keywords'] = auto_click_keywords
+                            entry['auto_click_button_texts'] = auto_click_button_texts
+                            entry['auto_click_notify_targets'] = auto_click_notify_targets
                             entry['monitor_types'] = monitor_types
                             found = True
                             break
@@ -1902,6 +2105,10 @@ def manage_config():
                         "channel_name": channel_name,
                         "blacklist_keywords": blacklist_keywords,
                         "whitelist_keywords": whitelist_keywords,
+                        "auto_click_redpacket": auto_click_redpacket,
+                        "auto_click_keywords": auto_click_keywords,
+                        "auto_click_button_texts": auto_click_button_texts,
+                        "auto_click_notify_targets": auto_click_notify_targets,
                         "monitor_types": monitor_types
                     })
                     # Update group_order if new group
@@ -2415,10 +2622,37 @@ def monitor_action():
 @app.route('/monitor_log')
 @login_required
 def monitor_log():
-    log_lines = tg_monitor_mgr.get_full_log_lines()
-    colored_log_lines = [colorize_log_line(line) for line in log_lines]
-    log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无日志。"
-    return render_template('log.html', log_output=log_output)
+    cfg = load_config()
+    interval, auto_refresh, max_lines, max_bytes = _resolve_log_view_config(cfg)
+    log_output = tg_monitor_mgr.get_colored_log_output(
+        colorize_log_line,
+        empty_text="暂无日志。",
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+    )
+    return render_template(
+        'log.html',
+        log_output=log_output,
+        refresh_interval=interval,
+        auto_refresh=auto_refresh,
+    )
+
+@app.route('/monitor_log_data')
+@login_required
+def monitor_log_data():
+    cfg = load_config()
+    _, _, max_lines, max_bytes = _resolve_log_view_config(cfg)
+    last_key = (request.args.get("last_key") or "").strip()
+    current_key = tg_monitor_mgr.get_log_cache_key(max_lines=max_lines, max_bytes=max_bytes)
+    if last_key and last_key == current_key:
+        return jsonify({"changed": False, "key": current_key})
+    log_output = tg_monitor_mgr.get_colored_log_output(
+        colorize_log_line,
+        empty_text="暂无日志。",
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+    )
+    return jsonify({"changed": True, "key": current_key, "log_output": log_output})
 
 
 @app.route('/drama_calendar_log')
@@ -2595,8 +2829,11 @@ def manage_file_config():
 
         # After config changes, restart monitor if it was running
         if get_file_monitor_status() == "运行中":
-            stop_file_monitor_process()
-            start_file_monitor_process()
+            if _has_file_monitor_tasks(config):
+                stop_file_monitor_process()
+                start_file_monitor_process()
+            else:
+                stop_file_monitor_process()
 
         return redirect(url_for('manage_file_config'))
 
@@ -2607,7 +2844,10 @@ def manage_file_config():
 def file_monitor_action():
     action = request.form['action']
     if action == 'start':
-        start_file_monitor_process()
+        if not _has_file_monitor_tasks(load_config()):
+            flash("未配置文件监控任务，无法启动。", "warning")
+        else:
+            start_file_monitor_process()
     elif action == 'stop':
         stop_file_monitor_process()
     
@@ -2616,10 +2856,37 @@ def file_monitor_action():
 @app.route('/file_monitor_log')
 @login_required
 def file_monitor_log():
-    log_lines = file_monitor_mgr.get_full_log_lines()
-    colored_log_lines = [colorize_log_line(line) for line in log_lines]
-    log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无日志。"
-    return render_template('file_monitor_log.html', log_output=log_output)
+    cfg = load_config()
+    interval, auto_refresh, max_lines, max_bytes = _resolve_log_view_config(cfg)
+    log_output = file_monitor_mgr.get_colored_log_output(
+        colorize_log_line,
+        empty_text="暂无日志。",
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+    )
+    return render_template(
+        'file_monitor_log.html',
+        log_output=log_output,
+        refresh_interval=interval,
+        auto_refresh=auto_refresh,
+    )
+
+@app.route('/file_monitor_log_data')
+@login_required
+def file_monitor_log_data():
+    cfg = load_config()
+    _, _, max_lines, max_bytes = _resolve_log_view_config(cfg)
+    last_key = (request.args.get("last_key") or "").strip()
+    current_key = file_monitor_mgr.get_log_cache_key(max_lines=max_lines, max_bytes=max_bytes)
+    if last_key and last_key == current_key:
+        return jsonify({"changed": False, "key": current_key})
+    log_output = file_monitor_mgr.get_colored_log_output(
+        colorize_log_line,
+        empty_text="暂无日志。",
+        max_lines=max_lines,
+        max_bytes=max_bytes,
+    )
+    return jsonify({"changed": True, "key": current_key, "log_output": log_output})
 
 @app.route('/clear_monitor_log', methods=['POST'])
 @login_required

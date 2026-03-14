@@ -251,6 +251,15 @@
                                                     {% if entry.whitelist_keywords %}
                                                     <span class="text-success"><i class="bi bi-check-circle me-1"></i>{{ entry.whitelist_keywords | join(', ') }}</span>
                                                     {% endif %}
+                                                    {% if entry.auto_click_keywords %}
+                                                    <span class="text-warning"><i class="bi bi-lightning-charge me-1"></i>自动点击: {{ entry.auto_click_keywords | join(', ') }}</span>
+                                                    {% endif %}
+                                                    {% if entry.auto_click_redpacket %}
+                                                    <span class="text-warning"><i class="bi bi-cash-coin me-1"></i>红包开关</span>
+                                                    {% endif %}
+                                                    {% if entry.auto_click_notify_targets %}
+                                                    <span class="text-secondary"><i class="bi bi-bell me-1"></i>通知: {{ entry.auto_click_notify_targets | join(', ') }}</span>
+                                                    {% endif %}
                                                     {% if entry.target_user_ids %}
                                                     <span class="text-info"><i class="bi bi-send me-1"></i>{{ entry.target_user_ids | length }} 目标</span>
                                                     {% endif %}
@@ -381,6 +390,55 @@
                                         style="font-size: 0.65rem;">支持正则</span>:</label>
                                 <input type="text" class="form-control form-control-sm" id="whitelist_keywords"
                                     name="whitelist_keywords" placeholder="太平年,^重要.*$ (逗号分隔)">
+                            </div>
+                            <div class="col-12">
+                                <div class="card border-warning shadow-sm">
+                                    <div class="card-header bg-warning-subtle py-1">
+                                        <span class="fw-bold small">
+                                            <i class="bi bi-cash-coin me-1"></i>红包相关设置
+                                        </span>
+                                        <span class="text-muted small ms-2">仅影响自动点击与通知</span>
+                                    </div>
+                                    <div class="card-body p-3">
+                                        <div class="row g-2">
+                                            <div class="col-md-12 mb-2">
+                                                <div class="form-check pt-1">
+                                                    <input type="checkbox" class="form-check-input"
+                                                        id="auto_click_redpacket" name="auto_click_redpacket">
+                                                    <label class="form-check-label small" for="auto_click_redpacket">
+                                                        红包自动点击（默认关键词：发了一个红包）
+                                                    </label>
+                                                </div>
+                                                <div id="auto_click_download_hint"
+                                                    class="alert alert-warning small py-1 mb-0 mt-1 d-none">
+                                                    未填写下载目录且启用红包/自动点击时，将自动切换为“文本”监控（不下载媒体）。
+                                                </div>
+                                            </div>
+                                            <div class="col-md-12 mb-2">
+                                                <label for="auto_click_keywords" class="form-label small">自动点击关键词 <span
+                                                        class="badge bg-light text-dark fw-normal border"
+                                                        style="font-size: 0.65rem;">匹配消息文本</span>:</label>
+                                                <input type="text" class="form-control form-control-sm"
+                                                    id="auto_click_keywords" name="auto_click_keywords"
+                                                    placeholder="发了一个红包 (逗号分隔)">
+                                            </div>
+                                            <div class="col-md-12 mb-2">
+                                                <label for="auto_click_button_texts" class="form-label small">按钮文本关键词 <span
+                                                        class="badge bg-light text-dark fw-normal border"
+                                                        style="font-size: 0.65rem;">可选</span>:</label>
+                                                <input type="text" class="form-control form-control-sm"
+                                                    id="auto_click_button_texts" name="auto_click_button_texts"
+                                                    placeholder="领取红包,打开 (逗号分隔)">
+                                            </div>
+                                            <div class="col-md-12 mb-2">
+                                                <label for="auto_click_notify_targets" class="form-label small">点击后通知目标:</label>
+                                                <input type="text" class="form-control form-control-sm"
+                                                    id="auto_click_notify_targets" name="auto_click_notify_targets"
+                                                    placeholder="@your_bot, 123456 (逗号分隔)">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                             <div class="col-md-6 mb-2">
                                 <div class="form-check pt-2">
@@ -659,6 +717,41 @@
         }
     }
 
+    function updateAutoClickHint() {
+        const hintEl = document.getElementById('auto_click_download_hint');
+        if (!hintEl) return;
+
+        const redpacketEl = document.getElementById('auto_click_redpacket');
+        const autoClickKeywordsEl = document.getElementById('auto_click_keywords');
+        const downloadDirEl = document.getElementById('download_directory');
+        const keepVideoEl = document.getElementById('keep_video_message');
+
+        const monitorVideoEl = document.getElementById('monitor_video');
+        const monitorPhotoEl = document.getElementById('monitor_photo');
+        const monitorAudioEl = document.getElementById('monitor_audio');
+        const monitorTextEl = document.getElementById('monitor_text');
+
+        const autoClickEnabled = (redpacketEl && redpacketEl.checked)
+            || (autoClickKeywordsEl && autoClickKeywordsEl.value.trim().length > 0);
+        const hasDownloadDir = downloadDirEl && downloadDirEl.value.trim().length > 0;
+        const keepVideo = keepVideoEl && keepVideoEl.checked;
+
+        const selectedTypes = [];
+        if (monitorVideoEl && monitorVideoEl.checked) selectedTypes.push('video');
+        if (monitorPhotoEl && monitorPhotoEl.checked) selectedTypes.push('photo');
+        if (monitorAudioEl && monitorAudioEl.checked) selectedTypes.push('audio');
+        if (monitorTextEl && monitorTextEl.checked) selectedTypes.push('text');
+
+        const onlyText = selectedTypes.length === 1 && selectedTypes[0] === 'text';
+        const showHint = autoClickEnabled && !keepVideo && !hasDownloadDir && !onlyText;
+
+        hintEl.classList.toggle('d-none', !showHint);
+        if (downloadDirEl) {
+            downloadDirEl.classList.toggle('border', showHint);
+            downloadDirEl.classList.toggle('border-warning', showHint);
+        }
+    }
+
     function editRestricted(data) {
         // 安全的设置表单值函数
         const safeSetValue = (id, value) => {
@@ -683,6 +776,10 @@
         safeSetValue('download_directory', data.download_directory);
         safeSetValue('blacklist_keywords', (data.blacklist_keywords || []).join(', '));
         safeSetValue('whitelist_keywords', (data.whitelist_keywords || []).join(', '));
+        safeSetChecked('auto_click_redpacket', data.auto_click_redpacket);
+        safeSetValue('auto_click_keywords', (data.auto_click_keywords || []).join(', '));
+        safeSetValue('auto_click_button_texts', (data.auto_click_button_texts || []).join(', '));
+        safeSetValue('auto_click_notify_targets', (data.auto_click_notify_targets || []).join(', '));
         safeSetValue('target_user_ids_restricted', (data.target_user_ids || []).join(', '));
 
         safeSetChecked('download_video', data.download_video);
@@ -718,6 +815,8 @@
                 channelIdInput.focus();
             }, 300);
         }
+
+        updateAutoClickHint();
     }
 
     function cancelEdit() {
@@ -740,6 +839,10 @@
         safeReset('channel_name');
         safeReset('blacklist_keywords');
         safeReset('whitelist_keywords');
+        safeReset('auto_click_redpacket');
+        safeReset('auto_click_keywords');
+        safeReset('auto_click_button_texts');
+        safeReset('auto_click_notify_targets');
         safeReset('target_user_ids_restricted');
         safeReset('download_video');
         safeReset('keep_video_message');
@@ -776,6 +879,8 @@
         if (cancelBtn) {
             cancelBtn.style.display = 'none';
         }
+
+        updateAutoClickHint();
     }
 
     // Initialize Sortable for group drag-and-drop
@@ -989,6 +1094,24 @@
                 }
             }
         });
+
+        const hintInputs = [
+            'auto_click_redpacket',
+            'auto_click_keywords',
+            'download_directory',
+            'keep_video_message',
+            'monitor_video',
+            'monitor_photo',
+            'monitor_audio',
+            'monitor_text'
+        ];
+        hintInputs.forEach((id) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            const evt = (el.type === 'text') ? 'input' : 'change';
+            el.addEventListener(evt, updateAutoClickHint);
+        });
+        updateAutoClickHint();
 
         updateBulkUI();
         console.log('页面初始化完成');

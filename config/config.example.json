@@ -4,11 +4,19 @@
     "api_hash": "",
     "session_name": "telegram_monitor"
   },
+  "download_concurrency": 2,
   "web_auth": {
     "username": "admin",
     "password_hash": null
   },
   "channels_to_forward": [],
+  "file_monitoring_tasks": [],
+  "file_monitor_scan_interval": 5,
+  "file_monitor_dir_state_check_interval": 0,
+  "log_refresh_interval_seconds": 10,
+  "log_auto_refresh_enabled": false,
+  "log_tail_lines": 200,
+  "log_tail_max_bytes": 2097152,
   "restricted_channels": [],
   "proxy": {},
   "downloader": {

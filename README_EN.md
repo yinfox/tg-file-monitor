@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.70-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.71-orange.svg)](.)
 
 </div>
 
@@ -173,7 +173,12 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.67 (2026-03-13) - Current
+### v0.4.71 (2026-03-14) - Current
+- Added a dedicated Red Packet settings card (auto-click toggle, keywords, button text, notify targets)
+- Auto-switch to `text` monitoring when enabling red packet/auto-click without a download directory
+- Fixed auto-click compatibility with Telethon `Message.click` argument names (`i/j` vs `row/column`)
+
+### v0.4.67 (2026-03-13)
 - Fixed Drama regex append behavior so appended rules are rebuilt as `|`-joined regex instead of comma-separated fragments
 - Normalized legacy escaped title tokens during append merges, preventing stale patterns like `\\(` and `\\)` from spreading
 

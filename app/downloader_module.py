@@ -5,6 +5,8 @@ import logging
 import json
 import subprocess
 import shutil
+import time
+import re
 from concurrent.futures import ThreadPoolExecutor
 
 # Global logging configuration setup
@@ -20,16 +22,39 @@ logger = logging.getLogger(__name__)
 
 CONFIG_FILE = 'config/config.json'
 
+_DEBUG_MODE_CACHE = None
+_DEBUG_MODE_MTIME = None
+_DEBUG_MODE_LAST_CHECK = 0.0
+_DEBUG_MODE_CHECK_INTERVAL = 2.0
+
+ANSI_ESCAPE_RE = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+
 def load_debug_mode():
     """从配置文件加载 debug_mode 设置"""
+    global _DEBUG_MODE_CACHE, _DEBUG_MODE_MTIME, _DEBUG_MODE_LAST_CHECK
+    now = time.monotonic()
+    if _DEBUG_MODE_CACHE is not None and (now - _DEBUG_MODE_LAST_CHECK) < _DEBUG_MODE_CHECK_INTERVAL:
+        return _DEBUG_MODE_CACHE
+    _DEBUG_MODE_LAST_CHECK = now
+    try:
+        mtime = os.path.getmtime(CONFIG_FILE)
+    except Exception:
+        mtime = None
+    if _DEBUG_MODE_CACHE is not None and mtime == _DEBUG_MODE_MTIME:
+        return _DEBUG_MODE_CACHE
+
+    debug_mode = False
     try:
         if os.path.exists(CONFIG_FILE):
             with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
                 config = json.load(f)
-                return config.get('debug_mode', False)
-    except:
-        pass
-    return False
+                debug_mode = bool(config.get('debug_mode', False))
+    except Exception:
+        debug_mode = False
+
+    _DEBUG_MODE_CACHE = debug_mode
+    _DEBUG_MODE_MTIME = mtime
+    return debug_mode
 
 class Downloader:
     def __init__(self):
@@ -89,9 +114,7 @@ class Downloader:
             return  # debug_mode 关闭时不记录 debug 日志
         
         # Clean color codes if any (yt-dlp might output them)
-        import re
-        ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-        clean_message = ansi_escape.sub('', message)
+        clean_message = ANSI_ESCAPE_RE.sub('', message)
         
         import sys
         
