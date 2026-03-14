@@ -30,7 +30,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.71"
+VERSION = "0.4.72"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 

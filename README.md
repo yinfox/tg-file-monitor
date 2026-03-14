@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.71-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.72-orange.svg)](.)
 
 </div>
 
@@ -327,7 +327,13 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.71 (2026-03-14) - 当前版本
+### v0.4.72 (2026-03-14) - 当前版本
+- ✅ 日志页性能优化：仅加载尾部日志、缓存渲染、支持手动刷新与可配置刷新间隔
+- ✅ 默认关闭日志自动刷新，降低 Web UI 负载
+- ✅ 文件监控可配置扫描间隔，空任务不启动监控进程
+- ✅ 下载并发可配置，避免高峰时 CPU 过载
+
+### v0.4.71 (2026-03-14)
 - ✅ 红包相关设置独立卡片：自动点击开关、关键词、按钮文本与通知目标更易配置
 - ✅ 未填写下载目录时启用红包/自动点击，将自动切换为“文本”监控以便保存配置
 - ✅ 自动点击兼容 Telethon `Message.click` 参数差异（`i/j` 与 `row/column`）

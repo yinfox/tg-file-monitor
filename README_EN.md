@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.71-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.72-orange.svg)](.)
 
 </div>
 
@@ -173,7 +173,13 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.71 (2026-03-14) - Current
+### v0.4.72 (2026-03-14) - Current
+- Log page performance optimizations: tail-only reads, render caching, manual refresh, configurable refresh interval
+- Auto-refresh disabled by default to reduce Web UI load
+- File monitor scan interval configurable; no-task mode skips process startup
+- Configurable download concurrency to avoid CPU spikes
+
+### v0.4.71 (2026-03-14)
 - Added a dedicated Red Packet settings card (auto-click toggle, keywords, button text, notify targets)
 - Auto-switch to `text` monitoring when enabling red packet/auto-click without a download directory
 - Fixed auto-click compatibility with Telethon `Message.click` argument names (`i/j` vs `row/column`)

@@ -26,3 +26,11 @@ app/temp_cookies/
 .DS_Store
 *.code-workspace
 .vscode/
+user.env
+user.env.*
+*.autosnap_*
+*.bak_*
+conversation_*.md
+web.out
+config/drama_calendar_state.json
+config/tmdb_tv_status_cache.json
