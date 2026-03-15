@@ -15,6 +15,7 @@ import datetime
 import shutil
 import requests
 from urllib.parse import quote_plus
+from typing import Tuple
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError
@@ -34,6 +35,8 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
 VERSION = "0.4.72"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 DRAMA_CALENDAR_SCRIPT = os.path.join(ROOT_DIR, 'scripts', 'update_drama_calendar_env.py')
 
 # --- Configuration Management ---
@@ -56,6 +59,8 @@ LOG_FILE_SIZE_CHECK_INTERVAL = 15
 LOG_REFRESH_INTERVAL_DEFAULT = 10
 
 _MESSAGE_QUEUE_LOCK = threading.Lock()
+_PUBLIC_RATE_LIMIT_LOCK = threading.Lock()
+_PUBLIC_RATE_LIMIT_CACHE = {}
 
 # Load environment variables from config/.env
 try:
@@ -93,6 +98,19 @@ def load_config():
         "self_service_enabled": False,
         "self_service_target_user_ids": "",
         "self_service_search_max_results": 5,
+        "self_service_cookie_check_mode": "warn",
+        "self_service_use_open_api": False,
+        "self_service_storage_mode": "any",
+        "self_service_public_enabled": False,
+        "self_service_public_access_key": "",
+        "self_service_public_rate_limit": {
+            "enabled": True,
+            "window_seconds": 300,
+            "max_requests": 3
+        },
+        "hdhive_base_url": "https://hdhive.com",
+        "hdhive_open_api_key": "",
+        "hdhive_open_api_direct_unlock": False,
         "allowed_browse_path": os.getcwd(),
         "restricted_channels": [],
         "proxy": {},
@@ -189,6 +207,33 @@ def load_config():
                     config["self_service_target_user_ids"] = default_config["self_service_target_user_ids"]
                 if "self_service_search_max_results" not in config:
                     config["self_service_search_max_results"] = default_config["self_service_search_max_results"]
+                if "self_service_cookie_check_mode" not in config:
+                    config["self_service_cookie_check_mode"] = default_config["self_service_cookie_check_mode"]
+                if "self_service_use_open_api" not in config:
+                    config["self_service_use_open_api"] = default_config["self_service_use_open_api"]
+                if "self_service_storage_mode" not in config:
+                    legacy_only_115 = bool(config.get("self_service_only_115", False))
+                    config["self_service_storage_mode"] = "115" if legacy_only_115 else default_config["self_service_storage_mode"]
+                else:
+                    mode = str(config.get("self_service_storage_mode") or "any").lower()
+                    if mode not in ("any", "115", "123", "115_123"):
+                        config["self_service_storage_mode"] = default_config["self_service_storage_mode"]
+                if "self_service_public_enabled" not in config:
+                    config["self_service_public_enabled"] = default_config["self_service_public_enabled"]
+                if "self_service_public_access_key" not in config:
+                    config["self_service_public_access_key"] = default_config["self_service_public_access_key"]
+                if "self_service_public_rate_limit" not in config or not isinstance(config.get("self_service_public_rate_limit"), dict):
+                    config["self_service_public_rate_limit"] = default_config["self_service_public_rate_limit"].copy()
+                else:
+                    merged_public_rate = default_config["self_service_public_rate_limit"].copy()
+                    merged_public_rate.update(config.get("self_service_public_rate_limit") or {})
+                    config["self_service_public_rate_limit"] = merged_public_rate
+                if "hdhive_base_url" not in config:
+                    config["hdhive_base_url"] = default_config["hdhive_base_url"]
+                if "hdhive_open_api_key" not in config:
+                    config["hdhive_open_api_key"] = default_config["hdhive_open_api_key"]
+                if "hdhive_open_api_direct_unlock" not in config:
+                    config["hdhive_open_api_direct_unlock"] = default_config["hdhive_open_api_direct_unlock"]
                 if "proxy" not in config:
                     config["proxy"] = {}
                 if "trace_media_detection" not in config:
@@ -267,6 +312,20 @@ def _parse_env_files(raw_env_files: str):
         item = (p or '').strip()
         if item:
             result.append(item)
+    return result
+
+
+def _parse_env_keys(raw_env_key: str):
+    if not raw_env_key:
+        return []
+    result = []
+    seen = set()
+    for p in re.split(r'[\n,]+', raw_env_key):
+        item = (p or '').strip()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
     return result
 
 
@@ -596,7 +655,8 @@ def _label_for_source_tag(source_tag: str) -> str:
 
 def _build_env_edit_source_view(drama_cfg: dict) -> tuple:
     env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
-    env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
+    env_keys = _parse_env_keys(str(drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX')) or ['DRAMA_CALENDAR_REGEX']
+    env_key = env_keys[0]
     state = _load_drama_calendar_state()
     records = state.get('records') if isinstance(state, dict) else []
     if not isinstance(records, list):
@@ -768,7 +828,7 @@ def _clear_drama_calendar_env_values(drama_cfg: dict):
     if not env_files_list:
         return False, [], ['请先在追剧日历配置中填写至少一个 .env 路径。']
 
-    env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
+    env_keys = _parse_env_keys(str(drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX')) or ['DRAMA_CALENDAR_REGEX']
     success_paths = []
     errors = []
 
@@ -780,7 +840,9 @@ def _clear_drama_calendar_env_values(drama_cfg: dict):
             if env_exists:
                 with open(abs_env_path, 'r', encoding='utf-8') as f:
                     original = f.read()
-            updated = _update_env_key_value(original, env_key, '')
+            updated = original
+            for env_key in env_keys:
+                updated = _update_env_key_value(updated, env_key, '')
 
             os.makedirs(os.path.dirname(abs_env_path) or '.', exist_ok=True)
             if env_exists:
@@ -790,14 +852,16 @@ def _clear_drama_calendar_env_values(drama_cfg: dict):
                 _make_env_backup_if_needed(abs_env_path)
             with open(abs_env_path, 'w', encoding='utf-8') as f:
                 f.write(updated)
-            _clear_drama_calendar_state_records(abs_env_path, env_key)
+            for env_key in env_keys:
+                _clear_drama_calendar_state_records(abs_env_path, env_key)
             success_paths.append(abs_env_path)
         except Exception as e:
             errors.append(f'{abs_env_path}: {e}')
 
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    keys_label = ",".join(env_keys)
     log_lines = [
-        f'[{ts}] [INFO] [DRAMA] 清空环境变量 key={env_key} success={len(success_paths)} errors={len(errors)}',
+        f'[{ts}] [INFO] [DRAMA] 清空环境变量 key={keys_label} success={len(success_paths)} errors={len(errors)}',
     ]
     for path in success_paths[:20]:
         log_lines.append(f'[{ts}] [INFO] [DRAMA][CLEAR] {path}')
@@ -1271,6 +1335,276 @@ def _append_self_service_log(lines):
         pass
 
 
+def _extract_next_data_json(html_text: str):
+    if not html_text:
+        return None
+    try:
+        m = re.search(
+            r'<script[^>]+id=["\']__NEXT_DATA__["\'][^>]*>(.*?)</script>',
+            html_text,
+            flags=re.S | re.IGNORECASE,
+        )
+        if not m:
+            return None
+        raw = m.group(1).strip()
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _normalize_hdhive_cookie(raw_cookie: str) -> str:
+    if not raw_cookie:
+        return ''
+    cleaned = str(raw_cookie).replace('\r', ';').replace('\n', ';').replace('\t', ';')
+    cleaned = re.sub(r';{2,}', ';', cleaned)
+    return cleaned.strip(' ;')
+
+
+def _collect_hdhive_urls_from_text(text: str, base_url: str, results: list, max_results: int) -> None:
+    if not text:
+        return
+    pattern_full = re.compile(r"/resource/(?:115/)?[0-9A-Za-z]{16,64}", re.IGNORECASE)
+    slug_pattern = re.compile(r"resource[^0-9A-Za-z]{0,20}([0-9A-Za-z]{16,64})", re.IGNORECASE)
+    json_slug_pattern = re.compile(r'"(?:slug|resourceId|resource_id|id)"\s*:\s*"([0-9A-Za-z]{16,64})"', re.IGNORECASE)
+
+    def _add_url(path: str):
+        full_url = f"{base_url}{path}"
+        if full_url not in results:
+            results.append(full_url)
+
+    for path in pattern_full.findall(text):
+        _add_url(path)
+        if len(results) >= max_results:
+            return
+    for slug in slug_pattern.findall(text):
+        # Unknown variant: try both /resource/<slug> and /resource/115/<slug>
+        _add_url(f"/resource/{slug}")
+        if len(results) >= max_results:
+            return
+        _add_url(f"/resource/115/{slug}")
+        if len(results) >= max_results:
+            return
+    for slug in json_slug_pattern.findall(text):
+        _add_url(f"/resource/{slug}")
+        if len(results) >= max_results:
+            return
+        _add_url(f"/resource/115/{slug}")
+        if len(results) >= max_results:
+            return
+
+
+def _walk_json_for_hdhive_urls(obj, base_url: str, results: list, max_results: int) -> None:
+    if isinstance(obj, dict):
+        for v in obj.values():
+            _walk_json_for_hdhive_urls(v, base_url, results, max_results)
+    elif isinstance(obj, list):
+        for v in obj:
+            _walk_json_for_hdhive_urls(v, base_url, results, max_results)
+    elif isinstance(obj, str):
+        if '/resource/115/' in obj or len(obj) >= 16:
+            _collect_hdhive_urls_from_text(obj, base_url, results, max_results)
+
+
+def _collect_from_next_f(html_text: str, base_url: str, results: list, max_results: int) -> None:
+    if not html_text:
+        return
+    try:
+        parts = re.findall(r'self\.__next_f\.push\(\[1,"([\s\S]*?)"\]\)', html_text)
+        if not parts:
+            parts = re.findall(r'__next_f\.push\(\[\d+,\\\"(.*?)\\\"\\]\)', html_text)
+        if not parts:
+            return
+        joined = "\n".join(parts)
+        try:
+            joined = joined.encode("utf-8").decode("unicode_escape")
+        except Exception:
+            pass
+        _collect_hdhive_urls_from_text(joined, base_url, results, max_results)
+    except Exception:
+        return
+
+
+def _collect_tmdb_urls_from_text(text: str, base_url: str, tmdb_urls: list, max_results: int) -> None:
+    if not text:
+        return
+    pattern = re.compile(r"/tmdb/(movie|tv)/(\d+)", re.IGNORECASE)
+    for m in pattern.finditer(text):
+        path = m.group(0)
+        full_url = f"{base_url}{path}"
+        if full_url not in tmdb_urls:
+            tmdb_urls.append(full_url)
+            if len(tmdb_urls) >= max_results:
+                return
+
+
+def _collect_tmdb_ids_from_json(obj, tmdb_ids: list, max_results: int) -> None:
+    if len(tmdb_ids) >= max_results:
+        return
+    if isinstance(obj, dict):
+        # Common keys
+        tmdb_id = obj.get("tmdbId") or obj.get("tmdb_id") or obj.get("tmdbID")
+        media_type = obj.get("mediaType") or obj.get("media_type") or obj.get("type")
+        if tmdb_id:
+            try:
+                tmdb_id = int(tmdb_id)
+            except Exception:
+                tmdb_id = None
+        if tmdb_id:
+            mt = str(media_type or "").lower()
+            if mt in ("tv", "series", "电视剧", "tvshow"):
+                mt = "tv"
+            elif mt in ("movie", "film", "电影"):
+                mt = "movie"
+            else:
+                # Unknown, default tv
+                mt = "tv"
+            key = f"{mt}:{tmdb_id}"
+            if key not in tmdb_ids:
+                tmdb_ids.append(key)
+                if len(tmdb_ids) >= max_results:
+                    return
+        for v in obj.values():
+            _collect_tmdb_ids_from_json(v, tmdb_ids, max_results)
+    elif isinstance(obj, list):
+        for v in obj:
+            _collect_tmdb_ids_from_json(v, tmdb_ids, max_results)
+
+
+def _fetch_hdhive_urls_from_url(
+    url: str,
+    headers: dict,
+    base_url: str,
+    results: list,
+    max_results: int,
+    debug_info: list,
+    tmdb_urls: list = None,
+    tmdb_ids: list = None,
+) -> None:
+    try:
+        resp = requests.get(url, timeout=20, headers=headers)
+    except Exception as e:
+        debug_info.append(f"url={url} error={type(e).__name__}")
+        return
+    debug_info.append(f"url={url} status={getattr(resp, 'status_code', 'NA')}")
+    if resp.status_code != 200 or not resp.text:
+        return
+    _collect_hdhive_urls_from_text(resp.text, base_url, results, max_results)
+    if tmdb_urls is not None:
+        _collect_tmdb_urls_from_text(resp.text, base_url, tmdb_urls, max_results)
+    if tmdb_ids is not None:
+        _collect_tmdb_ids_from_json(resp.text, tmdb_ids, max_results)
+    if len(results) >= max_results:
+        return
+    _collect_from_next_f(resp.text, base_url, results, max_results)
+    if tmdb_urls is not None:
+        _collect_tmdb_urls_from_text(resp.text, base_url, tmdb_urls, max_results)
+    if tmdb_ids is not None:
+        _collect_tmdb_ids_from_json(resp.text, tmdb_ids, max_results)
+    if len(results) >= max_results:
+        return
+    next_data = _extract_next_data_json(resp.text)
+    if next_data:
+        _walk_json_for_hdhive_urls(next_data, base_url, results, max_results)
+        if len(results) >= max_results:
+            return
+
+    # Try JSON payload
+    try:
+        if resp.headers.get('Content-Type', '').startswith('application/json') or resp.text.strip().startswith('{'):
+            data = resp.json()
+            _walk_json_for_hdhive_urls(data, base_url, results, max_results)
+            if tmdb_urls is not None:
+                try:
+                    _collect_tmdb_urls_from_text(json.dumps(data, ensure_ascii=False), base_url, tmdb_urls, max_results)
+                except Exception:
+                    pass
+            if tmdb_ids is not None:
+                _collect_tmdb_ids_from_json(data, tmdb_ids, max_results)
+    except Exception:
+        pass
+
+
+def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, language: str = "zh-CN") -> list:
+    api_key = (api_key or '').strip()
+    if not api_key or not query:
+        return []
+    base = "https://api.themoviedb.org/3/search"
+    url = f"{base}/{media_type}"
+    params = {"api_key": api_key, "query": query, "language": language}
+    if year:
+        if media_type == "movie":
+            params["year"] = year
+        else:
+            params["first_air_date_year"] = year
+    try:
+        resp = requests.get(url, params=params, timeout=20)
+        data = resp.json() if resp.status_code == 200 else None
+    except Exception:
+        data = None
+    if not isinstance(data, dict):
+        return []
+    results = data.get("results") if isinstance(data.get("results"), list) else []
+    ids = []
+    for item in results:
+        if isinstance(item, dict) and item.get("id"):
+            ids.append(int(item.get("id")))
+    return ids
+
+
+def _test_hdhive_cookie(base_url: str, cookie: str) -> dict:
+    base_url = (base_url or "https://hdhive.com").rstrip('/')
+    cookie = _normalize_hdhive_cookie(cookie or '')
+    if not cookie:
+        return {"success": False, "message": "未配置 Cookie"}
+
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Origin": base_url,
+        "Referer": f"{base_url}/",
+        "Cookie": cookie,
+    }
+
+    checks = [
+        ("home", f"{base_url}/"),
+        ("profile", f"{base_url}/profile"),
+        ("points", f"{base_url}/go-api/customer/points"),
+        ("info", f"{base_url}/go-api/customer/info"),
+        ("user", f"{base_url}/go-api/customer"),
+    ]
+    details = []
+    for name, url in checks:
+        try:
+            resp = requests.get(url, timeout=15, headers=headers)
+        except Exception as e:
+            details.append(f"{name}: {type(e).__name__}")
+            continue
+        details.append(f"{name}:{resp.status_code}")
+        text = resp.text or ''
+        content_type = resp.headers.get('Content-Type', '')
+        if 'application/json' in content_type or text.strip().startswith('{'):
+            try:
+                data = resp.json()
+            except Exception:
+                data = None
+            if isinstance(data, dict):
+                if data.get('success') is True:
+                    return {"success": True, "message": "Cookie 有效 (API 成功)", "details": details}
+                msg = str(data.get('message') or data.get('description') or '')
+                if msg and ('未登录' in msg or 'login' in msg.lower()):
+                    continue
+                if data.get('data') is not None or data.get('user') is not None:
+                    return {"success": True, "message": "Cookie 有效 (API 返回数据)", "details": details}
+        else:
+            if any(token in text for token in ("退出登录", "个人中心", "账户中心", "logout")):
+                return {"success": True, "message": "Cookie 可能有效 (页面已登录)", "details": details}
+
+    return {"success": False, "message": "Cookie 无效或登录失效", "details": details}
+
+
 def _parse_target_user_ids(raw) -> list:
     if raw is None:
         return []
@@ -1293,6 +1627,182 @@ def _parse_target_user_ids(raw) -> list:
                 pass
         result.append(s)
     return result
+
+
+def _resolve_client_ip(req) -> str:
+    try:
+        forwarded = (req.headers.get('X-Forwarded-For') or '').strip()
+        if forwarded:
+            return forwarded.split(',')[0].strip() or (req.remote_addr or 'unknown')
+        return req.remote_addr or 'unknown'
+    except Exception:
+        return 'unknown'
+
+
+def _check_public_rate_limit(req, cfg: dict) -> Tuple[bool, int]:
+    if not isinstance(cfg, dict):
+        return True, 0
+    enabled = bool(cfg.get("enabled", True))
+    if not enabled:
+        return True, 0
+    try:
+        window_seconds = int(cfg.get("window_seconds", 300) or 300)
+    except Exception:
+        window_seconds = 300
+    try:
+        max_requests = int(cfg.get("max_requests", 3) or 3)
+    except Exception:
+        max_requests = 3
+
+    window_seconds = max(10, min(window_seconds, 24 * 60 * 60))
+    max_requests = max(1, min(max_requests, 100))
+
+    ip = _resolve_client_ip(req)
+    now = time.time()
+    cutoff = now - window_seconds
+
+    with _PUBLIC_RATE_LIMIT_LOCK:
+        history = _PUBLIC_RATE_LIMIT_CACHE.get(ip, [])
+        history = [ts for ts in history if ts >= cutoff]
+        if len(history) >= max_requests:
+            oldest = min(history) if history else now
+            retry_after = int(max(1, window_seconds - (now - oldest)))
+            _PUBLIC_RATE_LIMIT_CACHE[ip] = history
+            return False, retry_after
+        history.append(now)
+        _PUBLIC_RATE_LIMIT_CACHE[ip] = history
+
+    return True, 0
+
+
+def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dict = None, timeout: int = 20) -> dict:
+    headers = {
+        "X-API-Key": api_key,
+        "Accept": "application/json",
+    }
+    if method.upper() in ("POST", "PATCH"):
+        headers["Content-Type"] = "application/json"
+    try:
+        resp = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)
+    except Exception as e:
+        return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        return data
+    return {"success": False, "code": str(resp.status_code), "message": "Invalid JSON response"}
+
+
+def _hdhive_open_api_resources(base_url: str, api_key: str, media_type: str, tmdb_id: str) -> dict:
+    api_base = base_url.rstrip("/") + "/api/open"
+    url = f"{api_base}/resources/{media_type}/{tmdb_id}"
+    return _hdhive_open_api_request("GET", url, api_key)
+
+
+def _hdhive_open_api_ping(base_url: str, api_key: str) -> dict:
+    api_base = base_url.rstrip("/") + "/api/open"
+    url = f"{api_base}/ping"
+    return _hdhive_open_api_request("GET", url, api_key)
+
+
+def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
+    api_base = base_url.rstrip("/") + "/api/open"
+    url = f"{api_base}/resources/unlock"
+    return _hdhive_open_api_request("POST", url, api_key, json_body={"slug": slug})
+
+
+def _resource_unlock_points(item: dict) -> int:
+    pts = item.get("unlock_points") if isinstance(item, dict) else None
+    try:
+        return int(pts) if pts is not None else 0
+    except Exception:
+        return 0
+
+
+def _sort_hdhive_resources(resources: list) -> list:
+    if not resources:
+        return []
+
+    def _score(item):
+        points = _resource_unlock_points(item)
+        unlocked = bool(item.get("is_unlocked", False))
+        official = bool(item.get("is_official", False))
+        return (
+            0 if unlocked else 1,
+            points,
+            0 if official else 1,
+        )
+
+    return sorted(resources, key=_score)
+
+
+def _pick_hdhive_resource(resources: list, threshold: int) -> dict:
+    if not resources:
+        return {}
+
+    resources_sorted = _sort_hdhive_resources(resources)
+    # Prefer already unlocked
+    for item in resources_sorted:
+        if item.get("is_unlocked"):
+            return item
+    # Then affordable
+    for item in resources_sorted:
+        points = _resource_unlock_points(item)
+        if points <= threshold:
+            return item
+    return {}
+
+
+def _format_resource_line(item: dict) -> str:
+    title = item.get("title") or "-"
+    points = item.get("unlock_points")
+    try:
+        points = int(points) if points is not None else 0
+    except Exception:
+        points = 0
+    unlocked = "已解锁" if item.get("is_unlocked") else f"{points}积分"
+    official = "官方" if item.get("is_official") else "普通"
+    resolution = ",".join(item.get("video_resolution") or [])
+    return f"{title} | {unlocked} | {official} | {resolution}"
+
+
+def _is_115_url(url: str) -> bool:
+    if not url:
+        return False
+    lower = str(url).lower()
+    return ("115.com" in lower) or ("115cdn" in lower)
+
+
+def _is_123_url(url: str) -> bool:
+    if not url:
+        return False
+    lower = str(url).lower()
+    return ("123pan.com" in lower) or ("123pan.cn" in lower)
+
+
+def _storage_mode_label(mode: str) -> str:
+    if mode == "115":
+        return "115"
+    if mode == "123":
+        return "123"
+    if mode == "115_123":
+        return "115/123"
+    return "不限"
+
+
+def _match_storage_mode(url: str, mode: str) -> bool:
+    mode = (mode or "any").lower()
+    if mode == "any":
+        return True
+    if mode == "115":
+        return _is_115_url(url)
+    if mode == "123":
+        return _is_123_url(url)
+    if mode == "115_123":
+        return _is_115_url(url) or _is_123_url(url)
+    return True
 
 
 def _enqueue_message(chat_id, text: str) -> bool:
@@ -1326,53 +1836,226 @@ def _enqueue_message(chat_id, text: str) -> bool:
     return False
 
 
-def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header: str = "") -> list:
+def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header: str = "", base_url: str = "https://hdhive.com"):
     query = (query or "").strip()
     if not query:
-        return []
+        return [], [], [], []
+    base_url = (base_url or "https://hdhive.com").rstrip('/')
     encoded = quote_plus(query)
     search_urls = [
-        f"https://hdhive.com/search?keyword={encoded}",
-        f"https://hdhive.com/search?q={encoded}",
-        f"https://hdhive.com/search?query={encoded}",
-        f"https://hdhive.com/?keyword={encoded}",
-        f"https://hdhive.com/?q={encoded}",
-        f"https://hdhive.com/search/{encoded}",
+        f"{base_url}/search?keyword={encoded}",
+        f"{base_url}/search?q={encoded}",
+        f"{base_url}/search?query={encoded}",
+        f"{base_url}/?keyword={encoded}",
+        f"{base_url}/?q={encoded}",
+        f"{base_url}/search/{encoded}",
     ]
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": f"{base_url}/",
+    }
+    json_headers = dict(headers)
+    json_headers["Accept"] = "application/json, text/plain, */*"
     if cookie_header:
         headers["Cookie"] = cookie_header
+        json_headers["Cookie"] = cookie_header
 
-    pattern = re.compile(r"/resource/115/([0-9A-Za-z]{16,64})", re.IGNORECASE)
+    debug_info = []
+
     results = []
+    tmdb_urls = []
+    tmdb_ids = []
     for url in search_urls:
+        _fetch_hdhive_urls_from_url(
+            url,
+            headers,
+            base_url,
+            results,
+            max_results,
+            debug_info,
+            tmdb_urls=tmdb_urls,
+            tmdb_ids=tmdb_ids,
+        )
+        if len(results) >= max_results:
+            return results, debug_info, tmdb_urls, tmdb_ids
+
         try:
-            resp = requests.get(url, timeout=20, headers=headers)
+            html_text = requests.get(url, timeout=20, headers=headers).text
         except Exception:
-            continue
-        if resp.status_code != 200 or not resp.text:
-            continue
-        for slug in pattern.findall(resp.text):
-            full_url = f"https://hdhive.com/resource/115/{slug}"
-            if full_url not in results:
-                results.append(full_url)
+            html_text = ""
+        next_data = _extract_next_data_json(html_text)
+        if next_data:
+            debug_info.append("next_data=found")
+            _walk_json_for_hdhive_urls(next_data, base_url, results, max_results)
+        else:
+            debug_info.append("next_data=missing")
+        if len(results) >= max_results:
+            return results, debug_info, tmdb_urls, tmdb_ids
+
+        # Try Next.js data endpoint
+        try:
+            build_id = None
+            page_path = "/search"
+            if isinstance(next_data, dict):
+                build_id = next_data.get("buildId") or next_data.get("build_id")
+                page_path = next_data.get("page") or page_path
+            if not build_id and html_text:
+                build_id_match = re.search(r'"buildId"\s*:\s*"([^"]+)"', html_text)
+                if build_id_match:
+                    build_id = build_id_match.group(1)
+            if build_id:
+                debug_info.append(f"build_id={build_id}")
+                if not str(page_path).startswith("/"):
+                    page_path = f"/{page_path}"
+                data_urls = [
+                    f"{base_url}/_next/data/{build_id}{page_path}.json?keyword={encoded}",
+                    f"{base_url}/_next/data/{build_id}{page_path}.json?q={encoded}",
+                    f"{base_url}/_next/data/{build_id}{page_path}.json?query={encoded}",
+                ]
+                for durl in data_urls:
+                    try:
+                        dresp = requests.get(durl, timeout=20, headers=headers)
+                    except Exception:
+                        continue
+                    debug_info.append(f"data_url={durl} status={getattr(dresp, 'status_code', 'NA')}")
+                    if dresp.status_code != 200 or not dresp.text:
+                        continue
+                    raw = dresp.text.strip()
+                    if raw.startswith(")]}'"):
+                        raw = raw.split("\n", 1)[-1]
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        data = None
+                    if data is not None:
+                        _walk_json_for_hdhive_urls(data, base_url, results, max_results)
+                        _collect_tmdb_urls_from_text(raw, base_url, tmdb_urls, max_results)
+                        _collect_tmdb_ids_from_json(data, tmdb_ids, max_results)
+                        if len(results) >= max_results:
+                            return results, debug_info, tmdb_urls, tmdb_ids
+        except Exception:
+            pass
+
+        # Try x-nextjs-data header for JSON payload
+        try:
+            headers_json = dict(headers)
+            headers_json["x-nextjs-data"] = "1"
+            jresp = requests.get(url, timeout=20, headers=headers_json)
+            debug_info.append(f"nextjs_data={getattr(jresp, 'status_code', 'NA')}")
+            if jresp.status_code == 200 and jresp.text:
+                raw = jresp.text.strip()
+                if raw.startswith(")]}'"):
+                    raw = raw.split("\n", 1)[-1]
+                try:
+                    data = json.loads(raw)
+                except Exception as json_err:
+                    data = None
+                    debug_info.append(f"nextjs_json=err:{type(json_err).__name__}")
+                if data is not None:
+                    debug_info.append("nextjs_json=ok")
+                    _walk_json_for_hdhive_urls(data, base_url, results, max_results)
+                    _collect_tmdb_urls_from_text(raw, base_url, tmdb_urls, max_results)
+                    _collect_tmdb_ids_from_json(data, tmdb_ids, max_results)
+                    if len(results) >= max_results:
+                        return results, debug_info, tmdb_urls, tmdb_ids
+        except Exception:
+            pass
+
+        # Try common JSON API endpoints (best-effort)
+        api_urls = [
+            f"{base_url}/api/search?keyword={encoded}",
+            f"{base_url}/api/search?q={encoded}",
+            f"{base_url}/api/search?query={encoded}",
+            f"{base_url}/api/resources/search?keyword={encoded}",
+            f"{base_url}/api/resource/search?keyword={encoded}",
+            f"{base_url}/go-api/search?keyword={encoded}",
+            f"{base_url}/go-api/search?q={encoded}",
+        ]
+        for api_url in api_urls:
+            try:
+                aresp = requests.get(api_url, timeout=20, headers=json_headers)
+            except Exception:
+                continue
+            debug_info.append(f"api_url={api_url} status={getattr(aresp, 'status_code', 'NA')}")
+            if aresp.status_code != 200 or not aresp.text:
+                continue
+            raw = aresp.text.strip()
+            if raw.startswith(")]}'"):
+                raw = raw.split("\n", 1)[-1]
+            try:
+                data = json.loads(raw)
+            except Exception as json_err:
+                debug_info.append(f"api_json=err:{type(json_err).__name__}")
+                data = None
+            if data is not None:
+                debug_info.append("api_json=ok")
+                _walk_json_for_hdhive_urls(data, base_url, results, max_results)
+                _collect_tmdb_urls_from_text(raw, base_url, tmdb_urls, max_results)
+                _collect_tmdb_ids_from_json(data, tmdb_ids, max_results)
                 if len(results) >= max_results:
-                    return results
+                    return results, debug_info, tmdb_urls, tmdb_ids
+
+        # Try RSC parameter (some pages require _rsc)
+        try:
+            rsc_url = f"{url}{'&' if '?' in url else '?'}_rsc={int(time.time() * 1000)}"
+            rresp = requests.get(rsc_url, timeout=20, headers=headers)
+            debug_info.append(f"rsc_url={rsc_url} status={getattr(rresp, 'status_code', 'NA')}")
+            if rresp.status_code == 200 and rresp.text:
+                _collect_hdhive_urls_from_text(rresp.text, base_url, results, max_results)
+                _collect_from_next_f(rresp.text, base_url, results, max_results)
+                _collect_tmdb_urls_from_text(rresp.text, base_url, tmdb_urls, max_results)
+                if len(results) >= max_results:
+                    return results, debug_info, tmdb_urls, tmdb_ids
+        except Exception:
+            pass
+
+        if not results and (tmdb_urls or tmdb_ids):
+            for tmdb_url in tmdb_urls[:10]:
+                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, results, max_results, debug_info)
+                if len(results) >= max_results:
+                    return results, debug_info, tmdb_urls, tmdb_ids
+            for key in tmdb_ids[:10]:
+                try:
+                    mt, tid = key.split(":", 1)
+                except Exception:
+                    continue
+                tmdb_url = f"{base_url}/tmdb/{mt}/{tid}?_rsc={int(time.time() * 1000)}"
+                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, results, max_results, debug_info)
+                if len(results) >= max_results:
+                    return results, debug_info, tmdb_urls, tmdb_ids
+
         if results:
             break
-    return results
+    return results, debug_info, tmdb_urls, tmdb_ids
 
 
 def _run_self_service_request(payload: dict) -> None:
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
     query = payload.get("query", "")
+    title = payload.get("title", "") or ""
     target_ids = payload.get("targets", [])
     max_results = int(payload.get("max_results", 5) or 5)
     max_results = max(1, min(max_results, 20))
     hdhive_cookie = payload.get("hdhive_cookie", "") or ""
+    base_url = payload.get("base_url", "") or "https://hdhive.com"
     request_type = payload.get("type", "")
     request_year = payload.get("year", "")
     request_note = payload.get("note", "")
+    direct_url = (payload.get("hdhive_url", "") or "").strip()
+    use_open_api = bool(payload.get("use_open_api"))
+    open_api_key = (payload.get("hdhive_open_api_key") or "").strip()
+    tmdb_id_input = (payload.get("tmdb_id") or "").strip()
+    unlock_threshold = int(payload.get("unlock_threshold", 0) or 0)
+    allow_open_api_direct = bool(payload.get("open_api_direct_unlock", False))
+    storage_mode = str(payload.get("storage_mode", "any") or "any").lower()
+    if storage_mode not in ("any", "115", "123", "115_123"):
+        storage_mode = "any"
+    storage_label = _storage_mode_label(storage_mode)
+
+    if use_open_api and direct_url and not allow_open_api_direct:
+        use_open_api = False
 
     _append_self_service_log([f"[{ts}] [INFO] submit query={query} targets={target_ids}"])
 
@@ -1380,7 +2063,294 @@ def _run_self_service_request(payload: dict) -> None:
         _append_self_service_log([f"[{ts}] [WARN] no targets configured"])
         return
 
-    candidates = _search_hdhive_resource_urls(query, max_results=max_results, cookie_header=hdhive_cookie)
+    if use_open_api:
+        if not open_api_key:
+            msg = "❌ 未配置 HDHive Open API Key，无法使用 API 搜索"
+            for tid in target_ids:
+                _enqueue_message(tid, msg)
+            _append_self_service_log([f"[{ts}] [WARN] open_api missing api key"])
+            return
+
+        # Direct resource slug unlock
+        if direct_url:
+            slug = direct_url.rstrip('/').split('/')[-1]
+            unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+            if not unlock_resp.get("success"):
+                msg = f"❌ 资源解锁失败: {unlock_resp.get('message') or unlock_resp.get('description')}"
+                for tid in target_ids:
+                    _enqueue_message(tid, msg)
+                _append_self_service_log([f"[{ts}] [WARN] open_api unlock failed slug={slug}"])
+                return
+            data = unlock_resp.get("data") if isinstance(unlock_resp, dict) else {}
+            full_url = ""
+            if isinstance(data, dict):
+                full_url = data.get("full_url") or ""
+                if not full_url and data.get("url"):
+                    url = data.get("url")
+                    access_code = data.get("access_code")
+                    if access_code:
+                        sep = "&" if "?" in url else "?"
+                        full_url = f"{url}{sep}password={access_code}"
+                    else:
+                        full_url = url
+            if full_url and not _match_storage_mode(full_url, storage_mode):
+                msg_lines = [
+                    f"❌ 自助观影申请仅支持 {storage_label} 网盘",
+                    f"关键词: {query}",
+                    f"Slug: {slug}",
+                    f"解锁结果: {unlock_resp.get('message') or 'success'}",
+                    "链接类型: 不符合当前网盘设置（已过滤）",
+                ]
+                msg = "\n".join(msg_lines)
+                for tid in target_ids:
+                    _enqueue_message(tid, msg)
+                _append_self_service_log([f"[{ts}] [WARN] open_api non-115 filtered slug={slug}"])
+                return
+            msg_lines = [
+                "🎬 自助观影申请结果（Open API）",
+                f"关键词: {query}",
+                f"Slug: {slug}",
+                f"解锁结果: {unlock_resp.get('message') or 'success'}",
+            ]
+            msg_lines.append(f"链接: {full_url or '未返回'}")
+            msg = "\n".join(msg_lines)
+            for tid in target_ids:
+                _enqueue_message(tid, msg)
+            _append_self_service_log([f"[{ts}] [INFO] open_api success slug={slug}"])
+            return
+
+        media_type = ""
+        if request_type in ("电影", "movie"):
+            media_type = "movie"
+        elif request_type in ("电视剧", "tv"):
+            media_type = "tv"
+
+        tmdb_ids = []
+        if tmdb_id_input:
+            tmdb_ids = [tmdb_id_input]
+        else:
+            tmdb_key = (payload.get("tmdb_api_key") or "").strip()
+            if tmdb_key and title:
+                if media_type:
+                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, media_type)]
+                else:
+                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, "tv")]
+                    if len(tmdb_ids) < 3:
+                        tmdb_ids += [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, "movie")]
+
+        if not tmdb_ids:
+            msg_lines = [
+                "❌ 自助观影申请未找到 TMDB ID",
+                f"关键词: {query}",
+                "请在表单中填写 TMDB ID 或配置 TMDB API Key。",
+            ]
+            msg = "\n".join(msg_lines)
+            for tid in target_ids:
+                _enqueue_message(tid, msg)
+            _append_self_service_log([f"[{ts}] [WARN] open_api no tmdb id query={query}"])
+            return
+
+        collected_resources = []
+        for tid in tmdb_ids[:5]:
+            mt_candidates = [media_type] if media_type else ["tv", "movie"]
+            for mt in mt_candidates:
+                resp = _hdhive_open_api_resources(base_url, open_api_key, mt, tid)
+                if not resp.get("success"):
+                    continue
+                data = resp.get("data") if isinstance(resp, dict) else None
+                if isinstance(data, list) and data:
+                    for item in data:
+                        if isinstance(item, dict):
+                            item["_tmdb_id"] = tid
+                            item["_media_type"] = mt
+                            collected_resources.append(item)
+            if collected_resources:
+                break
+
+        if not collected_resources:
+            msg_lines = [
+                "❌ 自助观影申请未找到资源",
+                f"关键词: {query}",
+                f"TMDB ID: {', '.join(tmdb_ids[:5])}",
+            ]
+            msg = "\n".join(msg_lines)
+            for tid in target_ids:
+                _enqueue_message(tid, msg)
+            _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
+            return
+
+        candidate_pool = []
+        resources_sorted = _sort_hdhive_resources(collected_resources)
+        for item in resources_sorted:
+            if item.get("is_unlocked"):
+                candidate_pool.append(item)
+        for item in resources_sorted:
+            if item in candidate_pool:
+                continue
+            points = _resource_unlock_points(item)
+            if points <= unlock_threshold:
+                candidate_pool.append(item)
+
+        if not candidate_pool:
+            msg_lines = [
+                "❌ 未找到可自动解锁的资源",
+                f"关键词: {query}",
+                f"阈值: {unlock_threshold} 积分",
+                "候选资源:",
+            ]
+            for item in collected_resources[:max_results]:
+                msg_lines.append(f"- {_format_resource_line(item)}")
+            msg = "\n".join(msg_lines)
+            for tid in target_ids:
+                _enqueue_message(tid, msg)
+            _append_self_service_log([f"[{ts}] [WARN] open_api no affordable resources query={query}"])
+            return
+
+        picked = None
+        picked_slug = ""
+        picked_resp = None
+        picked_full_url = ""
+        filtered_count = 0
+        for item in candidate_pool[:max_results]:
+            slug = item.get("slug") or ""
+            if not slug:
+                continue
+            unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+            if not unlock_resp.get("success"):
+                continue
+            data = unlock_resp.get("data") if isinstance(unlock_resp, dict) else {}
+            full_url = ""
+            if isinstance(data, dict):
+                full_url = data.get("full_url") or ""
+                if not full_url and data.get("url"):
+                    url = data.get("url")
+                    access_code = data.get("access_code")
+                    if access_code:
+                        sep = "&" if "?" in url else "?"
+                        full_url = f"{url}{sep}password={access_code}"
+                    else:
+                        full_url = url
+            if full_url and not _match_storage_mode(full_url, storage_mode):
+                filtered_count += 1
+                continue
+            picked = item
+            picked_slug = slug
+            picked_resp = unlock_resp
+            picked_full_url = full_url
+            break
+
+        if not picked:
+            msg_lines = [
+                "❌ 未找到可用资源",
+                f"关键词: {query}",
+                f"阈值: {unlock_threshold} 积分",
+            ]
+            if storage_mode != "any":
+                msg_lines.append(f"说明: 已过滤非 {storage_label} 网盘资源")
+            msg_lines.append("候选资源:")
+            for item in collected_resources[:max_results]:
+                msg_lines.append(f"- {_format_resource_line(item)}")
+            msg = "\n".join(msg_lines)
+            for tid in target_ids:
+                _enqueue_message(tid, msg)
+            _append_self_service_log([f"[{ts}] [WARN] open_api no usable resources query={query} filtered={filtered_count}"])
+            return
+
+        msg_lines = [
+            "🎬 自助观影申请结果（Open API）",
+            f"关键词: {query}",
+            f"资源: {picked.get('title') or '-'}",
+            f"Slug: {picked_slug}",
+            f"解锁结果: {picked_resp.get('message') or 'success'}",
+        ]
+        msg_lines.append(f"链接: {picked_full_url or '未返回'}")
+        msg = "\n".join(msg_lines)
+        for tid in target_ids:
+            _enqueue_message(tid, msg)
+        _append_self_service_log([f"[{ts}] [INFO] open_api success slug={picked_slug}"])
+        return
+
+    candidates = []
+    debug_lines = []
+    used_query = query
+    tmdb_urls = []
+    tmdb_ids = []
+
+    if direct_url:
+        normalized = direct_url
+        if not normalized.startswith("http"):
+            normalized = f"{base_url.rstrip('/')}/resource/115/{normalized.strip('/')}"
+        candidates = [normalized]
+        used_query = query or title or direct_url
+    else:
+        query_candidates = []
+        if query:
+            query_candidates.append(query)
+        if title:
+            combos = []
+            if request_year:
+                combos.append(f"{title} {request_year}")
+            if request_type:
+                combos.append(f"{title} {request_type}")
+            combos.append(title)
+            for item in combos:
+                if item and item not in query_candidates:
+                    query_candidates.append(item)
+
+        for q in query_candidates:
+            candidates, debug_info, found_tmdb_urls, found_tmdb_ids = _search_hdhive_resource_urls(
+                q,
+                max_results=max_results,
+                cookie_header=hdhive_cookie,
+                base_url=base_url,
+            )
+            for item in (found_tmdb_urls or []):
+                if item not in tmdb_urls:
+                    tmdb_urls.append(item)
+            for item in (found_tmdb_ids or []):
+                if item not in tmdb_ids:
+                    tmdb_ids.append(item)
+            if debug_info:
+                debug_lines.extend(debug_info[:8])
+            if candidates:
+                used_query = q
+                break
+
+        # TMDB fallback
+        if not candidates:
+            tmdb_key = ""
+            try:
+                tmdb_key = (payload.get("tmdb_api_key") or "").strip()
+            except Exception:
+                tmdb_key = ""
+            tmdb_ids = []
+            if tmdb_key and title:
+                if request_type == "电影":
+                    tmdb_ids = _tmdb_search_ids(tmdb_key, title, request_year, "movie")
+                elif request_type == "电视剧":
+                    tmdb_ids = _tmdb_search_ids(tmdb_key, title, request_year, "tv")
+                else:
+                    tmdb_ids = _tmdb_search_ids(tmdb_key, title, request_year, "tv")
+                    if len(tmdb_ids) < 3:
+                        tmdb_ids += _tmdb_search_ids(tmdb_key, title, request_year, "movie")
+            if tmdb_ids:
+                headers = {
+                    "User-Agent": "Mozilla/5.0",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                    "Referer": f"{base_url}/",
+                }
+                if hdhive_cookie:
+                    headers["Cookie"] = hdhive_cookie
+                for tid in tmdb_ids[:5]:
+                    for prefix in ("movie", "tv"):
+                        tmdb_url = f"{base_url}/tmdb/{prefix}/{tid}?_rsc={int(time.time() * 1000)}"
+                        _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, candidates, max_results, debug_lines)
+                        if candidates:
+                            used_query = f"tmdb:{prefix}:{tid}"
+                            break
+                    if candidates:
+                        break
     if not candidates:
         msg_lines = [
             "❌ 自助观影申请未找到匹配资源",
@@ -1395,19 +2365,67 @@ def _run_self_service_request(payload: dict) -> None:
         msg = "\n".join(msg_lines)
         for tid in target_ids:
             _enqueue_message(tid, msg)
-        _append_self_service_log([f"[{ts}] [WARN] no results for query={query}"])
+        log_line = f"[{ts}] [WARN] no results for query={query}"
+        if debug_lines:
+            _append_self_service_log([log_line] + [f"[{ts}] [DEBUG] {line}" for line in debug_lines])
+        else:
+            _append_self_service_log([log_line])
         return
 
     primary = candidates[0]
     real_url = None
     note = ""
+    candidate_notes = []
     try:
         import telegram_monitor as tg_monitor
         tg_monitor.current_config = tg_monitor.load_config()
-        real_url, note = tg_monitor._resolve_hdhive_115_url_with_note_sync(primary)
+        for idx, cand in enumerate(candidates[:max_results], start=1):
+            real_url, note = tg_monitor._resolve_hdhive_115_url_with_note_sync(cand)
+            if real_url and not _match_storage_mode(real_url, storage_mode):
+                real_url = None
+                if storage_mode != "any":
+                    note = f"非 {storage_label} 网盘已过滤"
+            candidate_notes.append((cand, note))
+            if real_url:
+                primary = cand
+                break
+
+        if not real_url and (tmdb_urls or tmdb_ids):
+            extra_candidates = []
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+                "Referer": f"{base_url}/",
+            }
+            if hdhive_cookie:
+                headers["Cookie"] = hdhive_cookie
+            for tmdb_url in tmdb_urls[:10]:
+                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, extra_candidates, max_results, debug_lines)
+            for key in tmdb_ids[:10]:
+                try:
+                    mt, tid = key.split(":", 1)
+                except Exception:
+                    continue
+                tmdb_url = f"{base_url}/tmdb/{mt}/{tid}?_rsc={int(time.time() * 1000)}"
+                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, extra_candidates, max_results, debug_lines)
+            tried = {url for url, _ in candidate_notes}
+            for cand in extra_candidates:
+                if cand in tried:
+                    continue
+                real_url, note = tg_monitor._resolve_hdhive_115_url_with_note_sync(cand)
+                if real_url and not _match_storage_mode(real_url, storage_mode):
+                    real_url = None
+                    if storage_mode != "any":
+                        note = f"非 {storage_label} 网盘已过滤"
+                candidate_notes.append((cand, note))
+                if real_url:
+                    primary = cand
+                    break
     except Exception as e:
         real_url = None
         note = f"解析异常: {e}"
+        candidate_notes.append((primary, note))
 
     msg_lines = [
         "🎬 自助观影申请结果",
@@ -1421,11 +2439,17 @@ def _run_self_service_request(payload: dict) -> None:
         msg_lines.append(f"备注: {request_note}")
     msg_lines.append(f"影巢资源: {primary}")
     if real_url:
-        msg_lines.append(f"115 链接: {real_url}")
+        msg_lines.append(f"网盘链接: {real_url}")
+        if note:
+            msg_lines.append(f"说明: {note}")
     else:
-        msg_lines.append("115 链接: 未解析")
-    if note:
-        msg_lines.append(f"说明: {note}")
+        msg_lines.append("网盘链接: 未解析")
+        if candidate_notes:
+            msg_lines.append("候选解析结果:")
+            for idx, (url, cnote) in enumerate(candidate_notes[:max_results], start=1):
+                msg_lines.append(f"{idx}. {url} | {cnote or '未解析'}")
+        elif note:
+            msg_lines.append(f"说明: {note}")
     if len(candidates) > 1:
         msg_lines.append("候选资源:")
         for idx, url in enumerate(candidates[:max_results], start=1):
@@ -1435,7 +2459,7 @@ def _run_self_service_request(payload: dict) -> None:
     for tid in target_ids:
         _enqueue_message(tid, msg)
 
-    _append_self_service_log([f"[{ts}] [INFO] done query={query} primary={primary} ok={bool(real_url)} note={note}"])
+    _append_self_service_log([f"[{ts}] [INFO] done query={used_query} primary={primary} ok={bool(real_url)} note={note}"])
 
 
 def _resolve_log_view_config(cfg: dict):
@@ -2339,6 +3363,9 @@ def manage_config():
         elif action == 'update_hdhive_cookie':
             hdhive_cookie = (request.form.get('hdhive_cookie') or '').strip()
             threshold_raw = (request.form.get('hdhive_auto_unlock_points_threshold') or '').strip()
+            hdhive_base_url = (request.form.get('hdhive_base_url') or '').strip()
+            hdhive_open_api_key = (request.form.get('hdhive_open_api_key') or '').strip()
+            hdhive_open_api_direct_unlock = (request.form.get('hdhive_open_api_direct_unlock') or 'off').strip().lower() == 'on'
             try:
                 threshold = int(threshold_raw) if threshold_raw != '' else 0
                 if threshold < 0:
@@ -2356,21 +3383,59 @@ def manage_config():
                 if 'hdhive_cookie' in config:
                     config.pop('hdhive_cookie', None)
                 flash("HDHive Cookie 已清除。", "info")
+
+            if hdhive_base_url:
+                config['hdhive_base_url'] = hdhive_base_url
+            if hdhive_open_api_key:
+                config['hdhive_open_api_key'] = hdhive_open_api_key
+            config['hdhive_open_api_direct_unlock'] = hdhive_open_api_direct_unlock
             save_config(config)
 
         elif action == 'update_self_service':
             enabled = request.form.get('self_service_enabled') == 'on'
+            public_enabled = request.form.get('self_service_public_enabled') == 'on'
+            public_access_key = (request.form.get('self_service_public_access_key') or '').strip()
+            public_rate_enabled = request.form.get('self_service_public_rate_limit_enabled') == 'on'
+            public_rate_window_raw = (request.form.get('self_service_public_rate_limit_window_seconds') or '').strip()
+            public_rate_max_raw = (request.form.get('self_service_public_rate_limit_max_requests') or '').strip()
             target_user_ids = (request.form.get('self_service_target_user_ids') or '').strip()
+            storage_mode = (request.form.get('self_service_storage_mode') or 'any').strip().lower()
+            if storage_mode not in ('any', '115', '123', '115_123'):
+                storage_mode = 'any'
             max_results_raw = (request.form.get('self_service_search_max_results') or '').strip()
+            cookie_check_mode = (request.form.get('self_service_cookie_check_mode') or 'warn').strip().lower()
+            use_open_api = (request.form.get('self_service_use_open_api') or 'off').strip().lower() == 'on'
             try:
                 max_results = int(max_results_raw) if max_results_raw != '' else 5
             except Exception:
                 max_results = 5
             max_results = max(1, min(max_results, 20))
+            if cookie_check_mode not in ('strict', 'warn', 'off'):
+                cookie_check_mode = 'warn'
+            try:
+                public_rate_window = int(public_rate_window_raw) if public_rate_window_raw != '' else 300
+            except Exception:
+                public_rate_window = 300
+            try:
+                public_rate_max = int(public_rate_max_raw) if public_rate_max_raw != '' else 3
+            except Exception:
+                public_rate_max = 3
+            public_rate_window = max(10, min(public_rate_window, 24 * 60 * 60))
+            public_rate_max = max(1, min(public_rate_max, 100))
 
             config['self_service_enabled'] = enabled
+            config['self_service_public_enabled'] = public_enabled
+            config['self_service_public_access_key'] = public_access_key
+            config['self_service_public_rate_limit'] = {
+                "enabled": public_rate_enabled,
+                "window_seconds": public_rate_window,
+                "max_requests": public_rate_max,
+            }
             config['self_service_target_user_ids'] = target_user_ids
+            config['self_service_storage_mode'] = storage_mode
             config['self_service_search_max_results'] = max_results
+            config['self_service_cookie_check_mode'] = cookie_check_mode
+            config['self_service_use_open_api'] = use_open_api
             save_config(config)
             flash("自助观影申请配置已更新！", "success")
 
@@ -3282,24 +4347,55 @@ def self_service_request():
     max_results = int(config.get("self_service_search_max_results", 5) or 5)
     max_results = max(1, min(max_results, 20))
     hdhive_cookie = (config.get("hdhive_cookie") or "").strip()
+    hdhive_api_key = (config.get("hdhive_open_api_key") or "").strip()
+    use_open_api = bool(config.get("self_service_use_open_api", False))
+    allow_open_api_direct = bool(config.get("hdhive_open_api_direct_unlock", False))
+    storage_mode = str(config.get("self_service_storage_mode", "any") or "any").lower()
 
     if request.method == 'POST':
+        hdhive_url = (request.form.get('hdhive_url') or '').strip()
+        effective_use_open_api = use_open_api
         if not enabled:
             flash("自助观影申请功能未启用，请先在配置页开启。", "warning")
             return redirect(url_for('self_service_request'))
-        if not hdhive_cookie:
-            flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
-            return redirect(url_for('self_service_request'))
+        if use_open_api and hdhive_url and not allow_open_api_direct:
+            if not hdhive_cookie:
+                flash("Open API 直链解锁已关闭，且未配置 Cookie，无法处理直链。", "error")
+                return redirect(url_for('self_service_request'))
+            effective_use_open_api = False
+            flash("Open API 直链解锁已关闭，本次已改用 Cookie 解析。", "info")
+        if effective_use_open_api:
+            if not hdhive_api_key:
+                flash("未配置 HDHive Open API Key，无法使用 API 搜索。", "error")
+                return redirect(url_for('self_service_request'))
+        else:
+            if not hdhive_cookie:
+                flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
+                return redirect(url_for('self_service_request'))
         if not targets:
             flash("未配置接收用户，请先在配置页填写目标用户 ID。", "error")
             return redirect(url_for('self_service_request'))
 
+        if not effective_use_open_api:
+            cookie_check_mode = str(config.get("self_service_cookie_check_mode", "warn") or "warn").lower()
+            if cookie_check_mode not in ("strict", "warn", "off"):
+                cookie_check_mode = "warn"
+            if cookie_check_mode != "off":
+                cookie_check = _test_hdhive_cookie((config.get("hdhive_base_url") or "https://hdhive.com"), hdhive_cookie)
+                if not cookie_check.get("success"):
+                    msg = cookie_check.get("message") or "Cookie 无效或登录失效"
+                    if cookie_check_mode == "strict":
+                        flash(f"HDHive Cookie 无效：{msg}，请先更新 Cookie。", "error")
+                        return redirect(url_for('self_service_request'))
+                    flash(f"HDHive Cookie 可能无效：{msg}，仍尝试提交。", "warning")
         title = (request.form.get('title') or '').strip()
         if not title:
-            flash("请填写影片或电视剧名称。", "warning")
-            return redirect(url_for('self_service_request'))
+            if not hdhive_url:
+                flash("请填写影片或电视剧名称。", "warning")
+                return redirect(url_for('self_service_request'))
 
         request_type = (request.form.get('type') or '').strip()
+        tmdb_id = (request.form.get('tmdb_id') or '').strip()
         request_year = (request.form.get('year') or '').strip()
         request_note = (request.form.get('note') or '').strip()
 
@@ -3310,14 +4406,30 @@ def self_service_request():
             query_parts.append(request_type)
         query = " ".join([p for p in query_parts if p])
 
+        tmdb_key = ""
+        try:
+            tmdb_key = (config.get("drama_calendar", {}).get("tmdb_api_key") or "").strip()
+        except Exception:
+            tmdb_key = ""
+
         payload = {
             "query": query,
+            "title": title,
             "targets": targets,
             "max_results": max_results,
             "hdhive_cookie": hdhive_cookie,
+            "base_url": (config.get("hdhive_base_url") or "https://hdhive.com"),
             "type": request_type,
             "year": request_year,
             "note": request_note,
+            "hdhive_url": hdhive_url,
+            "tmdb_api_key": tmdb_key,
+            "tmdb_id": tmdb_id,
+            "use_open_api": effective_use_open_api,
+            "hdhive_open_api_key": hdhive_api_key,
+            "open_api_direct_unlock": allow_open_api_direct,
+            "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
+            "storage_mode": storage_mode,
         }
         threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
         flash("已提交申请，后台处理中。解析结果将发送到指定用户。", "success")
@@ -3329,6 +4441,135 @@ def self_service_request():
         target_display=", ".join([str(t) for t in targets]) if targets else "未配置",
         max_results=max_results,
         has_cookie=bool(hdhive_cookie),
+        has_open_api_key=bool(hdhive_api_key),
+        use_open_api=use_open_api,
+    )
+
+@app.route('/self_service_public', methods=['GET', 'POST'])
+def self_service_public():
+    config = load_config()
+    enabled = bool(config.get("self_service_enabled", False))
+    public_enabled = bool(config.get("self_service_public_enabled", False))
+    public_access_key = (config.get("self_service_public_access_key") or "").strip()
+    targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
+    max_results = int(config.get("self_service_search_max_results", 5) or 5)
+    max_results = max(1, min(max_results, 20))
+    hdhive_cookie = (config.get("hdhive_cookie") or "").strip()
+    hdhive_api_key = (config.get("hdhive_open_api_key") or "").strip()
+    use_open_api = bool(config.get("self_service_use_open_api", False))
+    allow_open_api_direct = bool(config.get("hdhive_open_api_direct_unlock", False))
+    storage_mode = str(config.get("self_service_storage_mode", "any") or "any").lower()
+
+    if request.method == 'POST':
+        if not enabled:
+            flash("自助观影申请功能未启用，请联系管理员。", "warning")
+            return redirect(url_for('self_service_public'))
+        if not public_enabled:
+            flash("公共提交入口未启用，请联系管理员。", "warning")
+            return redirect(url_for('self_service_public'))
+        if public_access_key:
+            provided_key = (request.form.get('access_key') or '').strip()
+            if provided_key != public_access_key:
+                flash("访问口令错误。", "error")
+                return redirect(url_for('self_service_public'))
+        rate_cfg = config.get("self_service_public_rate_limit") if isinstance(config.get("self_service_public_rate_limit"), dict) else {}
+        allowed, retry_after = _check_public_rate_limit(request, rate_cfg)
+        if not allowed:
+            flash(f"请求过于频繁，请在 {retry_after} 秒后再试。", "warning")
+            return redirect(url_for('self_service_public'))
+
+        hdhive_url = (request.form.get('hdhive_url') or '').strip()
+        effective_use_open_api = use_open_api
+        if use_open_api and hdhive_url and not allow_open_api_direct:
+            if not hdhive_cookie:
+                flash("Open API 直链解锁已关闭，且未配置 Cookie，无法处理直链。", "error")
+                return redirect(url_for('self_service_public'))
+            effective_use_open_api = False
+            flash("Open API 直链解锁已关闭，本次已改用 Cookie 解析。", "info")
+
+        if effective_use_open_api:
+            if not hdhive_api_key:
+                flash("未配置 HDHive Open API Key，无法使用 API 搜索。", "error")
+                return redirect(url_for('self_service_public'))
+        else:
+            if not hdhive_cookie:
+                flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
+                return redirect(url_for('self_service_public'))
+
+        if not targets:
+            flash("未配置接收用户，请联系管理员。", "error")
+            return redirect(url_for('self_service_public'))
+
+        if not effective_use_open_api:
+            cookie_check_mode = str(config.get("self_service_cookie_check_mode", "warn") or "warn").lower()
+            if cookie_check_mode not in ("strict", "warn", "off"):
+                cookie_check_mode = "warn"
+            if cookie_check_mode != "off":
+                cookie_check = _test_hdhive_cookie((config.get("hdhive_base_url") or "https://hdhive.com"), hdhive_cookie)
+                if not cookie_check.get("success"):
+                    msg = cookie_check.get("message") or "Cookie 无效或登录失效"
+                    if cookie_check_mode == "strict":
+                        flash(f"HDHive Cookie 无效：{msg}，请联系管理员。", "error")
+                        return redirect(url_for('self_service_public'))
+                    flash(f"HDHive Cookie 可能无效：{msg}，仍尝试提交。", "warning")
+
+        title = (request.form.get('title') or '').strip()
+        if not title:
+            if not hdhive_url:
+                flash("请填写影片或电视剧名称。", "warning")
+                return redirect(url_for('self_service_public'))
+
+        request_type = (request.form.get('type') or '').strip()
+        tmdb_id = (request.form.get('tmdb_id') or '').strip()
+        request_year = (request.form.get('year') or '').strip()
+        request_note = (request.form.get('note') or '').strip()
+
+        query_parts = [title]
+        if request_year:
+            query_parts.append(request_year)
+        if request_type:
+            query_parts.append(request_type)
+        query = " ".join([p for p in query_parts if p])
+
+        tmdb_key = ""
+        try:
+            tmdb_key = (config.get("drama_calendar", {}).get("tmdb_api_key") or "").strip()
+        except Exception:
+            tmdb_key = ""
+
+        payload = {
+            "query": query,
+            "title": title,
+            "targets": targets,
+            "max_results": max_results,
+            "hdhive_cookie": hdhive_cookie,
+            "base_url": (config.get("hdhive_base_url") or "https://hdhive.com"),
+            "type": request_type,
+            "year": request_year,
+            "note": request_note,
+            "hdhive_url": hdhive_url,
+            "tmdb_api_key": tmdb_key,
+            "tmdb_id": tmdb_id,
+            "use_open_api": effective_use_open_api,
+            "hdhive_open_api_key": hdhive_api_key,
+            "open_api_direct_unlock": allow_open_api_direct,
+            "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
+            "storage_mode": storage_mode,
+        }
+        threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
+        flash("已提交申请，后台处理中。解析结果将发送给管理员。", "success")
+        return redirect(url_for('self_service_public'))
+
+    return render_template(
+        'self_service_public.html',
+        enabled=enabled,
+        public_enabled=public_enabled,
+        require_access_key=bool(public_access_key),
+        max_results=max_results,
+        has_cookie=bool(hdhive_cookie),
+        has_open_api_key=bool(hdhive_api_key),
+        use_open_api=use_open_api,
+        target_display="管理员" if targets else "未配置",
     )
 
 @app.route('/api/download', methods=['POST'])
@@ -3475,6 +4716,33 @@ def api_browse_dir():
         return jsonify({"error": f"Failed to list directory: {e}"} ), 500
 
     return jsonify({"path": abs_path, "items": items})
+
+
+@app.route('/api/hdhive/test_cookie', methods=['POST'])
+@login_required
+def api_hdhive_test_cookie():
+    config = load_config()
+    base_url = (config.get('hdhive_base_url') or 'https://hdhive.com').strip()
+    api_key = (config.get('hdhive_open_api_key') or '').strip()
+    if api_key:
+        ping = _hdhive_open_api_ping(base_url, api_key)
+        if isinstance(ping, dict) and ping.get("success") is True:
+            details = []
+            data = ping.get("data") if isinstance(ping.get("data"), dict) else {}
+            if data:
+                if data.get("api_key_id") is not None:
+                    details.append(f"api_key_id={data.get('api_key_id')}")
+                if data.get("name"):
+                    details.append(f"name={data.get('name')}")
+            return jsonify({"success": True, "message": "Open API Key 有效", "details": details})
+        msg = (ping.get("message") if isinstance(ping, dict) else None) or "Open API Key 无效"
+        code = (ping.get("code") if isinstance(ping, dict) else None) or ""
+        detail = f"code={code}" if code else "code=unknown"
+        return jsonify({"success": False, "message": msg, "details": [detail]})
+
+    cookie = (config.get('hdhive_cookie') or '').strip()
+    result = _test_hdhive_cookie(base_url, cookie)
+    return jsonify(result)
 
 
 @app.route('/web_login', methods=['GET', 'POST'])

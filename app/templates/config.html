@@ -521,7 +521,7 @@
 
                 <div class="card mb-3 shadow-sm">
                     <div class="card-header bg-primary text-white">
-                        <h5 class="mb-0 small"><i class="bi bi-cookie me-2"></i>HDHive Cookies (影巢链接转换)</h5>
+                        <h5 class="mb-0 small"><i class="bi bi-cookie me-2"></i>HDHive Open API / Cookies (影巢链接转换)</h5>
                     </div>
                     <div class="card-body p-3">
                         <form action="{{ url_for('manage_config') }}" method="POST">
@@ -547,7 +547,32 @@
                                     {% endif %}
                                 </div>
                             </div>
-                            <button type="submit" class="btn btn-primary btn-sm w-100">保存 HDHive Cookie</button>
+                            <div class="mb-2">
+                                <label for="hdhive_base_url" class="form-label small">HDHive 地址:</label>
+                                <input type="text" class="form-control form-control-sm" id="hdhive_base_url"
+                                    name="hdhive_base_url" value="{{ config.get('hdhive_base_url', 'https://hdhive.com') }}"
+                                    placeholder="https://hdhive.com">
+                                <div class="form-text">如遇备用网址或域名变更，可在此调整。</div>
+                            </div>
+                            <div class="mb-2">
+                                <label for="hdhive_open_api_key" class="form-label small">Open API Key:</label>
+                                <input type="password" class="form-control form-control-sm" id="hdhive_open_api_key"
+                                    name="hdhive_open_api_key" value="{{ config.get('hdhive_open_api_key', '') }}"
+                                    placeholder="X-API-Key">
+                                <div class="form-text">用于 /api/open 访问，可用于影巢链接转换与自助观影申请。</div>
+                            </div>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="hdhive_open_api_direct_unlock"
+                                    name="hdhive_open_api_direct_unlock" {% if config.get('hdhive_open_api_direct_unlock', False) %}checked{% endif %}>
+                                <label class="form-check-label small" for="hdhive_open_api_direct_unlock">允许 Open API 直链解锁</label>
+                                <div class="form-text">开启后将直接解锁直链资源（无法应用积分阈值）。</div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button type="submit" class="btn btn-primary btn-sm flex-grow-1">保存 HDHive Cookie</button>
+                                <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestBtn">测试</button>
+                            </div>
+                            <div class="form-text mt-2">如已配置 Open API Key，测试会优先验证 API Key。</div>
+                            <div class="form-text mt-2" id="hdhiveTestResult"></div>
                         </form>
                     </div>
                 </div>
@@ -564,6 +589,40 @@
                                     name="self_service_enabled" {% if config.get('self_service_enabled', False) %}checked{% endif %}>
                                 <label class="form-check-label small" for="self_service_enabled">启用自助观影申请</label>
                             </div>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="self_service_public_enabled"
+                                    name="self_service_public_enabled" {% if config.get('self_service_public_enabled', False) %}checked{% endif %}>
+                                <label class="form-check-label small" for="self_service_public_enabled">启用公共提交页面</label>
+                                <div class="form-text">公共入口：<code>/self_service_public</code></div>
+                            </div>
+                            <div class="mb-2">
+                                <label for="self_service_public_access_key" class="form-label small">公共访问口令（可选）:</label>
+                                <input type="password" class="form-control form-control-sm" id="self_service_public_access_key"
+                                    name="self_service_public_access_key"
+                                    value="{{ config.get('self_service_public_access_key', '') }}"
+                                    placeholder="留空则不需要口令">
+                                <div class="form-text">设置后，非登录用户提交必须输入口令。</div>
+                            </div>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="self_service_public_rate_limit_enabled"
+                                    name="self_service_public_rate_limit_enabled"
+                                    {% if config.get('self_service_public_rate_limit', {}).get('enabled', True) %}checked{% endif %}>
+                                <label class="form-check-label small" for="self_service_public_rate_limit_enabled">启用公共入口防刷（按 IP）</label>
+                            </div>
+                            <div class="row g-2 mb-2">
+                                <div class="col-md-6">
+                                    <label for="self_service_public_rate_limit_window_seconds" class="form-label small">时间窗口(秒):</label>
+                                    <input type="number" class="form-control form-control-sm" id="self_service_public_rate_limit_window_seconds"
+                                        name="self_service_public_rate_limit_window_seconds" min="10" step="1"
+                                        value="{{ config.get('self_service_public_rate_limit', {}).get('window_seconds', 300) }}">
+                                </div>
+                                <div class="col-md-6">
+                                    <label for="self_service_public_rate_limit_max_requests" class="form-label small">窗口内最大请求数:</label>
+                                    <input type="number" class="form-control form-control-sm" id="self_service_public_rate_limit_max_requests"
+                                        name="self_service_public_rate_limit_max_requests" min="1" step="1"
+                                        value="{{ config.get('self_service_public_rate_limit', {}).get('max_requests', 3) }}">
+                                </div>
+                            </div>
                             <div class="mb-2">
                                 <label for="self_service_target_user_ids" class="form-label small">接收用户 ID:</label>
                                 <input type="text" class="form-control form-control-sm" id="self_service_target_user_ids"
@@ -573,11 +632,39 @@
                                 <div class="form-text">提交申请后的解析结果将发送到这些用户/群。</div>
                             </div>
                             <div class="mb-2">
+                                <label for="self_service_storage_mode" class="form-label small">网盘筛选:</label>
+                                <select class="form-select form-select-sm" id="self_service_storage_mode" name="self_service_storage_mode">
+                                    {% set storage_mode = config.get('self_service_storage_mode', 'any') %}
+                                    <option value="any" {% if storage_mode == 'any' %}selected{% endif %}>不限</option>
+                                    <option value="115" {% if storage_mode == '115' %}selected{% endif %}>仅 115</option>
+                                    <option value="123" {% if storage_mode == '123' %}selected{% endif %}>仅 123</option>
+                                    <option value="115_123" {% if storage_mode == '115_123' %}selected{% endif %}>115/123</option>
+                                </select>
+                                <div class="form-text">只返回选定网盘类型的链接。</div>
+                            </div>
+                            <div class="mb-2">
                                 <label for="self_service_search_max_results" class="form-label small">搜索候选数:</label>
                                 <input type="number" class="form-control form-control-sm" id="self_service_search_max_results"
                                     name="self_service_search_max_results" min="1" max="20" step="1"
                                     value="{{ config.get('self_service_search_max_results', 5) }}">
                                 <div class="form-text">用于搜索候选资源的最大数量，默认 5。</div>
+                            </div>
+                            <div class="mb-2">
+                                <label for="self_service_use_open_api" class="form-label small">使用 Open API:</label>
+                                <select class="form-select form-select-sm" id="self_service_use_open_api" name="self_service_use_open_api">
+                                    <option value="off" {% if not config.get('self_service_use_open_api', False) %}selected{% endif %}>关闭</option>
+                                    <option value="on" {% if config.get('self_service_use_open_api', False) %}selected{% endif %}>开启</option>
+                                </select>
+                                <div class="form-text">开启后将优先使用 HDHive Open API（需配置 API Key）。</div>
+                            </div>
+                            <div class="mb-2">
+                                <label for="self_service_cookie_check_mode" class="form-label small">Cookie 校验:</label>
+                                <select class="form-select form-select-sm" id="self_service_cookie_check_mode" name="self_service_cookie_check_mode">
+                                    <option value="warn" {% if config.get('self_service_cookie_check_mode', 'warn') == 'warn' %}selected{% endif %}>提示但继续</option>
+                                    <option value="strict" {% if config.get('self_service_cookie_check_mode', 'warn') == 'strict' %}selected{% endif %}>严格拦截</option>
+                                    <option value="off" {% if config.get('self_service_cookie_check_mode', 'warn') == 'off' %}selected{% endif %}>不检测</option>
+                                </select>
+                                <div class="form-text">若你确认 Cookie 可用但测试不通过，可选择“提示但继续”。</div>
                             </div>
                             <button type="submit" class="btn btn-info btn-sm w-100">保存自助观影配置</button>
                         </form>
@@ -1147,6 +1234,39 @@
 
         updateBulkUI();
         console.log('页面初始化完成');
+
+        const hdhiveTestBtn = document.getElementById('hdhiveTestBtn');
+        const hdhiveTestResult = document.getElementById('hdhiveTestResult');
+        if (hdhiveTestBtn && hdhiveTestResult) {
+            hdhiveTestBtn.addEventListener('click', async function () {
+                hdhiveTestBtn.disabled = true;
+                hdhiveTestResult.textContent = '正在测试...';
+                hdhiveTestResult.className = 'form-text text-muted';
+                try {
+                    const response = await fetch("{{ url_for('api_hdhive_test_cookie') }}", {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    const data = await response.json();
+                    if (data.success) {
+                        hdhiveTestResult.textContent = data.message || 'Cookie 可用';
+                        hdhiveTestResult.className = 'form-text text-success';
+                    } else {
+                        hdhiveTestResult.textContent = data.message || 'Cookie 无效';
+                        hdhiveTestResult.className = 'form-text text-danger';
+                    }
+                    if (data.details && Array.isArray(data.details) && data.details.length > 0) {
+                        hdhiveTestResult.textContent += ' | ' + data.details.slice(0, 3).join(' ; ');
+                    }
+                } catch (err) {
+                    hdhiveTestResult.textContent = '测试失败: ' + err.message;
+                    hdhiveTestResult.className = 'form-text text-danger';
+                } finally {
+                    hdhiveTestBtn.disabled = false;
+                }
+            });
+        }
     });
 
 </script>

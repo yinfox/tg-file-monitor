@@ -1,18 +1,23 @@
-{% extends "base.html" %}
+{% extends "public_base.html" %}
 
 {% block title %}自助观影申请{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-lg-8">
+<div class="row justify-content-center">
+    <div class="col-lg-7">
         <div class="card shadow-sm mb-3">
             <div class="card-header bg-info text-white">
                 <h5 class="mb-0"><i class="bi bi-ticket-perforated me-2"></i>自助观影申请</h5>
             </div>
             <div class="card-body">
+                {% if not public_enabled %}
+                <div class="alert alert-warning">
+                    <i class="bi bi-exclamation-triangle me-2"></i>公共提交入口未启用，请联系管理员。
+                </div>
+                {% endif %}
                 {% if not enabled %}
                 <div class="alert alert-warning">
-                    <i class="bi bi-exclamation-triangle me-2"></i>当前未启用自助观影申请功能，请在配置页开启。
+                    <i class="bi bi-exclamation-triangle me-2"></i>当前未启用自助观影申请功能，请联系管理员。
                 </div>
                 {% endif %}
                 {% if use_open_api %}
@@ -29,7 +34,14 @@
                 {% endif %}
                 {% endif %}
 
-                <form method="post" action="{{ url_for('self_service_request') }}">
+                <form method="post" action="{{ url_for('self_service_public') }}">
+                    {% if require_access_key %}
+                    <div class="mb-3">
+                        <label class="form-label">访问口令</label>
+                        <input type="password" class="form-control" name="access_key" placeholder="请输入访问口令">
+                        <div class="form-text">管理员设置的公开提交口令。</div>
+                    </div>
+                    {% endif %}
                     <div class="mb-3">
                         <label class="form-label">影巢资源链接（可选）</label>
                         <input type="text" class="form-control" name="hdhive_url"
@@ -76,7 +88,8 @@
                         <div class="fw-semibold">{{ target_display }}</div>
                     </div>
 
-                    <button type="submit" class="btn btn-info w-100">提交申请</button>
+                    <button type="submit" class="btn btn-info w-100"
+                        {% if not enabled or not public_enabled %}disabled{% endif %}>提交申请</button>
                 </form>
             </div>
         </div>

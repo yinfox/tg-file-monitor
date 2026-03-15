@@ -195,6 +195,9 @@ def load_config() -> dict:
         "proxy": {},
         "debug_mode": False,
         "trace_media_detection": False,
+        "hdhive_base_url": "https://hdhive.com",
+        "hdhive_open_api_key": "",
+        "hdhive_open_api_direct_unlock": False,
         "hdhive_cookie": "",
         "hdhive_auto_unlock_points_threshold": 0,
         "download_risk_control": {
@@ -230,6 +233,12 @@ def load_config() -> dict:
             config['trace_media_detection'] = False
         if 'debug_mode' not in config:
             config['debug_mode'] = False
+        if 'hdhive_base_url' not in config:
+            config['hdhive_base_url'] = 'https://hdhive.com'
+        if 'hdhive_open_api_key' not in config:
+            config['hdhive_open_api_key'] = ''
+        if 'hdhive_open_api_direct_unlock' not in config:
+            config['hdhive_open_api_direct_unlock'] = False
         if 'hdhive_cookie' not in config:
             config['hdhive_cookie'] = ''
         if 'hdhive_auto_unlock_points_threshold' not in config:
@@ -791,13 +800,80 @@ def _build_media_trace(msg) -> str:
         return f"trace_build_failed={e}"
 
 
+def _normalize_hdhive_cookie(raw_cookie: str) -> str:
+    if not raw_cookie:
+        return ''
+    cleaned = str(raw_cookie).replace('\r', ';').replace('\n', ';').replace('\t', ';')
+    cleaned = re.sub(r';{2,}', ';', cleaned)
+    return cleaned.strip(' ;')
+
+
 def _get_hdhive_cookie_header() -> str:
     try:
         cookie = (current_config or {}).get('hdhive_cookie', '')  # type: ignore[name-defined]
-        return (cookie or '').strip()
+        return _normalize_hdhive_cookie(cookie)
     except Exception:
         return ''
 
+
+def _get_hdhive_base_url() -> str:
+    try:
+        base_url = (current_config or {}).get('hdhive_base_url', '')  # type: ignore[name-defined]
+    except Exception:
+        base_url = ''
+    base_url = (base_url or 'https://hdhive.com').strip()
+    if not base_url:
+        base_url = 'https://hdhive.com'
+    return base_url.rstrip('/')
+
+
+def _get_hdhive_open_api_key() -> str:
+    try:
+        return ((current_config or {}).get('hdhive_open_api_key', '') or '').strip()  # type: ignore[name-defined]
+    except Exception:
+        return ''
+
+
+def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dict = None, timeout: int = 20) -> dict:
+    headers = {
+        "X-API-Key": api_key,
+        "Accept": "application/json",
+    }
+    if method.upper() in ("POST", "PATCH"):
+        headers["Content-Type"] = "application/json"
+    try:
+        resp = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)
+    except Exception as e:
+        return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        return data
+    return {"success": False, "code": str(resp.status_code), "message": "Invalid JSON response"}
+
+
+def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
+    api_base = base_url.rstrip("/") + "/api/open"
+    url = f"{api_base}/resources/unlock"
+    return _hdhive_open_api_request("POST", url, api_key, json_body={"slug": slug})
+
+
+def _build_hdhive_full_url(data: dict) -> Optional[str]:
+    if not isinstance(data, dict):
+        return None
+    full_url = data.get("full_url") or ""
+    if isinstance(full_url, str) and full_url.startswith("http"):
+        return _normalize_115_url(full_url)
+    url = data.get("url") or ""
+    access_code = data.get("access_code")
+    if isinstance(url, str) and url.startswith("http"):
+        if isinstance(access_code, str) and access_code and access_code not in url:
+            sep = '&' if '?' in url else '?'
+            url = f"{url}{sep}password={access_code}"
+        return _normalize_115_url(url)
+    return None
 
 def _parse_next_action_rsc_result(text: str):
     """Parse Next.js Server Action (text/x-component) response.
@@ -842,6 +918,8 @@ def _hdhive_next_action_call_sync(
         'next-router-state-tree': router_state_tree_json,
         'next-url': page_path,
         'Content-Type': 'text/plain;charset=UTF-8',
+        'Origin': 'https://hdhive.com',
+        'Referer': f'https://hdhive.com{page_path}',
     }
 
     # Next.js adds a cache-busting param `_rsc`; value doesn't matter.
@@ -935,6 +1013,8 @@ def _hdhive_go_api_get_url_info_sync(cookie_header: str, slug: str) -> Optional[
         'User-Agent': 'Mozilla/5.0',
         'Accept': 'application/json,*/*',
         'Cookie': cookie_header,
+        'Origin': 'https://hdhive.com',
+        'Referer': f'https://hdhive.com/resource/115/{slug}',
     }
     url = f"https://hdhive.com/go-api/customer/resources/{slug}/url"
     resp = requests.get(url, params={'query': encrypted_query}, timeout=25, headers=headers)
@@ -944,9 +1024,7 @@ def _hdhive_go_api_get_url_info_sync(cookie_header: str, slug: str) -> Optional[
         return None
     if isinstance(raw, dict) and raw.get('success') is False:
         msg = raw.get('message') or raw.get('description') or "go-api error"
-        data = {
-            "__error": msg
-        }
+        data = {"__error": msg}
         try:
             m = re.search(r"(\d+)\s*积分", str(msg))
             if m:
@@ -970,6 +1048,8 @@ def _hdhive_go_api_unlock_sync(cookie_header: str, slug: str) -> Optional[dict]:
         'User-Agent': 'Mozilla/5.0',
         'Accept': 'application/json,*/*',
         'Cookie': cookie_header,
+        'Origin': 'https://hdhive.com',
+        'Referer': f'https://hdhive.com/resource/115/{slug}',
     }
     url = f"https://hdhive.com/go-api/customer/resources/{slug}/unlock"
     if isinstance(encrypted_body, str) and encrypted_body:
@@ -1335,8 +1415,48 @@ async def resolve_hdhive_115_url(hdhive_url: str) -> Optional[str]:
 def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[str], str]:
     """Resolve HDHive url and return a friendly note for forwarding messages."""
     slug = _extract_hdhive_slug(hdhive_url) or hdhive_url.rstrip('/').split('/')[-1]
+    open_api_key = _get_hdhive_open_api_key()
+    base_url = _get_hdhive_base_url()
+    open_api_note = ""
+    allow_open_api_direct = False
+    try:
+        allow_open_api_direct = bool((current_config or {}).get('hdhive_open_api_direct_unlock', False))  # type: ignore[name-defined]
+    except Exception:
+        allow_open_api_direct = False
+    if open_api_key and allow_open_api_direct:
+        resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+        if isinstance(resp, dict) and resp.get("success") is True:
+            data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+            real = _build_hdhive_full_url(data)
+            already_owned = bool(data.get("already_owned", False)) if isinstance(data, dict) else False
+            msg = str(resp.get("message") or "解锁成功")
+            if real:
+                if already_owned:
+                    return real, "Open API：已拥有该资源"
+                return real, f"Open API：{msg}"
+            open_api_note = f"Open API：{msg}，但未返回链接"
+        else:
+            code = str((resp or {}).get("code") or "")
+            msg = str((resp or {}).get("message") or (resp or {}).get("description") or "解锁失败")
+            if code.upper() == "INSUFFICIENT_POINTS" or code == "402":
+                return None, f"Open API：积分不足（{msg}）"
+            if code == "404":
+                return None, f"Open API：资源不存在（{msg}）"
+            if code == "400":
+                return None, f"Open API：资源参数无效（{msg}）"
+            if code == "401":
+                open_api_note = f"Open API：认证失败（{msg}）"
+            elif code == "NETWORK_ERROR":
+                open_api_note = f"Open API：网络错误（{msg}）"
+            else:
+                open_api_note = f"Open API：解锁失败（{msg}）"
+    elif open_api_key and not allow_open_api_direct:
+        open_api_note = "Open API 直链解锁已关闭"
+
     cookie = _get_hdhive_cookie_header()
     if not cookie:
+        if open_api_note:
+            return None, f"{open_api_note}，且未配置 HDHive Cookie"
         return None, "未配置 HDHive Cookie，无法解析/解锁"
 
     threshold = 0
@@ -1345,59 +1465,72 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
     except Exception:
         threshold = 0
 
-    # 1) Try read url info
+    # 1) Try read url info (retry once when "not found")
     url_info = None
     api_error = None
-    try:
-        url_info = _hdhive_go_api_get_url_info_sync(cookie, slug)
-    except Exception:
-        url_info = None
-
     unlock_points = None
     already_owned = False
     locked_required = False
-    if isinstance(url_info, dict):
-        if url_info.get("__error"):
-            api_error = str(url_info.get("__error") or "").strip()
-            # Try extract points from error message
-            try:
-                if url_info.get("__unlock_points") is not None:
-                    unlock_points = int(url_info.get("__unlock_points"))
-            except Exception:
-                unlock_points = unlock_points
+
+    for attempt in range(2):
         try:
-            if url_info.get('unlock_points') is not None:
-                unlock_points = int(url_info.get('unlock_points'))
+            url_info = _hdhive_go_api_get_url_info_sync(cookie, slug)
         except Exception:
-            unlock_points = None
-        already_owned = bool(url_info.get('already_owned', False))
-        if unlock_points is not None and unlock_points > 0 and not already_owned:
-            locked_required = True
+            url_info = None
+        api_error = None
+        unlock_points = None
+        already_owned = False
+        locked_required = False
 
-        full_url = url_info.get('full_url')
-        url = url_info.get('url')
-        access_code = url_info.get('access_code')
+        if isinstance(url_info, dict):
+            if url_info.get("__error"):
+                api_error = str(url_info.get("__error") or "").strip()
+                # Try extract points from error message
+                try:
+                    if url_info.get("__unlock_points") is not None:
+                        unlock_points = int(url_info.get("__unlock_points"))
+                except Exception:
+                    unlock_points = unlock_points
+            try:
+                if url_info.get('unlock_points') is not None:
+                    unlock_points = int(url_info.get('unlock_points'))
+            except Exception:
+                unlock_points = None
+            already_owned = bool(url_info.get('already_owned', False))
+            if unlock_points is not None and unlock_points > 0 and not already_owned:
+                locked_required = True
 
-        if isinstance(full_url, str) and full_url.startswith('http'):
-            real = _normalize_115_url(full_url)
-            return real, "已解锁，解析成功"
+            full_url = url_info.get('full_url')
+            url = url_info.get('url')
+            access_code = url_info.get('access_code')
 
-        if isinstance(url, str) and url.startswith('http') and already_owned:
-            if isinstance(access_code, str) and access_code and access_code not in url:
-                sep = '&' if '?' in url else '?'
-                real = _normalize_115_url(f"{url}{sep}password={access_code}")
-            else:
-                real = _normalize_115_url(url)
-            return real, "已解锁，解析成功"
+            if isinstance(full_url, str) and full_url.startswith('http'):
+                real = _normalize_115_url(full_url)
+                return real, "已解锁，解析成功"
 
-        # Locked case: has points requirement but not owned and no full_url
-        if unlock_points is not None and unlock_points > 0 and not already_owned:
-            if unlock_points > threshold:
-                return None, f"需要 {unlock_points} 积分 > 阈值 {threshold}，未自动解锁"
+            if isinstance(url, str) and url.startswith('http') and already_owned:
+                if isinstance(access_code, str) and access_code and access_code not in url:
+                    sep = '&' if '?' in url else '?'
+                    real = _normalize_115_url(f"{url}{sep}password={access_code}")
+                else:
+                    real = _normalize_115_url(url)
+                return real, "已解锁，解析成功"
 
-    # If API error occurred and no unlock points were extracted, abort early
+            # Locked case: has points requirement but not owned and no full_url
+            if unlock_points is not None and unlock_points > 0 and not already_owned:
+                if unlock_points > threshold:
+                    return None, f"需要 {unlock_points} 积分 > 阈值 {threshold}，未自动解锁"
+
+        if api_error and unlock_points is None and "找不到记录" in api_error and attempt == 0:
+            _force_refresh_hdhive_state(slug)
+            continue
+        break
+
     if api_error and unlock_points is None:
-        return None, f"解析失败（{api_error}，可能登录失效/接口变更）"
+        note = f"解析失败（{api_error}，可能登录失效/接口变更）"
+        if open_api_note:
+            note = f"{open_api_note}；{note}"
+        return None, note
 
     # 2) Attempt unlock if allowed (free or within threshold)
     should_unlock = False
@@ -1444,7 +1577,10 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
 
     if unlock_points is not None and unlock_points > 0:
         return None, f"需要 {unlock_points} 积分，未解锁"
-    return None, "解析失败（可能登录失效/接口变更）"
+        note = "解析失败（可能登录失效/接口变更）"
+        if open_api_note:
+            note = f"{open_api_note}；{note}"
+        return None, note
 
 
 async def resolve_hdhive_115_url_with_note(hdhive_url: str) -> Tuple[Optional[str], str]:
