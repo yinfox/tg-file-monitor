@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.89-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.90-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.4.89`
+Latest image: `y1nf0x/tg-file-monitor:0.4.90`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.4.89
+y1nf0x/tg-file-monitor:0.4.90
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -108,6 +108,31 @@ Notes:
 - If the share contains multiple items, the bot will list them; reply with numbers or `all`
 - Hidden/inline links, webpage preview links, and messages with images are supported
 - DM only (group messages are ignored)
+
+### 📺 Channel Monitor Regex (Built-in Config)
+
+No external `.env` is required. Use the internal config file `config/channel_filters.json` to define global/channel-level allow/deny patterns (regex supported).
+
+Example:
+```json
+{
+  "global": {
+    "whitelist": ["^(?=.*Linan).*", "S\\d{2}E\\d{2}"],
+    "blacklist": ["trailer", "behind the scenes"]
+  },
+  "channels": {
+    "-1001234567890": {
+      "whitelist": ["4K", "WEB-DL"],
+      "blacklist": ["sample"]
+    }
+  }
+}
+```
+
+Notes:
+- `global`: applies to all monitored channels
+- `channels`: per-channel rules (key is the channel ID)
+- Blacklist hit skips; if any whitelist exists, message must match
 ```
 
 ## 🖥️ VPS Notes
@@ -209,7 +234,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.89 (2026-03-15) - Current
+### v0.4.90 (2026-03-15) - Current
+- Channel monitor uses built-in `channel_filters.json` (regex allow/deny)
+- Drama regex no longer depends on external `.env`
+
+### v0.4.89 (2026-03-15)
 - Simplify self-service request fields and highlight key inputs
 - Self-service result now uses a unified success/failure message
 

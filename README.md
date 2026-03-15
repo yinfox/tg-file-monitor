@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.89-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.90-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.4.89`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.4.90`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.4.89
+y1nf0x/tg-file-monitor:0.4.90
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -108,6 +108,31 @@ xxxx-yyyy cid=123456
 - 若链接包含多个项目，Bot 会列出清单，回复序号或发送 `all/全部`
 - 支持隐藏链接/文字链接、网页预览链接、带图片的消息
 - 仅私聊生效（群里不处理）
+
+### 📺 频道监控正则（内置配置文件）
+
+不再依赖外部 `.env`。新增内部配置文件 `config/channel_filters.json`，用于监控频道的全局黑白名单（支持正则表达式）。
+
+示例：
+```json
+{
+  "global": {
+    "whitelist": ["^(?=.*临安若梦).*$", "S\\d{2}E\\d{2}"],
+    "blacklist": ["预告", "花絮"]
+  },
+  "channels": {
+    "-1001234567890": {
+      "whitelist": ["4K", "WEB-DL"],
+      "blacklist": ["试看"]
+    }
+  }
+}
+```
+
+说明：
+- `global`：对所有监控频道生效
+- `channels`：针对单个频道（key 为频道 ID）
+- 黑名单命中直接跳过；有白名单时必须命中才处理
 ```
 
 如果你要写入“另一个容器使用的 `.env` 文件”，请先把该 `.env` 所在宿主机目录挂载到本容器。
@@ -363,7 +388,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.89 (2026-03-15) - 当前版本
+### v0.4.90 (2026-03-15) - 当前版本
+- ✅ 频道监控改用内置 `channel_filters.json`（支持正则黑白名单）
+- ✅ 追剧正则不再依赖外部 `.env`
+
+### v0.4.89 (2026-03-15)
 - ✅ 自助申请页面精简字段并强化关键项展示
 - ✅ 自助申请结果改为统一提示：入库成功/未找到
 

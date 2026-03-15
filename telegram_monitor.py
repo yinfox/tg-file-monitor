@@ -30,6 +30,7 @@ if not os.path.exists(CONFIG_DIR):
     CONFIG_DIR = os.path.abspath('config')
 
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
+CHANNEL_FILTERS_FILE = os.path.join(CONFIG_DIR, 'channel_filters.json')
 MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
 DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 
@@ -41,6 +42,10 @@ except Exception:
 
 
 DEBUG_MODE = False
+_CHANNEL_FILTERS_CACHE = None
+_CHANNEL_FILTERS_MTIME = None
+_CHANNEL_FILTERS_LAST_CHECK = 0.0
+_CHANNEL_FILTERS_CHECK_INTERVAL = 2.0
 
 
 def log_message(message: str, level: str = "INFO"):
@@ -258,6 +263,62 @@ def save_config(config: dict):
     os.makedirs(CONFIG_DIR, exist_ok=True)
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         json.dump(config, f, ensure_ascii=False, indent=4)
+
+
+def _default_channel_filters():
+    return {
+        "global": {
+            "whitelist": [],
+            "blacklist": [],
+        },
+        "channels": {},
+    }
+
+
+def load_channel_filters():
+    """Load channel filter config from config/channel_filters.json (auto-create if missing)."""
+    global _CHANNEL_FILTERS_CACHE, _CHANNEL_FILTERS_MTIME, _CHANNEL_FILTERS_LAST_CHECK
+    now = time.monotonic()
+    if _CHANNEL_FILTERS_CACHE is not None and (now - _CHANNEL_FILTERS_LAST_CHECK) < _CHANNEL_FILTERS_CHECK_INTERVAL:
+        return _CHANNEL_FILTERS_CACHE
+    _CHANNEL_FILTERS_LAST_CHECK = now
+
+    try:
+        mtime = os.path.getmtime(CHANNEL_FILTERS_FILE)
+    except Exception:
+        mtime = None
+
+    if _CHANNEL_FILTERS_CACHE is not None and mtime == _CHANNEL_FILTERS_MTIME:
+        return _CHANNEL_FILTERS_CACHE
+
+    if not os.path.exists(CHANNEL_FILTERS_FILE):
+        try:
+            os.makedirs(os.path.dirname(CHANNEL_FILTERS_FILE) or '.', exist_ok=True)
+            with open(CHANNEL_FILTERS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(_default_channel_filters(), f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            debug_log(f"写入 channel_filters.json 失败: {e}")
+            _CHANNEL_FILTERS_CACHE = _default_channel_filters()
+            _CHANNEL_FILTERS_MTIME = mtime
+            return _CHANNEL_FILTERS_CACHE
+
+    try:
+        with open(CHANNEL_FILTERS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            raise ValueError("invalid channel_filters format")
+    except Exception as e:
+        debug_log(f"读取 channel_filters.json 失败: {e}")
+        data = _default_channel_filters()
+
+    if "global" not in data or not isinstance(data.get("global"), dict):
+        data["global"] = {"whitelist": [], "blacklist": []}
+    if "channels" not in data or not isinstance(data.get("channels"), dict):
+        data["channels"] = {}
+
+    _CHANNEL_FILTERS_CACHE = data
+    _CHANNEL_FILTERS_MTIME = mtime
+    return data
 
 
 # --- Regex & Types ---
@@ -2276,8 +2337,16 @@ async def new_message_handler(event):
             except Exception as e:
                 debug_log(f" 自动点击处理异常: {e}")
 
+            channel_filters_cfg = load_channel_filters()
+            channel_filters = channel_filters_cfg.get('channels', {}) if isinstance(channel_filters_cfg, dict) else {}
+            channel_rule = channel_filters.get(str(restricted_channel_id), {}) if isinstance(channel_filters, dict) else {}
+            global_rule = channel_filters_cfg.get('global', {}) if isinstance(channel_filters_cfg, dict) else {}
+
+            extra_blacklist = _normalize_keyword_list(global_rule.get('blacklist')) + _normalize_keyword_list(channel_rule.get('blacklist'))
+            extra_whitelist = _normalize_keyword_list(global_rule.get('whitelist')) + _normalize_keyword_list(channel_rule.get('whitelist'))
+
             # --- Blacklist Check ---
-            blacklist = restricted_entry.get('blacklist_keywords', [])
+            blacklist = _normalize_keyword_list(restricted_entry.get('blacklist_keywords')) + extra_blacklist
             if blacklist and message_text_for_filter:
                 for keyword in blacklist:
                     if match_keyword(keyword, message_text_for_filter):
@@ -2289,7 +2358,7 @@ async def new_message_handler(event):
                         return
 
             # --- Whitelist Check ---
-            whitelist = restricted_entry.get('whitelist_keywords', [])
+            whitelist = _normalize_keyword_list(restricted_entry.get('whitelist_keywords')) + extra_whitelist
             if whitelist:
                 found_whitelist = False
                 if message_text_for_filter:
