@@ -224,10 +224,16 @@ class Downloader:
             if ';' in content and '=' in content and '\t' not in content:
                 # Naive parsing of "Cookie: name=value; name2=value2"
                 # We need a domain to create a Netscape file. We'll use a catch-all or specific ones if known.
-                # Since we don't know the exact domain, we can try adding for common social media domains or use .instagram.com as a fallback if seemingly related.
-                
+                # Since we don't know the exact domain, we can try adding for common social media domains.
                 # Check keywords or assume general compatibility
-                target_domains = ['.instagram.com', '.youtube.com', '.google.com']
+                target_domains = [
+                    '.instagram.com',
+                    '.threads.net',
+                    '.threads.com',
+                    '.facebook.com',
+                    '.youtube.com',
+                    '.google.com',
+                ]
                 netscape_lines = ["# Netscape HTTP Cookie File"]
                 
                 # Remove "Cookie: " prefix if present
@@ -391,6 +397,7 @@ class Downloader:
             # Non-YouTube
             if "youtube.com" not in lower_url and "youtu.be" not in lower_url:
                 is_instagram = "instagram.com" in lower_url
+                is_threads = ("threads.com" in lower_url or "threads.net" in lower_url)
                 is_tiktok = "tiktok.com" in lower_url or "douyin.com" in lower_url
                 is_twitter = (
                     "x.com" in lower_url
@@ -473,6 +480,22 @@ class Downloader:
                         },
                     ]
                     return _run_non_youtube_retry(facebook_attempt_headers, 'Facebook')
+
+                if is_threads:
+                    threads_attempt_headers = [
+                        {
+                            'Referer': 'https://www.threads.net/',
+                            'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Mobile/15E148 Safari/604.1',
+                        },
+                        {
+                            'Referer': 'https://www.threads.net/',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                        {
+                            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                        },
+                    ]
+                    return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
 
                 if is_instagram:
                     base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.instagram.com/'

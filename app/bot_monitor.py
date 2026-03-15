@@ -12,6 +12,7 @@ from telethon import TelegramClient, events, functions, types
 from telethon.sessions import SQLiteSession
 import sys
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 
 # Add current directory to sys.path to find downloader_module when running from app directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -66,6 +67,15 @@ def _token_fingerprint(token: str) -> str:
         return "empty"
     digest = hashlib.sha1(token.encode('utf-8')).hexdigest()[:10]
     return f"sha1:{digest},len:{len(token)}"
+
+
+def _is_telegram_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    host = (parsed.netloc or '').lower()
+    return host in ("t.me", "telegram.me", "telegram.dog")
 
 
 def _extract_bot_id_from_token(bot_token: str) -> Optional[int]:
@@ -888,6 +898,10 @@ async def main():
         if text.startswith('/'):
             return
 
+        # Ignore auto-click notifications to avoid triggering downloader
+        if text.startswith("已自动点击红包按钮"):
+            return
+
         sender_id = event.sender_id
         
         # --- 1. Check for Cookies Content (Direct Text) ---
@@ -1073,6 +1087,9 @@ async def main():
         url_match = re.search(r'https?://\S+', text)
         if url_match:
             url = url_match.group(0).rstrip(')>,.;!\"\'')
+            if _is_telegram_url(url):
+                await event.reply("⚠️ Telegram 链接不支持下载，已忽略。")
+                return
             # sender = await event.get_sender() # Might fail if user restricted privacy? just use sender_id
             downloader.log(f"Received URL from {sender_id}: {url}")
             # await event.reply(f"📥 **已加入下载队列**\n链接: {url}")

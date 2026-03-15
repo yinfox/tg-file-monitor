@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.73-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.74-orange.svg)](.)
 
 </div>
 
@@ -327,7 +327,12 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.73 (2026-03-15) - 当前版本
+### v0.4.74 (2026-03-15) - 当前版本
+- ✅ Threads 链接下载支持（threads.com / threads.net）
+- ✅ 红包自动点击通知不再触发下载流程
+- ✅ Telegram 链接自动忽略（避免误触发下载）
+
+### v0.4.73 (2026-03-15)
 - ✅ 公共自助观影提交页面（可选访问口令）
 - ✅ 公共入口防刷（IP 限流，窗口/次数可配）
 - ✅ 自助观影网盘筛选：不限 / 仅 115 / 仅 123 / 115/123

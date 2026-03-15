@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.73-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.74-orange.svg)](.)
 
 </div>
 
@@ -173,7 +173,12 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.73 (2026-03-15) - Current
+### v0.4.74 (2026-03-15) - Current
+- Threads link download support (threads.com / threads.net)
+- Auto-click red packet notifications no longer trigger downloader flow
+- Telegram links are ignored to prevent accidental download attempts
+
+### v0.4.73 (2026-03-15)
 - Public self-service submission page (optional access key)
 - Public endpoint rate limiting (IP-based, configurable window/limit)
 - Storage filter options for self-service: any / 115 / 123 / 115+123
