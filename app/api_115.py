@@ -9,9 +9,11 @@ from urllib.parse import urlencode
 # 导入p115client用于文件复制
 try:
     from p115client import P115Client
+    from p115client.util import share_extract_payload
     P115CLIENT_AVAILABLE = True
 except ImportError:
     P115CLIENT_AVAILABLE = False
+    share_extract_payload = None
     print("[警告] p115client未安装，文件复制功能不可用")
 
 class Client115:
@@ -368,6 +370,167 @@ class Client115:
                 'message': f'文件复制失败\n原因：{str(e)}',
                 'transferred': False,
                 'error': str(e)
+            }
+
+    def _extract_share_items(self, snap_resp: Dict[str, Any]) -> list:
+        if not isinstance(snap_resp, dict):
+            return []
+        data = snap_resp.get('data')
+        candidates = []
+        if isinstance(data, list):
+            candidates = data
+        elif isinstance(data, dict):
+            for key in ('list', 'files', 'items', 'data'):
+                value = data.get(key)
+                if isinstance(value, list):
+                    candidates = value
+                    break
+        elif isinstance(snap_resp.get('list'), list):
+            candidates = snap_resp.get('list')
+
+        items = []
+        for entry in candidates or []:
+            if not isinstance(entry, dict):
+                continue
+            fid = (
+                entry.get('file_id')
+                or entry.get('fid')
+                or entry.get('id')
+                or entry.get('fileid')
+                or entry.get('cid')
+            )
+            name = (
+                entry.get('file_name')
+                or entry.get('name')
+                or entry.get('n')
+                or entry.get('fn')
+                or entry.get('title')
+            )
+            is_dir = bool(entry.get('is_dir') or entry.get('is_directory') or entry.get('isfolder'))
+            if not is_dir:
+                ftype = entry.get('file_type')
+                if isinstance(ftype, (int, str)) and str(ftype) in ('1', '2', 'folder', 'dir'):
+                    is_dir = True
+            size = entry.get('file_size') or entry.get('size') or entry.get('fs') or 0
+            if fid:
+                items.append({
+                    'id': str(fid),
+                    'name': str(name or fid),
+                    'is_dir': is_dir,
+                    'size': size,
+                })
+        return items
+
+    def receive_share_link(
+        self,
+        link: str,
+        target_cid: str = "",
+        file_ids: Optional[list] = None,
+        accept_all: bool = False,
+        list_limit: int = 200,
+    ) -> Dict[str, Any]:
+        if not self.p115_client:
+            return {
+                'success': False,
+                'message': 'p115client未初始化，无法转存分享链接',
+                'error': 'P115CLIENT_NOT_AVAILABLE'
+            }
+        if not share_extract_payload:
+            return {
+                'success': False,
+                'message': 'p115client工具不可用，无法解析分享链接',
+                'error': 'P115CLIENT_UTIL_MISSING'
+            }
+
+        try:
+            payload = share_extract_payload(link)
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f'分享链接解析失败: {e}',
+                'error': 'INVALID_SHARE_LINK'
+            }
+
+        share_code = payload.get('share_code')
+        receive_code = payload.get('receive_code') or ""
+        if not share_code:
+            return {
+                'success': False,
+                'message': '分享链接缺少 share_code',
+                'error': 'NO_SHARE_CODE'
+            }
+
+        selected_ids = [str(fid) for fid in (file_ids or []) if fid]
+        items = []
+        if not selected_ids:
+            try:
+                snap_resp = self.p115_client.share_snap({
+                    'share_code': share_code,
+                    'receive_code': receive_code,
+                    'cid': 0,
+                    'limit': list_limit,
+                    'offset': 0,
+                })
+                items = self._extract_share_items(snap_resp)
+            except Exception as e:
+                return {
+                    'success': False,
+                    'message': f'读取分享列表失败: {e}',
+                    'error': 'SHARE_SNAP_FAILED'
+                }
+
+            if not items:
+                return {
+                    'success': False,
+                    'message': '分享链接内没有可转存的文件/目录',
+                    'error': 'NO_ITEMS'
+                }
+
+            if len(items) == 1:
+                selected_ids = [items[0]['id']]
+            elif accept_all:
+                selected_ids = [item['id'] for item in items]
+            else:
+                return {
+                    'success': False,
+                    'need_select': True,
+                    'items': items,
+                    'share_code': share_code,
+                    'receive_code': receive_code,
+                    'message': '分享链接包含多个项目，请选择要转存的条目',
+                }
+
+        try:
+            recv_payload = {
+                'share_code': share_code,
+                'receive_code': receive_code,
+                'file_id': ",".join(selected_ids),
+            }
+            if target_cid:
+                recv_payload['cid'] = target_cid
+            resp = self.p115_client.share_receive(recv_payload)
+            if isinstance(resp, dict) and resp.get('state', True):
+                return {
+                    'success': True,
+                    'message': '✅ 转存完成',
+                    'response': resp,
+                    'items': items,
+                    'file_ids': selected_ids,
+                }
+            error_msg = ''
+            if isinstance(resp, dict):
+                error_msg = resp.get('error') or resp.get('message') or ''
+            return {
+                'success': False,
+                'message': f'转存失败: {error_msg or resp}',
+                'error': 'SHARE_RECEIVE_FAILED',
+                'response': resp,
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f'转存失败: {e}',
+                'error': 'SHARE_RECEIVE_EXCEPTION'
             }
 
     def check_file_exists_legacy(self, file_sha1: str, file_size: int, file_name: str) -> Dict[str, Any]:

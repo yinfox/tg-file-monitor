@@ -81,6 +81,17 @@
     </div>
 
     <div class="col-lg-7">
+        <div class="card shadow-sm mb-3" id="lastDownloadCard" style="display: none;">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0 small"><i class="bi bi-info-circle me-2"></i>最近下载信息</h5>
+            </div>
+            <div class="card-body p-3">
+                <div class="small mb-1"><span class="text-muted">标题:</span> <span id="lastDownloadTitle">-</span></div>
+                <div class="small mb-1"><span class="text-muted">分辨率:</span> <span id="lastDownloadResolution">-</span></div>
+                <div class="small mb-1"><span class="text-muted">文件:</span> <code id="lastDownloadFile">-</code></div>
+                <div class="small"><span class="text-muted">原链接:</span> <span id="lastDownloadUrl" class="text-break">-</span></div>
+            </div>
+        </div>
         <div class="card shadow-sm h-100">
             <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
                 <h5 class="mb-0 small"><i class="bi bi-terminal me-2"></i>实时下载日志</h5>
@@ -130,6 +141,11 @@
     const saveDirStatus = document.getElementById('saveDirStatus');
     const logContainer = document.getElementById('logContainer');
     const clearLogBtn = document.getElementById('clearLogBtn');
+    const lastDownloadCard = document.getElementById('lastDownloadCard');
+    const lastDownloadTitle = document.getElementById('lastDownloadTitle');
+    const lastDownloadResolution = document.getElementById('lastDownloadResolution');
+    const lastDownloadFile = document.getElementById('lastDownloadFile');
+    const lastDownloadUrl = document.getElementById('lastDownloadUrl');
 
     // Polling logs
     function pollLogs() {
@@ -143,6 +159,18 @@
                     return line;
                 }).join('\n');
                 logContainer.scrollTop = logContainer.scrollHeight;
+
+                const last = data.last_download || {};
+                const hasLast = last && (last.title || last.resolution || last.file_name || last.source_url);
+                if (hasLast) {
+                    lastDownloadCard.style.display = '';
+                    lastDownloadTitle.textContent = last.title || '-';
+                    lastDownloadResolution.textContent = last.resolution || '-';
+                    lastDownloadFile.textContent = last.file_name || '-';
+                    lastDownloadUrl.textContent = last.source_url || '-';
+                } else {
+                    lastDownloadCard.style.display = 'none';
+                }
             });
     }
 

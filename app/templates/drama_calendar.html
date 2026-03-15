@@ -1271,10 +1271,11 @@
                                         </div>
 
                                         <div class="full">
-                                            <label class="form-label small" for="drama_env_key">写入变量名</label>
+                                            <label class="form-label small" for="drama_env_key">写入变量名（支持多个）</label>
                                             <input type="text" class="form-control form-control-sm" id="drama_env_key" name="drama_env_key"
                                                 value="{{ env_key_value }}"
-                                                placeholder="DRAMA_CALENDAR_REGEX">
+                                                placeholder="DRAMA_CALENDAR_REGEX,ENV_FILTER_115">
+                                            <div class="form-text">可用逗号或换行分隔多个变量名，会对每个 .env 路径逐一写入。</div>
                                         </div>
 
                                         <div class="full">

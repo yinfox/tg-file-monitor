@@ -33,7 +33,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.82"
+VERSION = "0.4.88"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -115,6 +115,7 @@ def load_config():
         "restricted_channels": [],
         "proxy": {},
         "115_cookie": "",
+        "115_target_cid": "",
         "bot": {"token": ""},
         "debug_mode": False,
         "trace_media_detection": False,
@@ -4072,8 +4073,10 @@ def manage_file_config():
 
         elif action == 'update_115':
             cookie_115 = (request.form.get('cookie_115') or '').strip()
+            target_115_cid = (request.form.get('target_115_cid') or '').strip()
             config['115_cookie'] = cookie_115
             config['web_115_cookie'] = cookie_115
+            config['115_target_cid'] = target_115_cid
             save_config(config)
             flash("115 Cookie 已更新！", "success")
 
@@ -4329,7 +4332,10 @@ def downloader_page():
 @app.route('/downloader/log')
 @login_required
 def downloader_log():
-    return jsonify({"logs": downloader.download_logs})
+    return jsonify({
+        "logs": downloader.download_logs,
+        "last_download": downloader.get_last_download_summary(),
+    })
 
 @app.route('/downloader/clear_log', methods=['POST'])
 @login_required

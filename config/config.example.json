@@ -35,6 +35,8 @@
   "hdhive_open_api_direct_unlock": false,
   "restricted_channels": [],
   "proxy": {},
+  "115_cookie": "",
+  "115_target_cid": "",
   "downloader": {
     "default_path": "/app/downloads",
     "quality_mode": "balanced_hd",

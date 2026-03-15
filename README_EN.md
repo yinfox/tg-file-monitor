@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.82-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.88-orange.svg)](.)
 
 </div>
 
@@ -17,6 +17,7 @@
 - 📤 Smart message forwarding
 - 📥 Automatic media/file downloads
 - 🤖 Bot link download flow: send a video-platform URL to the bot, auto-download, then upload back to TG
+- ☁️ 115 share transfer: save 115 share links to a target CID via bot DM
 - 🎯 Keyword and regex filtering
 - 🛡️ Download risk controls (per-channel rate limit, dedup cooldown, file-size and free-space guards)
 - ⏱️ Dynamic download timeout based on file size (with cap/buffer and timeout logs)
@@ -74,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.4.82`
+Latest image: `y1nf0x/tg-file-monitor:0.4.88`
 
 Upgrade example:
 
@@ -86,7 +87,27 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.4.82
+y1nf0x/tg-file-monitor:0.4.88
+
+### ☁️ 115 Share Transfer (Bot)
+
+Prerequisites:
+- Save `115 Cookie` in the web config
+- (Optional) Set a default **115 target CID**
+
+Usage (DM the bot):
+```
+https://115.com/s/xxxx?password=yyyy cid=123456
+```
+or
+```
+xxxx-yyyy cid=123456
+```
+
+Notes:
+- If the share contains multiple items, the bot will list them; reply with numbers or `all`
+- Hidden/inline links, webpage preview links, and messages with images are supported
+- DM only (group messages are ignored)
 ```
 
 ## 🖥️ VPS Notes
@@ -188,7 +209,30 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.82 (2026-03-15) - Current
+### v0.4.88 (2026-03-15) - Current
+- Fix bot monitor startup failure (indentation error)
+
+### v0.4.87 (2026-03-15)
+- Detect hidden/inline 115 share links (including webpage preview URLs)
+
+### v0.4.86 (2026-03-15)
+- Allow 115 transfers from messages that include images (skip file-only blocking)
+
+### v0.4.85 (2026-03-15)
+- Bot can save 115 share links to a target CID (supports multi-item selection)
+- Web config adds a default 115 target CID
+
+### v0.4.84 (2026-03-15)
+- Fix Threads `unknown_video` extension causing document uploads by remuxing/transcoding to mp4
+- Add ffprobe format_name for smarter container fixes
+
+### v0.4.83 (2026-03-15)
+- Threads: prefer embed mp4, fallback to yt-dlp for compatibility
+- Threads filenames use "title + shortcode" to avoid collisions
+- Stronger upload compatibility transcode to reduce document uploads
+- Downloader page shows last task title/resolution/filename/source
+
+### v0.4.82 (2026-03-15)
 - Download Threads direct mp4 without yt-dlp
 - Ensure mp4 filename (avoid unknown_video)
 

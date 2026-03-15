@@ -12,13 +12,17 @@ from telethon import TelegramClient, events, functions, types
 from telethon.sessions import SQLiteSession
 import sys
 from dotenv import load_dotenv
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 # Add current directory to sys.path to find downloader_module when running from app directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import re
 
 from downloader_module import downloader
+try:
+    from api_115 import Client115
+except Exception:
+    Client115 = None
 
 # Setup logging after config is loaded
 def setup_logging():
@@ -44,6 +48,16 @@ TELEGRAM_SESSION_NAME = "bot_session"
 BOT_LOCK_FILE = os.path.join(CONFIG_DIR, 'bot_monitor.lock')
 RECENT_URL_REQUESTS = {}
 RECENT_URL_REQUESTS_TTL_SECONDS = 15
+PENDING_115_SHARE = {}
+CLIENT_115 = None
+CLIENT_115_COOKIE = None
+
+_115_SHARE_URL_RE = re.compile(
+    r'https?://(?:share\.115\.com/\S+|(?:www\.)?115\.com/s/\S+|115cdn\.com/s/\S+)',
+    re.IGNORECASE,
+)
+_115_SHARE_CODE_RE = re.compile(r'\b[0-9A-Za-z]{8,}-[0-9A-Za-z]{4,}\b')
+_115_CID_RE = re.compile(r'(?:cid|目录|目标)\s*[:=]\s*(U_1_)?(\d+)', re.IGNORECASE)
 
 # Load environment variables
 load_dotenv(os.path.join(CONFIG_DIR, '.env'))
@@ -98,6 +112,117 @@ def _is_recent_url_request(sender_id: int, url: str) -> bool:
 def _normalize_threads_url(url: str) -> str:
     if not url:
         return url
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    host = (parsed.netloc or '').lower()
+    if 'threads.com' not in host and 'threads.net' not in host:
+        return url
+    new_netloc = 'www.threads.net'
+    new_path = parsed.path or ''
+    return urlunparse((parsed.scheme or 'https', new_netloc, new_path, '', '', ''))
+
+
+def _extract_115_target_cid(text: str, config: dict) -> str:
+    if text:
+        m = _115_CID_RE.search(text)
+        if m:
+            return m.group(2) or ''
+    return (config.get('115_target_cid') or '').strip()
+
+
+def _extract_115_share_link(text: str) -> str:
+    if not text:
+        return ''
+    m = _115_SHARE_URL_RE.search(text)
+    if m:
+        return m.group(0).rstrip(')>,.;!\"\'')
+    m = _115_SHARE_CODE_RE.search(text)
+    if m:
+        return m.group(0)
+    return ''
+
+
+def _extract_115_share_link_from_message(msg) -> str:
+    text = getattr(msg, 'message', None) or getattr(msg, 'text', None) or ''
+    link = _extract_115_share_link(text)
+    if link:
+        return link
+
+    entities = getattr(msg, 'entities', None) or []
+    for ent in entities:
+        ent_url = getattr(ent, 'url', None)
+        if ent_url:
+            link = _extract_115_share_link(ent_url)
+            if link:
+                return link
+        try:
+            offset = int(getattr(ent, 'offset', 0))
+            length = int(getattr(ent, 'length', 0))
+            if length and text:
+                fragment = text[offset:offset + length]
+                link = _extract_115_share_link(fragment)
+                if link:
+                    return link
+        except Exception:
+            pass
+
+    try:
+        media = getattr(msg, 'media', None)
+        if isinstance(media, types.MessageMediaWebPage):
+            wp = getattr(media, 'webpage', None)
+            for candidate in (getattr(wp, 'url', None), getattr(wp, 'display_url', None)):
+                if candidate:
+                    link = _extract_115_share_link(candidate)
+                    if link:
+                        return link
+    except Exception:
+        pass
+
+    return ''
+
+
+def _format_size(size) -> str:
+    try:
+        num = float(size)
+    except Exception:
+        return "-"
+    if num <= 0:
+        return "-"
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if num < 1024.0:
+            return f"{num:.2f}{unit}"
+        num /= 1024.0
+    return f"{num:.2f}PB"
+
+
+def _format_115_items(items: list, max_items: int = 12) -> str:
+    lines = []
+    for idx, item in enumerate(items[:max_items], start=1):
+        name = item.get('name') or item.get('id')
+        size = _format_size(item.get('size'))
+        tag = "DIR" if item.get('is_dir') else "FILE"
+        lines.append(f"{idx}. [{tag}] {name} ({size})")
+    if len(items) > max_items:
+        lines.append(f"... 共 {len(items)} 项，请回复序号或发送 “all/全部”")
+    return "\n".join(lines)
+
+
+def get_115_client(config: dict):
+    global CLIENT_115, CLIENT_115_COOKIE
+    if not Client115:
+        return None, "115 组件未安装（p115client 不可用）"
+    cookie = (config.get('115_cookie') or config.get('web_115_cookie') or '').strip()
+    if not cookie:
+        return None, "未配置 115 Cookie，请先在网页配置中保存"
+    if CLIENT_115 is None or CLIENT_115_COOKIE != cookie:
+        try:
+            CLIENT_115 = Client115(cookie=cookie)
+            CLIENT_115_COOKIE = cookie
+        except Exception as e:
+            return None, f"初始化 115 客户端失败: {e}"
+    return CLIENT_115, ""
     try:
         parsed = urlparse(url)
     except Exception:
@@ -832,6 +957,7 @@ async def main():
             "4. **检查 Cookies**: 发送 `/cookies_status`\n"
             "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
             "6. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
+            "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
         )
         await event.respond(help_text)
 
@@ -844,6 +970,9 @@ async def main():
             was_waiting = True
         if sender_id in waiting_for_download_path:
             waiting_for_download_path.remove(sender_id)
+            was_waiting = True
+        if sender_id in PENDING_115_SHARE:
+            PENDING_115_SHARE.pop(sender_id, None)
             was_waiting = True
 
         if was_waiting:
@@ -864,6 +993,7 @@ async def main():
             "4. **检查 Cookies**: 发送 `/cookies_status`\n"
             "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
             "6. **搜寻影视**: 发送 `/movie <剧名>`\n"
+            "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
         )
         await event.reply(help_text)
 
@@ -1123,6 +1253,100 @@ async def main():
                 await event.reply("❌ 保存失败，请稍后重试。")
             return
 
+        # --- 3.5 115 Share Transfer Flow ---
+        if sender_id in PENDING_115_SHARE:
+            pending = PENDING_115_SHARE.get(sender_id) or {}
+            items = pending.get('items') or []
+            link = pending.get('link') or ''
+            if not items or not link:
+                PENDING_115_SHARE.pop(sender_id, None)
+            else:
+                selection_text = (text or '').strip().lower()
+                if selection_text in ('all', '全部'):
+                    selected_ids = [item.get('id') for item in items if item.get('id')]
+                else:
+                    tokens = [t for t in re.split(r'[,\s]+', selection_text) if t]
+                    selected_ids = []
+                    for token in tokens:
+                        if token.isdigit():
+                            idx = int(token)
+                            if 1 <= idx <= len(items):
+                                selected_ids.append(items[idx - 1].get('id'))
+                            else:
+                                selected_ids.append(token)
+                        else:
+                            selected_ids.append(token)
+                    selected_ids = [i for i in selected_ids if i]
+
+                if not selected_ids:
+                    await event.reply("❌ 未识别到有效序号或文件ID，请重新回复。")
+                    return
+
+                target_cid = _extract_115_target_cid(text, config) or pending.get('target_cid') or ''
+                if not target_cid:
+                    await event.reply("❌ 需要指定目标 CID，例如：`cid=123456`")
+                    return
+
+                client_115, err_msg = get_115_client(config)
+                if not client_115:
+                    await event.reply(f"❌ 115 转存失败: {err_msg}")
+                    return
+
+                await event.reply("收到选择，开始转存...")
+                result = client_115.receive_share_link(
+                    link,
+                    target_cid=target_cid,
+                    file_ids=selected_ids,
+                    accept_all=False,
+                )
+                if result.get('success'):
+                    await event.reply("✅ 转存完成")
+                else:
+                    await event.reply(f"❌ 转存失败: {result.get('message') or '未知错误'}")
+                PENDING_115_SHARE.pop(sender_id, None)
+                return
+
+        share_link = _extract_115_share_link_from_message(event.message)
+        if share_link:
+            target_cid = _extract_115_target_cid(text, config)
+            if not target_cid:
+                await event.reply("❌ 请在消息中带上目标目录 CID，例如：`cid=123456`")
+                return
+
+            client_115, err_msg = get_115_client(config)
+            if not client_115:
+                await event.reply(f"❌ 115 转存失败: {err_msg}")
+                return
+
+            accept_all = ('all' in text.lower()) or ('全部' in text)
+            await event.reply("收到 115 分享链接，正在转存...")
+            result = client_115.receive_share_link(
+                share_link,
+                target_cid=target_cid,
+                accept_all=accept_all,
+            )
+            if result.get('need_select'):
+                items = result.get('items') or []
+                if items:
+                    PENDING_115_SHARE[sender_id] = {
+                        'link': share_link,
+                        'items': items,
+                        'target_cid': target_cid,
+                    }
+                    await event.reply(
+                        "分享链接包含多个项目，请回复序号或发送 “all/全部”\n\n"
+                        + _format_115_items(items)
+                    )
+                else:
+                    await event.reply("❌ 解析分享内容失败，未获取到文件列表。")
+                return
+
+            if result.get('success'):
+                await event.reply("✅ 转存完成")
+            else:
+                await event.reply(f"❌ 转存失败: {result.get('message') or '未知错误'}")
+            return
+
         if event.file:
             await event.reply("请先通过 /start 菜单点击 '🍪 更新 Cookies' 按钮后再发送文件。")
             return
@@ -1240,12 +1464,13 @@ async def main():
                     max_upload_parts = 4000
                     max_upload_bytes = part_size_kb * 1024 * max_upload_parts
 
-                    async def _run_compatibility_pass(current_file: str):
+                    async def _run_compatibility_pass(current_file: str, force: bool = False):
                         started_at = time.perf_counter()
                         fixed_path = await asyncio.get_running_loop().run_in_executor(
                             downloader.executor,
                             downloader._maybe_make_telegram_compatible,
                             current_file,
+                            force,
                         )
                         elapsed = time.perf_counter() - started_at
                         if fixed_path and os.path.exists(fixed_path):
@@ -1253,6 +1478,7 @@ async def main():
                             return fixed_path, elapsed, changed
                         return current_file, elapsed, False
 
+                    assume_streaming_compatible = False
                     if use_transcode_upload:
                         # Final guard: local files (or edge outputs) should still pass compatibility check.
                         try:
@@ -1260,9 +1486,37 @@ async def main():
                         except Exception as _fix_err:
                             downloader.log(f"Upload compatibility precheck failed, fallback to original file: {_fix_err}", "warning")
 
-                        # In transcode mode, if original media is not stream-compatible but transcode did not produce
-                        # a converted file, do not continue with a misleading "upload success" flow.
-                        if (not original_streaming_compatible) and (not transcoded_for_upload):
+                        # If still incompatible, run a forced compatibility pass once.
+                        probe_now = None
+                        try:
+                            probe_now = downloader._probe_media_streams(filename)
+                        except Exception:
+                            probe_now = None
+
+                        if not is_streaming_compatible_media(probe_now):
+                            try:
+                                filename, extra_elapsed, forced_changed = await _run_compatibility_pass(
+                                    filename,
+                                    force=True,
+                                )
+                                compat_elapsed += extra_elapsed
+                                if forced_changed:
+                                    transcoded_for_upload = True
+                                    assume_streaming_compatible = True
+                            except Exception as _force_err:
+                                downloader.log(f"强制兼容转码失败: {_force_err}", "warning")
+
+                            try:
+                                probe_now = downloader._probe_media_streams(filename)
+                            except Exception:
+                                probe_now = None
+
+                        # If still not compatible after forced pass, fallback to document.
+                        compatible_after_pass = is_streaming_compatible_media(probe_now)
+                        if (probe_now is None) and assume_streaming_compatible:
+                            compatible_after_pass = True
+
+                        if not compatible_after_pass:
                             force_document_fallback = True
                             await msg.edit(
                                 "⚠️ **转码失败，改用文件方式上传**\n"
@@ -1273,6 +1527,35 @@ async def main():
                                 f"转码失败，改为文件上传: 源文件不兼容(vcodec={(original_probe or {}).get('vcodec')}, pix_fmt={(original_probe or {}).get('pix_fmt')})。",
                                 "warning",
                             )
+
+                    async def _ensure_mp4_for_upload(current_file: str):
+                        ext = os.path.splitext(current_file)[1].lower()
+                        if ext == '.mp4':
+                            return current_file, False, 0.0
+                        remuxed = ""
+                        try:
+                            remuxed = downloader._remux_to_mp4(current_file)
+                        except Exception as remux_err:
+                            downloader.log(f"容器修复失败: {remux_err}", "warning")
+                        if remuxed and os.path.exists(remuxed):
+                            return remuxed, True, 0.0
+                        if use_transcode_upload or ext == '.unknown_video':
+                            try:
+                                fixed, extra_elapsed, changed = await _run_compatibility_pass(
+                                    current_file,
+                                    force=True,
+                                )
+                                return fixed, changed, extra_elapsed
+                            except Exception as force_err:
+                                downloader.log(f"强制转码为 mp4 失败: {force_err}", "warning")
+                        return current_file, False, 0.0
+
+                    # Ensure upload uses mp4 container when possible (especially for unknown ext).
+                    filename, remuxed_or_transcoded, extra_elapsed = await _ensure_mp4_for_upload(filename)
+                    if remuxed_or_transcoded:
+                        transcoded_for_upload = True
+                    if extra_elapsed:
+                        compat_elapsed += extra_elapsed
 
                     try:
                         file_size_bytes = os.path.getsize(filename)
@@ -1306,6 +1589,28 @@ async def main():
                     source_url = (download_meta.get('source_url') or url or '').strip()
                     source_title = (download_meta.get('title') or '').strip()
                     source_resolution = (download_meta.get('resolution') or '').strip()
+                    if not source_title:
+                        base_title = os.path.splitext(os.path.basename(filename))[0].strip()
+                        if base_title:
+                            source_title = base_title
+
+                    final_probe = None
+                    try:
+                        final_probe = downloader._probe_media_streams(filename)
+                    except Exception:
+                        final_probe = None
+
+                    if not source_resolution and final_probe and final_probe.get('video_stream'):
+                        try:
+                            probe_w = int(final_probe.get('width') or 0)
+                            probe_h = int(final_probe.get('height') or 0)
+                            probe_rot = int(final_probe.get('rotation') or 0) % 360
+                            if probe_rot in (90, 270):
+                                probe_w, probe_h = probe_h, probe_w
+                            if probe_w > 0 and probe_h > 0:
+                                source_resolution = f"{probe_w}x{probe_h}"
+                        except Exception:
+                            pass
 
                     lines = [
                         "✅ **下载完成**",
@@ -1328,11 +1633,9 @@ async def main():
                         upload_caption_parts.append(f"分辨率: {source_resolution}")
 
                     upload_attributes = None
-                    final_probe = None
                     force_document_upload = force_document_mode
                     supports_streaming_upload = not force_document_mode
                     try:
-                        final_probe = downloader._probe_media_streams(filename)
                         if final_probe and final_probe.get('video_stream'):
                             probe_w = int(final_probe.get('width') or 0)
                             probe_h = int(final_probe.get('height') or 0)

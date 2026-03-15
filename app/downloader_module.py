@@ -70,6 +70,8 @@ class Downloader:
         self.ffmpeg_path = None
         self.ffprobe_path = None
         self.last_download_metadata = {}
+        self.last_download_path = ""
+        self._last_summary_cache = {}
         self._source_platform_override = None
         self._assume_streaming_compatible = False
 
@@ -182,16 +184,33 @@ class Downloader:
                 return parts[idx + 1]
         return ''
 
+    def _sanitize_filename_component(self, text: str, max_len: int = 80) -> str:
+        value = str(text or '').strip()
+        if not value:
+            return ''
+        value = re.sub(r'\s+', ' ', value)
+        value = re.sub(r'[\\/:*?"<>|]+', '_', value)
+        value = re.sub(r'[\x00-\x1f]+', '', value)
+        value = value.strip(' ._')
+        if max_len and len(value) > max_len:
+            value = value[:max_len].rstrip(' ._')
+        return value
+
+    def _unique_path(self, path: str) -> str:
+        base, ext = os.path.splitext(path)
+        candidate = path
+        counter = 1
+        while os.path.exists(candidate):
+            candidate = f"{base}_{counter}{ext}"
+            counter += 1
+        return candidate
+
     def _download_direct_file(self, url: str, output_dir: str, filename_hint: str = '') -> str:
-        safe_hint = re.sub(r'[^A-Za-z0-9._-]+', '_', filename_hint or '').strip('_')
+        safe_hint = self._sanitize_filename_component(filename_hint, max_len=80)
         if not safe_hint:
             safe_hint = f"direct_{int(time.time())}"
         base_path = os.path.join(output_dir, f"{safe_hint}.mp4")
-        final_path = base_path
-        counter = 1
-        while os.path.exists(final_path):
-            final_path = os.path.join(output_dir, f"{safe_hint}_{counter}.mp4")
-            counter += 1
+        final_path = self._unique_path(base_path)
 
         tmp_path = final_path + '.tmp'
         headers = {
@@ -224,6 +243,7 @@ class Downloader:
                                 self.log(f"直接下载进度: {percent}% ({downloaded}/{total})", "info")
             if os.path.exists(tmp_path):
                 os.replace(tmp_path, final_path)
+            self.last_download_path = final_path
             return final_path
         except Exception as e:
             try:
@@ -267,7 +287,21 @@ class Downloader:
                     pass
         return '; '.join(cookie_header)
 
-    def _extract_threads_mp4_url(self, url: str, cookie_header: str = '') -> str:
+    def _extract_threads_title_from_html(self, text: str) -> str:
+        if not text:
+            return ''
+        patterns = [
+            r'property=[\'"]og:title[\'"]\s+content=[\'"]([^\'"]+)[\'"]',
+            r'property=[\'"]og:description[\'"]\s+content=[\'"]([^\'"]+)[\'"]',
+            r'name=[\'"]description[\'"]\s+content=[\'"]([^\'"]+)[\'"]',
+        ]
+        for pat in patterns:
+            match = re.search(pat, text)
+            if match:
+                return html.unescape(match.group(1)).strip()
+        return ''
+
+    def _extract_threads_mp4_url(self, url: str, cookie_header: str = '') -> tuple[str, str]:
         candidates = self._build_threads_url_candidates(url)
         for cand in candidates:
             if '/embed' not in cand:
@@ -293,16 +327,17 @@ class Downloader:
             if resp.status_code != 200 or not resp.text:
                 continue
             text = resp.text
+            title = self._extract_threads_title_from_html(text)
             matches = re.findall(r"https?://[^\"'\\s]+\\.mp4[^\"'\\s]*", text)
             if not matches:
                 matches = re.findall(r"https?:\\\\/\\\\/[^\"'\\s]+\\.mp4[^\"'\\s]*", text)
             if matches:
                 raw = matches[0]
                 cleaned = raw.replace('\\/', '/').replace('\\u0026', '&')
-                return html.unescape(cleaned)
+                return html.unescape(cleaned), title
             self.last_error_message = "Threads 该帖子未检测到视频（可能为图文/无视频或需登录）"
             self.log("Threads embed 未找到视频直链", "warning")
-        return ""
+        return "", ""
 
     def log(self, message, level="info"):
         """Adds a log message to the buffer."""
@@ -344,9 +379,53 @@ class Downloader:
         self.js_runtime_missing = False
         self.last_cookies_supplied = False
         self.last_download_metadata = {}
+        self.last_download_path = ""
+        self._last_summary_cache = {}
 
     def get_last_download_metadata(self):
         return dict(self.last_download_metadata or {})
+
+    def get_last_download_summary(self):
+        summary = dict(self.last_download_metadata or {})
+        path = self.last_download_path or ""
+        if path:
+            summary['file_path'] = path
+            summary['file_name'] = os.path.basename(path)
+            if not summary.get('title'):
+                base_title = os.path.splitext(summary['file_name'])[0].strip()
+                if base_title:
+                    summary['title'] = base_title
+
+        if path and not summary.get('resolution'):
+            cache = self._last_summary_cache or {}
+            if cache.get('file_path') == path and cache.get('resolution'):
+                summary['resolution'] = cache.get('resolution')
+            else:
+                probe = None
+                try:
+                    probe = self._probe_media_streams(path)
+                except Exception:
+                    probe = None
+                if probe and probe.get('video_stream'):
+                    try:
+                        probe_w = int(probe.get('width') or 0)
+                        probe_h = int(probe.get('height') or 0)
+                        probe_rot = int(probe.get('rotation') or 0) % 360
+                        if probe_rot in (90, 270):
+                            probe_w, probe_h = probe_h, probe_w
+                        if probe_w > 0 and probe_h > 0:
+                            summary['resolution'] = f"{probe_w}x{probe_h}"
+                    except Exception:
+                        pass
+
+        self._last_summary_cache = {
+            'file_path': path,
+            'resolution': summary.get('resolution'),
+            'title': summary.get('title'),
+            'file_name': summary.get('file_name'),
+            'source_url': summary.get('source_url'),
+        }
+        return summary
 
     def get_last_error(self):
         return self.last_error_message
@@ -614,10 +693,19 @@ class Downloader:
                     or "fb.com" in lower_url
                 )
 
-                def _run_non_youtube_retry(attempt_headers, source_name):
+                def _run_non_youtube_retry(
+                    attempt_headers,
+                    source_name,
+                    target_url=None,
+                    outtmpl_override=None,
+                    postprocess=None,
+                ):
                     last_error = None
+                    effective_url = target_url or url
                     for idx, headers in enumerate(attempt_headers, start=1):
                         current_opts = base_ydl_opts.copy()
+                        if outtmpl_override:
+                            current_opts['outtmpl'] = outtmpl_override
                         current_headers = dict(base_ydl_opts.get('http_headers') or {})
                         current_headers.update(headers)
                         current_opts['http_headers'] = current_headers
@@ -625,8 +713,12 @@ class Downloader:
                         self.log(f"{source_name} 下载尝试 {idx}/{len(attempt_headers)}", "info")
                         try:
                             with yt_dlp.YoutubeDL(current_opts) as ydl:
-                                info = ydl.extract_info(url, download=True)
+                                info = ydl.extract_info(effective_url, download=True)
                                 if info:
+                                    if postprocess:
+                                        result = postprocess(ydl, info)
+                                        if result:
+                                            return result
                                     return self._process_info(ydl, info)
                         except Exception as e:
                             last_error = e
@@ -708,20 +800,94 @@ class Downloader:
                         )
                     except Exception:
                         cookie_header = ''
-                    mp4_url = self._extract_threads_mp4_url(url, cookie_header=cookie_header)
+                    threads_shortcode = self._extract_threads_shortcode(url) or uuid.uuid4().hex[:8]
+                    mp4_url, threads_title = self._extract_threads_mp4_url(url, cookie_header=cookie_header)
                     if mp4_url:
                         self.log("Threads 解析到直链，准备下载", "info")
-                        shortcode = self._extract_threads_shortcode(url) or uuid.uuid4().hex[:8]
-                        out = self._download_direct_file(mp4_url, output_dir, f"Threads_{shortcode}")
+                        title_hint = self._sanitize_filename_component(threads_title, max_len=80)
+                        if title_hint:
+                            filename_hint = f"Threads_{title_hint}_{threads_shortcode}"
+                        else:
+                            filename_hint = f"Threads_{threads_shortcode}"
+                        out = self._download_direct_file(mp4_url, output_dir, filename_hint)
                         if out:
+                            title_for_meta = threads_title.strip() if isinstance(threads_title, str) else ''
+                            if not title_for_meta:
+                                title_for_meta = f"Threads_{threads_shortcode}"
                             self.last_download_metadata = {
-                                'title': f"Threads_{shortcode}",
+                                'title': title_for_meta,
                                 'source_url': url,
                                 'resolution': '',
                                 'source_platform': 'threads',
                                 'assume_streaming_compatible': True,
                             }
                             return out
+                    self.log("Threads 未拿到 mp4 直链，回退 yt-dlp 流程", "warning")
+                    self._source_platform_override = 'threads'
+
+                    threads_outtmpl = os.path.join(output_dir, f"Threads_{threads_shortcode}.%(ext)s")
+                    threads_candidates = self._build_threads_url_candidates(url)
+                    expanded_candidates = []
+                    for cand in threads_candidates:
+                        expanded_candidates.append(cand)
+                        if '/embed' not in cand:
+                            if cand.endswith('/'):
+                                expanded_candidates.append(cand + 'embed')
+                            else:
+                                expanded_candidates.append(cand + '/embed')
+                    # De-dup while preserving order
+                    seen = set()
+                    fallback_urls = []
+                    for cand in expanded_candidates:
+                        if not cand or cand in seen:
+                            continue
+                        seen.add(cand)
+                        fallback_urls.append(cand)
+
+                    last_error = None
+
+                    def _threads_postprocess(ydl, info):
+                        downloaded_path = self._process_info(ydl, info)
+                        if not downloaded_path or not os.path.exists(downloaded_path):
+                            return downloaded_path
+                        title = self._sanitize_filename_component(info.get('title') if isinstance(info, dict) else '', max_len=80)
+                        if title:
+                            base_name = f"Threads_{title}_{threads_shortcode}"
+                        else:
+                            base_name = f"Threads_{threads_shortcode}"
+                        ext = os.path.splitext(downloaded_path)[1] or '.mp4'
+                        target_path = os.path.join(output_dir, f"{base_name}{ext}")
+                        if os.path.abspath(downloaded_path) == os.path.abspath(target_path):
+                            self.last_download_path = downloaded_path
+                            return downloaded_path
+                        target_path = self._unique_path(target_path)
+                        try:
+                            os.replace(downloaded_path, target_path)
+                            self.last_download_path = target_path
+                            return target_path
+                        except Exception as rename_err:
+                            self.log(f"Threads 重命名失败，保留原文件名: {rename_err}", "warning")
+                            self.last_download_path = downloaded_path
+                            return downloaded_path
+
+                    for idx, target_url in enumerate(fallback_urls, start=1):
+                        try:
+                            self.log(f"Threads 回退 URL {idx}/{len(fallback_urls)}: {target_url}", "info")
+                            result = _run_non_youtube_retry(
+                                threads_attempt_headers,
+                                'Threads',
+                                target_url=target_url,
+                                outtmpl_override=threads_outtmpl,
+                                postprocess=_threads_postprocess,
+                            )
+                            if result:
+                                return result
+                        except Exception as e:
+                            last_error = e
+                            self.log(f"Threads 回退 URL {idx} 失败: {type(e).__name__}: {e!r}", "warning")
+
+                    if last_error:
+                        raise last_error
                     return None
 
                 if is_instagram:
@@ -849,14 +1015,19 @@ class Downloader:
             self.last_download_metadata['assume_streaming_compatible'] = True
 
         filename = ydl.prepare_filename(info)
+        final_path = filename
         if os.path.exists(filename):
+            self.last_download_path = filename
             return filename
         base, ext = os.path.splitext(filename)
         if ext != '.mp4':
             mp4_filename = base + '.mp4'
             if os.path.exists(mp4_filename):
+                final_path = mp4_filename
+                self.last_download_path = mp4_filename
                 return mp4_filename
-        return filename
+        self.last_download_path = final_path
+        return final_path
 
     def _extract_download_metadata(self, info):
         if not isinstance(info, dict):
@@ -922,6 +1093,7 @@ class Downloader:
             result = subprocess.run(cmd, capture_output=True, text=True, check=True)
             data = json.loads(result.stdout or '{}')
             streams = data.get('streams') or []
+            format_info = data.get('format') or {}
 
             video_stream = None
             audio_stream = None
@@ -943,10 +1115,64 @@ class Downloader:
                 'height': (video_stream or {}).get('height'),
                 'rotation': self._extract_rotation_degrees(video_stream),
                 'acodec': (audio_stream or {}).get('codec_name'),
+                'format_name': format_info.get('format_name'),
             }
         except Exception as e:
             self.log(f"ffprobe 分析失败，跳过兼容性转码: {e}", "warning")
             return None
+
+    def _remux_to_mp4(self, file_path: str) -> str:
+        if not file_path or not os.path.exists(file_path):
+            return ""
+        base, ext = os.path.splitext(file_path)
+        if ext.lower() == '.mp4':
+            return file_path
+
+        probe = None
+        try:
+            probe = self._probe_media_streams(file_path)
+        except Exception:
+            probe = None
+        fmt = (probe or {}).get('format_name') or ''
+        fmt_lower = fmt.lower()
+        if any(token in fmt_lower for token in ('mp4', 'mov', 'isom', 'm4a', '3gp', '3g2')):
+            target_path = self._unique_path(base + '.mp4')
+            try:
+                os.replace(file_path, target_path)
+                self.last_download_path = target_path
+                return target_path
+            except Exception as rename_err:
+                self.log(f"重命名为 mp4 失败，继续尝试重封装: {rename_err}", "warning")
+
+        ffmpeg_path, _ = self._ensure_ffmpeg_tools()
+        if not ffmpeg_path:
+            return ""
+
+        target_path = self._unique_path(base + '.mp4')
+        cmd = [
+            ffmpeg_path,
+            '-y',
+            '-i', file_path,
+            '-map', '0:v:0',
+            '-map', '0:a:0?',
+            '-c:v', 'copy',
+            '-c:a', 'copy',
+            '-movflags', '+faststart',
+            target_path,
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+            if os.path.exists(target_path) and os.path.getsize(target_path) > 0:
+                self.last_download_path = target_path
+                return target_path
+        except subprocess.CalledProcessError as e:
+            err_text = (e.stderr or e.stdout or '').strip()
+            if err_text:
+                tail = '\n'.join(err_text.splitlines()[-8:])
+                self.log(f"重封装 mp4 失败，ffmpeg 输出(末尾): {tail}", "warning")
+        except Exception as e:
+            self.log(f"重封装 mp4 失败: {e}", "warning")
+        return ""
 
     def _extract_rotation_degrees(self, video_stream):
         if not isinstance(video_stream, dict):
@@ -974,26 +1200,38 @@ class Downloader:
 
         return 0
 
-    def _maybe_make_telegram_compatible(self, file_path):
+    def _maybe_make_telegram_compatible(self, file_path, force=False):
         """Transcode to Telegram-friendly H.264/AAC MP4 when stream codec is likely incompatible."""
         if not file_path or not os.path.exists(file_path):
             return file_path
 
         probe = self._probe_media_streams(file_path)
+        probe_missing = False
         if not probe:
-            return file_path
+            if not force:
+                return file_path
+            probe_missing = True
+            video_stream = {}
+            audio_stream = None
+            vcodec = ''
+            pix_fmt = ''
+            sar = ''
+            dar = ''
+            width = 0
+            height = 0
+            rotation_degrees = 0
+        else:
+            video_stream = probe.get('video_stream')
+            audio_stream = probe.get('audio_stream')
+            vcodec = (probe.get('vcodec') or '').lower()
+            pix_fmt = (probe.get('pix_fmt') or '').lower()
+            sar = str(probe.get('sar') or '').strip()
+            dar = str(probe.get('dar') or '').strip()
+            width = int(probe.get('width') or 0)
+            height = int(probe.get('height') or 0)
+            rotation_degrees = int(probe.get('rotation') or 0)
 
-        video_stream = probe.get('video_stream')
-        audio_stream = probe.get('audio_stream')
-        vcodec = (probe.get('vcodec') or '').lower()
-        pix_fmt = (probe.get('pix_fmt') or '').lower()
-        sar = str(probe.get('sar') or '').strip()
-        dar = str(probe.get('dar') or '').strip()
-        width = int(probe.get('width') or 0)
-        height = int(probe.get('height') or 0)
-        rotation_degrees = int(probe.get('rotation') or 0)
-
-        if not video_stream:
+        if not video_stream and not force:
             self.log("检测到文件无视频流，无法修复为可播放视频。", "warning")
             return file_path
 
@@ -1167,6 +1405,8 @@ class Downloader:
             or dar_mismatch_coded
             or (_normalized_rotation_deg(rotation_degrees) != 0)
         )
+        if force:
+            needs_transcode = True
         if not needs_transcode:
             return file_path
 
@@ -1176,7 +1416,7 @@ class Downloader:
         base, _ = os.path.splitext(file_path)
         fixed_path = base + '.tgfix.mp4'
 
-        def _build_transcode_cmd(vf_filter, output_path, preset='veryfast', crf='20'):
+        def _build_transcode_cmd(vf_filter, output_path, preset='veryfast', crf='20', audio_optional=False):
             cmd_local = [
                 self.ffmpeg_path or 'ffmpeg', '-y',
                 '-noautorotate',
@@ -1193,15 +1433,16 @@ class Downloader:
                 '-movflags', '+faststart',
             ]
 
-            if audio_stream:
-                cmd_local.extend(['-map', '0:a:0', '-c:a', 'aac', '-b:a', '192k'])
+            if audio_stream or audio_optional:
+                audio_map = '0:a:0' if audio_stream else '0:a?'
+                cmd_local.extend(['-map', audio_map, '-c:a', 'aac', '-b:a', '192k'])
             else:
                 cmd_local.extend(['-an'])
 
             cmd_local.append(output_path)
             return cmd_local
 
-        cmd = _build_transcode_cmd(safe_filter, fixed_path)
+        cmd = _build_transcode_cmd(safe_filter, fixed_path, audio_optional=probe_missing)
 
         try:
             target_desc = f"{target_w}x{target_h}" if target_w and target_h else 'auto-even'
@@ -1228,7 +1469,7 @@ class Downloader:
                             target_h,
                         )
                         retry_path = base + '.tgfix2.mp4'
-                        retry_cmd = _build_transcode_cmd(locked_filter, retry_path)
+                        retry_cmd = _build_transcode_cmd(locked_filter, retry_path, audio_optional=probe_missing)
 
                         self.log(
                             f"检测到转码后比例偏差({ratio_drift * 100:.2f}%)，启用二次比例锁定转码({lock_w}x{lock_h})...",
@@ -1274,7 +1515,13 @@ class Downloader:
 
                 suffix = f"cap{cap_side}" if cap_side else 'retry'
                 fallback_path = base + f'.tgfix_{suffix}.mp4'
-                fallback_cmd = _build_transcode_cmd(fallback_filter, fallback_path, preset=preset, crf=crf)
+                fallback_cmd = _build_transcode_cmd(
+                    fallback_filter,
+                    fallback_path,
+                    preset=preset,
+                    crf=crf,
+                    audio_optional=probe_missing,
+                )
                 try:
                     self.log(
                         f"兼容性转码开始保底重试: {label} ({cap_w}x{cap_h}, preset={preset}, crf={crf})",

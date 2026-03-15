@@ -1099,6 +1099,20 @@ def _collect_existing_monitored_titles(env_files: Sequence[str], env_key: str) -
     return existing_norm
 
 
+def _parse_env_keys(raw_env_key: str) -> List[str]:
+    if not raw_env_key:
+        return []
+    items = [k.strip() for k in re.split(r'[\n,]+', raw_env_key) if k.strip()]
+    seen: Set[str] = set()
+    result: List[str] = []
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        result.append(item)
+    return result
+
+
 def apply_top_n(items: List[str], top_n: int) -> List[str]:
     if top_n <= 0:
         return items
@@ -1721,7 +1735,7 @@ def main() -> int:
     parser.add_argument(
         "--env-key",
         default="DRAMA_CALENDAR_REGEX",
-        help="写入到 .env 的变量名（默认：DRAMA_CALENDAR_REGEX）",
+        help="写入到 .env 的变量名（默认：DRAMA_CALENDAR_REGEX），支持逗号或换行分隔多个变量",
     )
     parser.add_argument("--backup", action="store_true", help="写入前备份已存在的 .env 文件")
     parser.add_argument("--append", action="store_true", help="将结果追加到目标变量（适用于关键词白名单）")
@@ -1750,6 +1764,11 @@ def main() -> int:
     env_files = [p.strip() for p in args.env_files.split(",") if p.strip()]
     if not env_files:
         print("[ERROR] env-files 不能为空", file=sys.stderr)
+        return 2
+
+    env_keys = _parse_env_keys(args.env_key)
+    if not env_keys:
+        print("[ERROR] env-key 不能为空", file=sys.stderr)
         return 2
 
     try:
@@ -2270,7 +2289,9 @@ def main() -> int:
 
         skipped_existing_titles: List[str] = []
         if bool(args.append):
-            existing_monitored_norm = _collect_existing_monitored_titles(env_files, args.env_key)
+            existing_monitored_norm: Set[str] = set()
+            for env_key in env_keys:
+                existing_monitored_norm |= _collect_existing_monitored_titles(env_files, env_key)
             if existing_monitored_norm:
                 for title in titles:
                     norm = _normalize_title_for_match(title)
@@ -2280,12 +2301,13 @@ def main() -> int:
         regex = build_regex_from_titles(titles)
 
         if not args.dry_run:
-            _update_state_source_titles(
-                args.state_file or DEFAULT_STATE_FILE,
-                env_files,
-                args.env_key,
-                source_title_map,
-            )
+            for env_key in env_keys:
+                _update_state_source_titles(
+                    args.state_file or DEFAULT_STATE_FILE,
+                    env_files,
+                    env_key,
+                    source_title_map,
+                )
 
         source_label = ",".join(args.source)
         print(f"[INFO] 数据源: {source_label}")
@@ -2347,15 +2369,16 @@ def main() -> int:
                 normalized_count = 0
                 if bool(args.append):
                     for env_path in env_files:
-                        changed = normalize_env_regex_file(
-                            env_path,
-                            args.env_key,
-                            dry_run=args.dry_run,
-                            backup=args.backup,
-                            require_existing=(not bool(args.allow_create_env)),
-                        )
-                        if changed:
-                            normalized_count += 1
+                        for env_key in env_keys:
+                            changed = normalize_env_regex_file(
+                                env_path,
+                                env_key,
+                                dry_run=args.dry_run,
+                                backup=args.backup,
+                                require_existing=(not bool(args.allow_create_env)),
+                            )
+                            if changed:
+                                normalized_count += 1
                 if normalized_count > 0:
                     print(f"[INFO] 本次无新增剧名可写入，已规范化 {normalized_count} 个 .env")
                 else:
@@ -2370,18 +2393,19 @@ def main() -> int:
         print(f"[INFO] 生成正则: {regex}")
 
         for env_path in env_files:
-            write_env_file(
-                env_path,
-                args.env_key,
-                regex,
-                dry_run=args.dry_run,
-                backup=args.backup,
-                append_mode=args.append,
-                source_tag=source_label,
-                state_file=(args.state_file or DEFAULT_STATE_FILE),
-                managed_scope=(args.managed_scope or "source"),
-                require_existing=(not bool(args.allow_create_env)),
-            )
+            for env_key in env_keys:
+                write_env_file(
+                    env_path,
+                    env_key,
+                    regex,
+                    dry_run=args.dry_run,
+                    backup=args.backup,
+                    append_mode=args.append,
+                    source_tag=source_label,
+                    state_file=(args.state_file or DEFAULT_STATE_FILE),
+                    managed_scope=(args.managed_scope or "source"),
+                    require_existing=(not bool(args.allow_create_env)),
+                )
 
         return 0
     except requests.RequestException as e:

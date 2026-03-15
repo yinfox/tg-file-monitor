@@ -225,6 +225,14 @@
                         <form action="{{ url_for('manage_file_config') }}" method="post" class="row g-2">
                             <input type="hidden" name="action" value="update_115">
                             <div class="col-12 mb-2">
+                                <label for="target_115_cid" class="form-label small">115 默认目标目录 CID:</label>
+                                <input type="text" id="target_115_cid" name="target_115_cid"
+                                    class="form-control form-control-sm"
+                                    placeholder="例如 0 或 123456789"
+                                    value="{{ config.get('115_target_cid', '') }}">
+                                <div class="form-text small">Bot 转存 115 分享链接时的默认目标目录。</div>
+                            </div>
+                            <div class="col-12 mb-2">
                                 <label for="cookie_115" class="form-label small">115 Cookie:</label>
                                 <textarea id="cookie_115" name="cookie_115" rows="3"
                                     class="form-control form-control-sm"

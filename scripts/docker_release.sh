@@ -20,10 +20,11 @@ usage() {
   cat <<'EOF'
 Usage:
   docker_release.sh --image <repo/name> --tag <version> [options]
+  docker_release.sh --image <repo/name> [options]
 
 Required:
   --image <repo/name>   Docker image repo, e.g. y1nf0x/tg-file-monitor
-  --tag <version>       Image tag, e.g. 0.4.19
+  --tag <version>       Image tag, e.g. 0.4.19 (optional; default from app/app.py VERSION)
 
 Options:
   --platform <platform> Build platform, e.g. linux/amd64
@@ -43,6 +44,23 @@ require_cmd() {
     echo "[ERROR] command not found: $1"
     exit 1
   fi
+}
+
+detect_version() {
+  local version_file="$ROOT_DIR/app/app.py"
+  if [[ -f "$version_file" ]]; then
+    local line
+    line="$(grep -E '^VERSION[[:space:]]*=' "$version_file" | head -n 1 || true)"
+    if [[ -n "$line" ]]; then
+      local v
+      v="$(echo "$line" | sed -E 's/^[^"]*"([^"]+)".*$/\1/')"
+      if [[ -n "$v" && "$v" != "$line" ]]; then
+        echo "$v"
+        return 0
+      fi
+    fi
+  fi
+  return 1
 }
 
 log() {
@@ -83,10 +101,20 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -z "$IMAGE_REPO" || -z "$IMAGE_TAG" ]]; then
-  echo "[ERROR] --image and --tag are required"
+if [[ -z "$IMAGE_REPO" ]]; then
+  echo "[ERROR] --image is required"
   usage
   exit 1
+fi
+if [[ -z "$IMAGE_TAG" ]]; then
+  IMAGE_TAG="$(detect_version || true)"
+  if [[ -n "$IMAGE_TAG" ]]; then
+    log "Auto-detected version from app/app.py: $IMAGE_TAG"
+  else
+    echo "[ERROR] --tag is required (and VERSION not found in app/app.py)"
+    usage
+    exit 1
+  fi
 fi
 
 require_cmd docker
