@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.72-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.73-orange.svg)](.)
 
 </div>
 
@@ -327,7 +327,14 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.72 (2026-03-14) - 当前版本
+### v0.4.73 (2026-03-15) - 当前版本
+- ✅ 公共自助观影提交页面（可选访问口令）
+- ✅ 公共入口防刷（IP 限流，窗口/次数可配）
+- ✅ 自助观影网盘筛选：不限 / 仅 115 / 仅 123 / 115/123
+- ✅ Open API 直链解锁开关，避免绕过积分阈值
+- ✅ Open API Key 测试优先验证 ping 接口
+
+### v0.4.72 (2026-03-14)
 - ✅ 日志页性能优化：仅加载尾部日志、缓存渲染、支持手动刷新与可配置刷新间隔
 - ✅ 默认关闭日志自动刷新，降低 Web UI 负载
 - ✅ 文件监控可配置扫描间隔，空任务不启动监控进程

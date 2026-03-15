@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.72-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.73-orange.svg)](.)
 
 </div>
 
@@ -173,7 +173,14 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.72 (2026-03-14) - Current
+### v0.4.73 (2026-03-15) - Current
+- Public self-service submission page (optional access key)
+- Public endpoint rate limiting (IP-based, configurable window/limit)
+- Storage filter options for self-service: any / 115 / 123 / 115+123
+- Open API direct-unlock toggle to avoid bypassing point thresholds
+- Open API Key test now prioritizes ping verification
+
+### v0.4.72 (2026-03-14)
 - Log page performance optimizations: tail-only reads, render caching, manual refresh, configurable refresh interval
 - Auto-refresh disabled by default to reduce Web UI load
 - File monitor scan interval configurable; no-task mode skips process startup
