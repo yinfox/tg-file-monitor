@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.81-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.82-orange.svg)](.)
 
 </div>
 
@@ -74,7 +74,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.4.81`
+Latest image: `y1nf0x/tg-file-monitor:0.4.82`
 
 Upgrade example:
 
@@ -86,7 +86,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.4.81
+y1nf0x/tg-file-monitor:0.4.82
 ```
 
 ## 🖥️ VPS Notes
@@ -188,7 +188,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.81 (2026-03-15) - Current
+### v0.4.82 (2026-03-15) - Current
+- Download Threads direct mp4 without yt-dlp
+- Ensure mp4 filename (avoid unknown_video)
+
+### v0.4.81 (2026-03-15)
 - Improve Threads embed parsing (escaped URLs + optional cookies)
 - Clear error when Threads post has no video
 

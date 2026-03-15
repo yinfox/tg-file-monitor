@@ -7,6 +7,7 @@ import subprocess
 import shutil
 import time
 import re
+import uuid
 import html
 from urllib.parse import urlparse, urlunparse
 import requests
@@ -164,6 +165,74 @@ class Downloader:
             seen.add(c)
             result.append(c)
         return result
+
+    def _extract_threads_shortcode(self, url: str) -> str:
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return ''
+        parts = [p for p in (parsed.path or '').split('/') if p]
+        if not parts:
+            return ''
+        if parts[0] == 't' and len(parts) > 1:
+            return parts[1]
+        if 'post' in parts:
+            idx = parts.index('post')
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+        return ''
+
+    def _download_direct_file(self, url: str, output_dir: str, filename_hint: str = '') -> str:
+        safe_hint = re.sub(r'[^A-Za-z0-9._-]+', '_', filename_hint or '').strip('_')
+        if not safe_hint:
+            safe_hint = f"direct_{int(time.time())}"
+        base_path = os.path.join(output_dir, f"{safe_hint}.mp4")
+        final_path = base_path
+        counter = 1
+        while os.path.exists(final_path):
+            final_path = os.path.join(output_dir, f"{safe_hint}_{counter}.mp4")
+            counter += 1
+
+        tmp_path = final_path + '.tmp'
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Referer': 'https://www.threads.net/',
+        }
+        total = 0
+        downloaded = 0
+        last_log = time.time()
+        last_percent = 0
+        try:
+            with requests.get(url, headers=headers, stream=True, timeout=30) as r:
+                r.raise_for_status()
+                total = int(r.headers.get('content-length') or 0)
+                with open(tmp_path, 'wb') as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.time()
+                        if total > 0:
+                            percent = int(downloaded * 100 / total)
+                        else:
+                            percent = 0
+                        if percent - last_percent >= 5 or (now - last_log) >= 1:
+                            last_percent = percent
+                            last_log = now
+                            if total > 0:
+                                self.log(f"直接下载进度: {percent}% ({downloaded}/{total})", "info")
+            if os.path.exists(tmp_path):
+                os.replace(tmp_path, final_path)
+            return final_path
+        except Exception as e:
+            try:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+            except Exception:
+                pass
+            self.log(f"直链下载失败: {type(e).__name__}: {e}", "error")
+            return ""
 
     def _build_cookie_header_for_domains(self, cookies_file, domains: list) -> str:
         if not cookies_file or not os.path.exists(cookies_file):
@@ -642,11 +711,17 @@ class Downloader:
                     mp4_url = self._extract_threads_mp4_url(url, cookie_header=cookie_header)
                     if mp4_url:
                         self.log("Threads 解析到直链，准备下载", "info")
-                        base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.threads.net/'
-                        url = mp4_url
-                        self._source_platform_override = 'threads'
-                        self._assume_streaming_compatible = True
-                        return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
+                        shortcode = self._extract_threads_shortcode(url) or uuid.uuid4().hex[:8]
+                        out = self._download_direct_file(mp4_url, output_dir, f"Threads_{shortcode}")
+                        if out:
+                            self.last_download_metadata = {
+                                'title': f"Threads_{shortcode}",
+                                'source_url': url,
+                                'resolution': '',
+                                'source_platform': 'threads',
+                                'assume_streaming_compatible': True,
+                            }
+                            return out
                     return None
 
                 if is_instagram:
