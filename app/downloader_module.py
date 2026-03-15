@@ -597,22 +597,6 @@ class Downloader:
                         self._source_platform_override = 'threads'
                         self._assume_streaming_compatible = True
                         return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
-
-                    candidates = self._build_threads_url_candidates(url)
-                    last_err = None
-                    for cand in candidates:
-                        if cand != url:
-                            self.log(f"Threads 备用链接尝试: {cand}", "info")
-                        url = cand
-                        try:
-                            return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
-                        except Exception as e:
-                            last_err = e
-                            if "Unsupported URL" in str(e) and cand != candidates[-1]:
-                                continue
-                            break
-                    if last_err:
-                        raise last_err
                     return None
 
                 if is_instagram:
