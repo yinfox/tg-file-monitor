@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.88-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.89-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.4.88`
+Latest image: `y1nf0x/tg-file-monitor:0.4.89`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.4.88
+y1nf0x/tg-file-monitor:0.4.89
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -209,7 +209,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.88 (2026-03-15) - Current
+### v0.4.89 (2026-03-15) - Current
+- Simplify self-service request fields and highlight key inputs
+- Self-service result now uses a unified success/failure message
+
+### v0.4.88 (2026-03-15)
 - Fix bot monitor startup failure (indentation error)
 
 ### v0.4.87 (2026-03-15)

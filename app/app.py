@@ -28,12 +28,16 @@ from croniter import croniter
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from downloader_module import downloader
+try:
+    from api_115 import Client115
+except Exception:
+    Client115 = None
 
 app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.88"
+VERSION = "0.4.89"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -1783,6 +1787,36 @@ def _is_123_url(url: str) -> bool:
     return ("123pan.com" in lower) or ("123pan.cn" in lower)
 
 
+def _self_service_notify_result(target_ids: list, success: bool) -> None:
+    msg = "✅ 资源已入库，请等待3-5分钟后进入服务器观看。" if success else "❌ 资源未找到，请联系管理员。"
+    for tid in target_ids:
+        _enqueue_message(tid, msg)
+
+
+def _try_115_share_transfer(real_url: str, payload: dict) -> tuple[bool, str]:
+    if not real_url or not _is_115_url(real_url):
+        return False, "not_115_url"
+    cookie = (payload.get("115_cookie") or payload.get("web_115_cookie") or "").strip()
+    target_cid = (payload.get("115_target_cid") or "").strip()
+    if not cookie or not target_cid:
+        return False, "missing_115_config"
+    if not Client115:
+        return False, "client_missing"
+    try:
+        client = Client115(cookie=cookie)
+    except Exception as e:
+        return False, f"client_init:{e}"
+    try:
+        result = client.receive_share_link(real_url, target_cid=target_cid, accept_all=True)
+        if isinstance(result, dict) and result.get("success"):
+            return True, "transfer_ok"
+        if isinstance(result, dict):
+            return False, result.get("message") or "transfer_failed"
+        return False, "transfer_failed"
+    except Exception as e:
+        return False, str(e)
+
+
 def _storage_mode_label(mode: str) -> str:
     if mode == "115":
         return "115"
@@ -2066,9 +2100,7 @@ def _run_self_service_request(payload: dict) -> None:
 
     if use_open_api:
         if not open_api_key:
-            msg = "❌ 未配置 HDHive Open API Key，无法使用 API 搜索"
-            for tid in target_ids:
-                _enqueue_message(tid, msg)
+            _self_service_notify_result(target_ids, False)
             _append_self_service_log([f"[{ts}] [WARN] open_api missing api key"])
             return
 
@@ -2077,9 +2109,7 @@ def _run_self_service_request(payload: dict) -> None:
             slug = direct_url.rstrip('/').split('/')[-1]
             unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
             if not unlock_resp.get("success"):
-                msg = f"❌ 资源解锁失败: {unlock_resp.get('message') or unlock_resp.get('description')}"
-                for tid in target_ids:
-                    _enqueue_message(tid, msg)
+                _self_service_notify_result(target_ids, False)
                 _append_self_service_log([f"[{ts}] [WARN] open_api unlock failed slug={slug}"])
                 return
             data = unlock_resp.get("data") if isinstance(unlock_resp, dict) else {}
@@ -2095,29 +2125,12 @@ def _run_self_service_request(payload: dict) -> None:
                     else:
                         full_url = url
             if full_url and not _match_storage_mode(full_url, storage_mode):
-                msg_lines = [
-                    f"❌ 自助观影申请仅支持 {storage_label} 网盘",
-                    f"关键词: {query}",
-                    f"Slug: {slug}",
-                    f"解锁结果: {unlock_resp.get('message') or 'success'}",
-                    "链接类型: 不符合当前网盘设置（已过滤）",
-                ]
-                msg = "\n".join(msg_lines)
-                for tid in target_ids:
-                    _enqueue_message(tid, msg)
+                _self_service_notify_result(target_ids, False)
                 _append_self_service_log([f"[{ts}] [WARN] open_api non-115 filtered slug={slug}"])
                 return
-            msg_lines = [
-                "🎬 自助观影申请结果（Open API）",
-                f"关键词: {query}",
-                f"Slug: {slug}",
-                f"解锁结果: {unlock_resp.get('message') or 'success'}",
-            ]
-            msg_lines.append(f"链接: {full_url or '未返回'}")
-            msg = "\n".join(msg_lines)
-            for tid in target_ids:
-                _enqueue_message(tid, msg)
-            _append_self_service_log([f"[{ts}] [INFO] open_api success slug={slug}"])
+            transfer_ok, transfer_note = _try_115_share_transfer(full_url, payload)
+            _self_service_notify_result(target_ids, transfer_ok)
+            _append_self_service_log([f"[{ts}] [INFO] open_api direct transfer={transfer_ok} note={transfer_note} slug={slug}"])
             return
 
         media_type = ""
@@ -2140,14 +2153,7 @@ def _run_self_service_request(payload: dict) -> None:
                         tmdb_ids += [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, "movie")]
 
         if not tmdb_ids:
-            msg_lines = [
-                "❌ 自助观影申请未找到 TMDB ID",
-                f"关键词: {query}",
-                "请在表单中填写 TMDB ID 或配置 TMDB API Key。",
-            ]
-            msg = "\n".join(msg_lines)
-            for tid in target_ids:
-                _enqueue_message(tid, msg)
+            _self_service_notify_result(target_ids, False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no tmdb id query={query}"])
             return
 
@@ -2169,14 +2175,7 @@ def _run_self_service_request(payload: dict) -> None:
                 break
 
         if not collected_resources:
-            msg_lines = [
-                "❌ 自助观影申请未找到资源",
-                f"关键词: {query}",
-                f"TMDB ID: {', '.join(tmdb_ids[:5])}",
-            ]
-            msg = "\n".join(msg_lines)
-            for tid in target_ids:
-                _enqueue_message(tid, msg)
+            _self_service_notify_result(target_ids, False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
             return
 
@@ -2193,17 +2192,7 @@ def _run_self_service_request(payload: dict) -> None:
                 candidate_pool.append(item)
 
         if not candidate_pool:
-            msg_lines = [
-                "❌ 未找到可自动解锁的资源",
-                f"关键词: {query}",
-                f"阈值: {unlock_threshold} 积分",
-                "候选资源:",
-            ]
-            for item in collected_resources[:max_results]:
-                msg_lines.append(f"- {_format_resource_line(item)}")
-            msg = "\n".join(msg_lines)
-            for tid in target_ids:
-                _enqueue_message(tid, msg)
+            _self_service_notify_result(target_ids, False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no affordable resources query={query}"])
             return
 
@@ -2241,34 +2230,13 @@ def _run_self_service_request(payload: dict) -> None:
             break
 
         if not picked:
-            msg_lines = [
-                "❌ 未找到可用资源",
-                f"关键词: {query}",
-                f"阈值: {unlock_threshold} 积分",
-            ]
-            if storage_mode != "any":
-                msg_lines.append(f"说明: 已过滤非 {storage_label} 网盘资源")
-            msg_lines.append("候选资源:")
-            for item in collected_resources[:max_results]:
-                msg_lines.append(f"- {_format_resource_line(item)}")
-            msg = "\n".join(msg_lines)
-            for tid in target_ids:
-                _enqueue_message(tid, msg)
+            _self_service_notify_result(target_ids, False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no usable resources query={query} filtered={filtered_count}"])
             return
 
-        msg_lines = [
-            "🎬 自助观影申请结果（Open API）",
-            f"关键词: {query}",
-            f"资源: {picked.get('title') or '-'}",
-            f"Slug: {picked_slug}",
-            f"解锁结果: {picked_resp.get('message') or 'success'}",
-        ]
-        msg_lines.append(f"链接: {picked_full_url or '未返回'}")
-        msg = "\n".join(msg_lines)
-        for tid in target_ids:
-            _enqueue_message(tid, msg)
-        _append_self_service_log([f"[{ts}] [INFO] open_api success slug={picked_slug}"])
+        transfer_ok, transfer_note = _try_115_share_transfer(picked_full_url, payload)
+        _self_service_notify_result(target_ids, transfer_ok)
+        _append_self_service_log([f"[{ts}] [INFO] open_api success slug={picked_slug} transfer={transfer_ok} note={transfer_note}"])
         return
 
     candidates = []
@@ -2353,19 +2321,7 @@ def _run_self_service_request(payload: dict) -> None:
                     if candidates:
                         break
     if not candidates:
-        msg_lines = [
-            "❌ 自助观影申请未找到匹配资源",
-            f"关键词: {query}",
-        ]
-        if request_type:
-            msg_lines.append(f"类型: {request_type}")
-        if request_year:
-            msg_lines.append(f"年份: {request_year}")
-        if request_note:
-            msg_lines.append(f"备注: {request_note}")
-        msg = "\n".join(msg_lines)
-        for tid in target_ids:
-            _enqueue_message(tid, msg)
+        _self_service_notify_result(target_ids, False)
         log_line = f"[{ts}] [WARN] no results for query={query}"
         if debug_lines:
             _append_self_service_log([log_line] + [f"[{ts}] [DEBUG] {line}" for line in debug_lines])
@@ -2428,39 +2384,16 @@ def _run_self_service_request(payload: dict) -> None:
         note = f"解析异常: {e}"
         candidate_notes.append((primary, note))
 
-    msg_lines = [
-        "🎬 自助观影申请结果",
-        f"关键词: {query}",
-    ]
-    if request_type:
-        msg_lines.append(f"类型: {request_type}")
-    if request_year:
-        msg_lines.append(f"年份: {request_year}")
-    if request_note:
-        msg_lines.append(f"备注: {request_note}")
-    msg_lines.append(f"影巢资源: {primary}")
     if real_url:
-        msg_lines.append(f"网盘链接: {real_url}")
-        if note:
-            msg_lines.append(f"说明: {note}")
+        transfer_ok, transfer_note = _try_115_share_transfer(real_url, payload)
     else:
-        msg_lines.append("网盘链接: 未解析")
-        if candidate_notes:
-            msg_lines.append("候选解析结果:")
-            for idx, (url, cnote) in enumerate(candidate_notes[:max_results], start=1):
-                msg_lines.append(f"{idx}. {url} | {cnote or '未解析'}")
-        elif note:
-            msg_lines.append(f"说明: {note}")
-    if len(candidates) > 1:
-        msg_lines.append("候选资源:")
-        for idx, url in enumerate(candidates[:max_results], start=1):
-            msg_lines.append(f"{idx}. {url}")
+        transfer_ok, transfer_note = False, "no_real_url"
 
-    msg = "\n".join(msg_lines)
-    for tid in target_ids:
-        _enqueue_message(tid, msg)
+    _self_service_notify_result(target_ids, transfer_ok)
 
-    _append_self_service_log([f"[{ts}] [INFO] done query={used_query} primary={primary} ok={bool(real_url)} note={note}"])
+    _append_self_service_log([
+        f"[{ts}] [INFO] done query={used_query} primary={primary} ok={bool(real_url)} transfer={transfer_ok} note={transfer_note}"
+    ])
 
 
 def _resolve_log_view_config(cfg: dict):
@@ -4359,17 +4292,11 @@ def self_service_request():
     storage_mode = str(config.get("self_service_storage_mode", "any") or "any").lower()
 
     if request.method == 'POST':
-        hdhive_url = (request.form.get('hdhive_url') or '').strip()
+        hdhive_url = ""
         effective_use_open_api = use_open_api
         if not enabled:
             flash("自助观影申请功能未启用，请先在配置页开启。", "warning")
             return redirect(url_for('self_service_request'))
-        if use_open_api and hdhive_url and not allow_open_api_direct:
-            if not hdhive_cookie:
-                flash("Open API 直链解锁已关闭，且未配置 Cookie，无法处理直链。", "error")
-                return redirect(url_for('self_service_request'))
-            effective_use_open_api = False
-            flash("Open API 直链解锁已关闭，本次已改用 Cookie 解析。", "info")
         if effective_use_open_api:
             if not hdhive_api_key:
                 flash("未配置 HDHive Open API Key，无法使用 API 搜索。", "error")
@@ -4396,14 +4323,13 @@ def self_service_request():
                     flash(f"HDHive Cookie 可能无效：{msg}，仍尝试提交。", "warning")
         title = (request.form.get('title') or '').strip()
         if not title:
-            if not hdhive_url:
-                flash("请填写影片或电视剧名称。", "warning")
-                return redirect(url_for('self_service_request'))
+            flash("请填写影片或剧集名称。", "warning")
+            return redirect(url_for('self_service_request'))
 
         request_type = (request.form.get('type') or '').strip()
-        tmdb_id = (request.form.get('tmdb_id') or '').strip()
         request_year = (request.form.get('year') or '').strip()
-        request_note = (request.form.get('note') or '').strip()
+        tmdb_id = ""
+        request_note = ""
 
         query_parts = [title]
         if request_year:
@@ -4436,9 +4362,11 @@ def self_service_request():
             "open_api_direct_unlock": allow_open_api_direct,
             "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
             "storage_mode": storage_mode,
+            "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
+            "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }
         threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
-        flash("已提交申请，后台处理中。解析结果将发送到指定用户。", "success")
+        flash("已提交申请，后台处理中。结果将通过消息通知。", "success")
         return redirect(url_for('self_service_request'))
 
     return render_template(
@@ -4484,14 +4412,8 @@ def self_service_public():
             flash(f"请求过于频繁，请在 {retry_after} 秒后再试。", "warning")
             return redirect(url_for('self_service_public'))
 
-        hdhive_url = (request.form.get('hdhive_url') or '').strip()
+        hdhive_url = ""
         effective_use_open_api = use_open_api
-        if use_open_api and hdhive_url and not allow_open_api_direct:
-            if not hdhive_cookie:
-                flash("Open API 直链解锁已关闭，且未配置 Cookie，无法处理直链。", "error")
-                return redirect(url_for('self_service_public'))
-            effective_use_open_api = False
-            flash("Open API 直链解锁已关闭，本次已改用 Cookie 解析。", "info")
 
         if effective_use_open_api:
             if not hdhive_api_key:
@@ -4521,14 +4443,13 @@ def self_service_public():
 
         title = (request.form.get('title') or '').strip()
         if not title:
-            if not hdhive_url:
-                flash("请填写影片或电视剧名称。", "warning")
-                return redirect(url_for('self_service_public'))
+            flash("请填写影片或剧集名称。", "warning")
+            return redirect(url_for('self_service_public'))
 
         request_type = (request.form.get('type') or '').strip()
-        tmdb_id = (request.form.get('tmdb_id') or '').strip()
         request_year = (request.form.get('year') or '').strip()
-        request_note = (request.form.get('note') or '').strip()
+        tmdb_id = ""
+        request_note = ""
 
         query_parts = [title]
         if request_year:
@@ -4561,9 +4482,11 @@ def self_service_public():
             "open_api_direct_unlock": allow_open_api_direct,
             "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
             "storage_mode": storage_mode,
+            "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
+            "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }
         threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
-        flash("已提交申请，后台处理中。解析结果将发送给管理员。", "success")
+        flash("已提交申请，后台处理中。结果将通过消息通知。", "success")
         return redirect(url_for('self_service_public'))
 
     return render_template(

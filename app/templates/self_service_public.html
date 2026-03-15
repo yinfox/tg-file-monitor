@@ -42,45 +42,41 @@
                         <div class="form-text">管理员设置的公开提交口令。</div>
                     </div>
                     {% endif %}
-                    <div class="mb-3">
-                        <label class="form-label">影巢资源链接（可选）</label>
-                        <input type="text" class="form-control" name="hdhive_url"
-                            placeholder="https://hdhive.com/resource/115/xxxx 或直接填 slug">
-                        <div class="form-text">如果你已找到影巢链接，可直接填，系统将跳过搜索。</div>
-                    </div>
-                    <div class="mb-3">
-                        <label class="form-label">影片/剧集名称</label>
-                        <input type="text" class="form-control" name="title" placeholder="例如：沙丘2 / 绝命毒师">
-                    </div>
-                    <div class="row g-2 mb-3">
-                        <div class="col-md-4">
-                            <label class="form-label">类型</label>
-                            <select class="form-select" name="type">
-                                <option value="">不指定</option>
-                                <option value="电影">电影</option>
-                                <option value="电视剧">电视剧</option>
-                                <option value="综艺">综艺</option>
-                                <option value="动画">动画</option>
-                                <option value="纪录片">纪录片</option>
-                            </select>
+                    <div class="p-3 rounded border border-primary-subtle bg-light mb-3">
+                        <div class="d-flex align-items-center mb-2">
+                            <span class="badge bg-primary me-2">关键项</span>
+                            <span class="small text-muted">请尽量填写完整，命中率更高</span>
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label">TMDB ID（可选）</label>
-                            <input type="text" class="form-control" name="tmdb_id" placeholder="如 550">
+                        <div class="mb-3">
+                            <label class="form-label fw-semibold">影片/剧集名称 <span class="text-danger">*</span></label>
+                            <input type="text" class="form-control form-control-lg" name="title" required
+                                placeholder="例如：沙丘2 / 绝命毒师">
                         </div>
-                        <div class="col-md-4">
-                            <label class="form-label">年份</label>
-                            <input type="text" class="form-control" name="year" placeholder="如 2024">
-                        </div>
-                        <div class="col-md-4">
-                            <label class="form-label">候选数</label>
-                            <input type="text" class="form-control" value="{{ max_results }}" disabled>
+                        <div class="row g-2">
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold">类型</label>
+                                <select class="form-select" name="type">
+                                    <option value="">不指定</option>
+                                    <option value="电影">电影</option>
+                                    <option value="电视剧">电视剧</option>
+                                    <option value="综艺">综艺</option>
+                                    <option value="动画">动画</option>
+                                    <option value="纪录片">纪录片</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold">年份</label>
+                                <input type="text" class="form-control" name="year" placeholder="如 2024">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label">候选数</label>
+                                <input type="text" class="form-control" value="{{ max_results }}" disabled>
+                            </div>
                         </div>
                     </div>
-                    <div class="mb-3">
-                        <label class="form-label">备注</label>
-                        <textarea class="form-control" name="note" rows="3"
-                            placeholder="例如：希望 4K / 国配 / 完整季"></textarea>
+
+                    <div class="alert alert-info small">
+                        提交后若入库成功，将提示“资源已入库，请等待3-5分钟后进入服务器观看”；未找到则提示“资源未找到，请联系管理员”。
                     </div>
 
                     <div class="mb-3">
@@ -88,7 +84,7 @@
                         <div class="fw-semibold">{{ target_display }}</div>
                     </div>
 
-                    <button type="submit" class="btn btn-info w-100"
+                    <button type="submit" class="btn btn-primary btn-lg w-100"
                         {% if not enabled or not public_enabled %}disabled{% endif %}>提交申请</button>
                 </form>
             </div>

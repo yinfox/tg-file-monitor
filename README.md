@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.88-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.89-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.4.88`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.4.89`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.4.88
+y1nf0x/tg-file-monitor:0.4.89
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -363,7 +363,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.88 (2026-03-15) - 当前版本
+### v0.4.89 (2026-03-15) - 当前版本
+- ✅ 自助申请页面精简字段并强化关键项展示
+- ✅ 自助申请结果改为统一提示：入库成功/未找到
+
+### v0.4.88 (2026-03-15)
 - ✅ 修复 Bot 监控启动失败（缩进错误导致 /status 无响应）
 
 ### v0.4.87 (2026-03-15)
