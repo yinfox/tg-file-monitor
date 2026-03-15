@@ -74,6 +74,21 @@ python app/app.py
 docker compose up -d
 ```
 
+Latest image: `y1nf0x/tg-file-monitor:0.4.74`
+
+Upgrade example:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+To pin a version, update `docker-compose.yml` with:
+
+```
+y1nf0x/tg-file-monitor:0.4.74
+```
+
 ## 🖥️ VPS Notes
 
 ### Basic Checks

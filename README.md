@@ -74,6 +74,21 @@ python app/app.py
 docker compose up -d
 ```
 
+当前最新镜像：`y1nf0x/tg-file-monitor:0.4.74`
+
+升级示例：
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
+
+```
+y1nf0x/tg-file-monitor:0.4.74
+```
+
 如果你要写入“另一个容器使用的 `.env` 文件”，请先把该 `.env` 所在宿主机目录挂载到本容器。
 
 当前示例已固定为：
