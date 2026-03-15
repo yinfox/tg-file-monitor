@@ -165,7 +165,40 @@ class Downloader:
             result.append(c)
         return result
 
-    def _extract_threads_mp4_url(self, url: str) -> str:
+    def _build_cookie_header_for_domains(self, cookies_file, domains: list) -> str:
+        if not cookies_file or not os.path.exists(cookies_file):
+            return ''
+        cookie_header = []
+        temp_path = None
+        try:
+            prepared = self._prepare_cookies(cookies_file)
+            temp_path = prepared if prepared != cookies_file else None
+            with open(prepared, 'r', encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith('#'):
+                        continue
+                    parts = line.split('\t')
+                    if len(parts) < 7:
+                        continue
+                    domain = parts[0].lstrip('.').lower()
+                    name = parts[5].strip()
+                    value = parts[6].strip()
+                    if not name:
+                        continue
+                    if any(domain.endswith(d) for d in domains):
+                        cookie_header.append(f"{name}={value}")
+        except Exception as e:
+            self.log(f"读取 Cookies 失败: {e}", "warning")
+        finally:
+            if temp_path and os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
+        return '; '.join(cookie_header)
+
+    def _extract_threads_mp4_url(self, url: str, cookie_header: str = '') -> str:
         candidates = self._build_threads_url_candidates(url)
         for cand in candidates:
             if '/embed' not in cand:
@@ -181,6 +214,8 @@ class Downloader:
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Referer': 'https://www.threads.net/',
             }
+            if cookie_header:
+                headers['Cookie'] = cookie_header
             try:
                 resp = requests.get(embed_url, headers=headers, timeout=20)
             except Exception as e:
@@ -188,9 +223,16 @@ class Downloader:
                 continue
             if resp.status_code != 200 or not resp.text:
                 continue
-            matches = re.findall(r"https?://[^\"'\\s]+\\.mp4[^\"'\\s]*", resp.text)
+            text = resp.text
+            matches = re.findall(r"https?://[^\"'\\s]+\\.mp4[^\"'\\s]*", text)
+            if not matches:
+                matches = re.findall(r"https?:\\\\/\\\\/[^\"'\\s]+\\.mp4[^\"'\\s]*", text)
             if matches:
-                return html.unescape(matches[0])
+                raw = matches[0]
+                cleaned = raw.replace('\\/', '/').replace('\\u0026', '&')
+                return html.unescape(cleaned)
+            self.last_error_message = "Threads 该帖子未检测到视频（可能为图文/无视频或需登录）"
+            self.log("Threads embed 未找到视频直链", "warning")
         return ""
 
     def log(self, message, level="info"):
@@ -589,7 +631,15 @@ class Downloader:
                         },
                     ]
 
-                    mp4_url = self._extract_threads_mp4_url(url)
+                    cookie_header = ''
+                    try:
+                        cookie_header = self._build_cookie_header_for_domains(
+                            cookies_file,
+                            ['threads.net', 'threads.com', 'instagram.com', 'cdninstagram.com'],
+                        )
+                    except Exception:
+                        cookie_header = ''
+                    mp4_url = self._extract_threads_mp4_url(url, cookie_header=cookie_header)
                     if mp4_url:
                         self.log("Threads 解析到直链，准备下载", "info")
                         base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.threads.net/'

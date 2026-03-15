@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.80-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.81-orange.svg)](.)
 
 </div>
 
@@ -74,7 +74,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.4.80`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.4.81`
 
 升级示例：
 
@@ -86,7 +86,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.4.80
+y1nf0x/tg-file-monitor:0.4.81
 ```
 
 如果你要写入“另一个容器使用的 `.env` 文件”，请先把该 `.env` 所在宿主机目录挂载到本容器。
@@ -342,7 +342,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.80 (2026-03-15) - 当前版本
+### v0.4.81 (2026-03-15) - 当前版本
+- ✅ Threads embed 解析增强：支持转义 URL、附带 Cookies
+- ✅ 当帖子无视频时给出明确提示
+
+### v0.4.80 (2026-03-15)
 - ✅ Threads 跳过原生 yt-dlp 解析，直接走 embed 直链
 - ✅ Threads 下载日志不再出现 Unsupported URL 噪音
 
