@@ -391,6 +391,16 @@
                                 <input type="text" class="form-control form-control-sm" id="whitelist_keywords"
                                     name="whitelist_keywords" placeholder="太平年,^重要.*$ (逗号分隔)">
                             </div>
+                            <div class="col-md-12 mb-2">
+                                <div class="form-check">
+                                    <input class="form-check-input" type="checkbox" id="use_tvchannel_filters"
+                                        name="use_tvchannel_filters">
+                                    <label class="form-check-label small" for="use_tvchannel_filters">
+                                        使用 TV 频道正则配置（`tvchannel_filters.json`）
+                                    </label>
+                                </div>
+                                <div class="form-text small">可选：启用后将叠加文件内的黑白名单（支持正则）。</div>
+                            </div>
                             <div class="col-12">
                                 <div class="card border-warning shadow-sm">
                                     <div class="card-header bg-warning-subtle py-1">
@@ -900,6 +910,7 @@
         safeSetValue('auto_click_button_texts', (data.auto_click_button_texts || []).join(', '));
         safeSetValue('auto_click_notify_targets', (data.auto_click_notify_targets || []).join(', '));
         safeSetValue('target_user_ids_restricted', (data.target_user_ids || []).join(', '));
+        safeSetChecked('use_tvchannel_filters', data.use_tvchannel_filters);
 
         safeSetChecked('download_video', data.download_video);
         safeSetChecked('keep_video_message', data.keep_video_message);
@@ -963,6 +974,7 @@
         safeReset('auto_click_button_texts');
         safeReset('auto_click_notify_targets');
         safeReset('target_user_ids_restricted');
+        safeReset('use_tvchannel_filters');
         safeReset('download_video');
         safeReset('keep_video_message');
         safeReset('convert_hdhive');

@@ -50,6 +50,7 @@ LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
 DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
 DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
+TV_CHANNEL_FILTERS_FILE = os.path.join(CONFIG_DIR, 'tvchannel_filters.json')
 DRAMA_RUN_BUSY_MESSAGE = '当前已有追剧任务在运行（可能是自动调度），请稍后重试。'
 MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
 SELF_SERVICE_LOG_FILE = os.path.join(LOG_DIR, 'self_service.log')
@@ -876,6 +877,39 @@ def _clear_drama_calendar_env_values(drama_cfg: dict):
     return len(errors) == 0, success_paths, errors
 
 
+def _clear_drama_calendar_tv_filters():
+    tv_path = TV_CHANNEL_FILTERS_FILE
+    errors = []
+    if not os.path.exists(tv_path):
+        errors.append(f"未找到 {tv_path}")
+        return False, [], errors
+    try:
+        with open(tv_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            data = {}
+    except Exception as e:
+        return False, [], [f"读取失败: {e}"]
+
+    drama = data.get('drama') if isinstance(data.get('drama'), dict) else {}
+    if not isinstance(drama, dict):
+        drama = {}
+    drama['whitelist'] = []
+    data['drama'] = drama
+
+    try:
+        with open(tv_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        return False, [], [f"写入失败: {e}"]
+
+    ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    _append_drama_calendar_log([
+        f'[{ts}] [INFO] [DRAMA] 已清空 tvchannel_filters.json 的 drama 白名单',
+    ])
+    return True, [tv_path], []
+
+
 def _estimate_drama_run_timeout(drama_cfg: dict) -> int:
     sources = _normalize_drama_sources(drama_cfg.get('source'))
     source_count = 7 if 'all' in sources else len(sources)
@@ -1092,8 +1126,6 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         return False, "", f"脚本不存在: {DRAMA_CALENDAR_SCRIPT}"
 
     env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
-    if not env_files_list:
-        return False, "", "请先在追剧日历配置中填写至少一个 .env 路径。"
 
     if not _DRAMA_RUN_LOCK.acquire(blocking=False):
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -1141,6 +1173,7 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         '--title-alias-map', (drama_cfg.get('title_alias_map') or '').strip(),
         '--env-files', ','.join(env_files_list),
         '--env-key', (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip(),
+        '--tv-filters-file', TV_CHANNEL_FILTERS_FILE,
         '--managed-scope', ('source' if bool(drama_cfg.get('managed_scope_source_only', True)) else 'key'),
     ]
 
@@ -1176,7 +1209,7 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
     source = _drama_sources_csv(drama_cfg.get('source'))
     run_label = '预览' if dry_run else '写入'
     _append_drama_calendar_log([
-        f"[{started_at}] [INFO] [DRAMA] 开始执行 ({run_label}) trigger={trigger} source={source} env_files={len(env_files_list)}",
+        f"[{started_at}] [INFO] [DRAMA] 开始执行 ({run_label}) trigger={trigger} source={source} tv_filters={os.path.basename(TV_CHANNEL_FILTERS_FILE)}",
     ])
 
     try:
@@ -3168,6 +3201,7 @@ def manage_config():
             # 获取关键字和监控类型
             blacklist_keywords = [k.strip() for k in request.form.get('blacklist_keywords', '').split(',') if k.strip()]
             whitelist_keywords = [k.strip() for k in request.form.get('whitelist_keywords', '').split(',') if k.strip()]
+            use_tvchannel_filters = request.form.get('use_tvchannel_filters') == 'on'
             auto_click_redpacket = request.form.get('auto_click_redpacket') == 'on'
             auto_click_keywords = [k.strip() for k in request.form.get('auto_click_keywords', '').split(',') if k.strip()]
             auto_click_button_texts = [k.strip() for k in request.form.get('auto_click_button_texts', '').split(',') if k.strip()]
@@ -3220,6 +3254,7 @@ def manage_config():
                             entry['channel_name'] = channel_name
                             entry['blacklist_keywords'] = blacklist_keywords
                             entry['whitelist_keywords'] = whitelist_keywords
+                            entry['use_tvchannel_filters'] = use_tvchannel_filters
                             entry['auto_click_redpacket'] = auto_click_redpacket
                             entry['auto_click_keywords'] = auto_click_keywords
                             entry['auto_click_button_texts'] = auto_click_button_texts
@@ -3255,6 +3290,7 @@ def manage_config():
                         "channel_name": channel_name,
                         "blacklist_keywords": blacklist_keywords,
                         "whitelist_keywords": whitelist_keywords,
+                        "use_tvchannel_filters": use_tvchannel_filters,
                         "auto_click_redpacket": auto_click_redpacket,
                         "auto_click_keywords": auto_click_keywords,
                         "auto_click_button_texts": auto_click_button_texts,
@@ -3790,23 +3826,15 @@ def drama_calendar_settings():
                 )
 
         elif action == 'clear_drama_calendar_env':
-            drama_cfg = config.get('drama_calendar', {})
-            if request.form.get('drama_source') is not None:
-                drama_cfg = _drama_cfg_from_form(drama_cfg)
-                config['drama_calendar'] = drama_cfg
-                save_config(config)
-            ok, success_paths, errors = _clear_drama_calendar_env_values(drama_cfg)
-            env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
+            ok, success_paths, errors = _clear_drama_calendar_tv_filters()
             if ok:
-                flash(f'已清空 {len(success_paths)} 个 .env 中的变量内容：{env_key}', 'success')
-            elif success_paths:
-                flash(f'已清空 {len(success_paths)} 个 .env，但仍有 {len(errors)} 个失败：{env_key}', 'warning')
+                flash('已清空 tvchannel_filters.json 的追剧白名单。', 'success')
             else:
                 flash(f'清空失败：{" | ".join(errors[:3])}', 'error')
 
         return redirect(url_for('drama_calendar_settings'))
 
-    env_edit_sources, env_edit_errors = _build_env_edit_source_view(config.get('drama_calendar', {}))
+    env_edit_sources, env_edit_errors = [], []
     return render_template(
         'drama_calendar.html',
         config=config,

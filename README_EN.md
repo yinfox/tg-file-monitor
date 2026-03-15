@@ -111,7 +111,7 @@ Notes:
 
 ### 📺 Channel Monitor Regex (Built-in Config)
 
-No external `.env` is required. Use the internal config file `config/channel_filters.json` to define global/channel-level allow/deny patterns (regex supported).
+No external `.env` is required. Use the internal config file `config/tvchannel_filters.json` to define global/channel-level allow/deny patterns (regex supported).
 
 Example:
 ```json
@@ -133,6 +133,9 @@ Notes:
 - `global`: applies to all monitored channels
 - `channels`: per-channel rules (key is the channel ID)
 - Blacklist hit skips; if any whitelist exists, message must match
+
+Usage:
+- In "TG collection settings", enable **Use TV channel filters** per channel
 ```
 
 ## 🖥️ VPS Notes
@@ -235,7 +238,7 @@ Try:
 ## 📊 Release History
 
 ### v0.4.90 (2026-03-15) - Current
-- Channel monitor uses built-in `channel_filters.json` (regex allow/deny)
+- Channel monitor uses built-in `tvchannel_filters.json` (regex allow/deny)
 - Drama regex no longer depends on external `.env`
 
 ### v0.4.89 (2026-03-15)

@@ -1456,6 +1456,106 @@ def _format_env_value(value: str, style: str) -> str:
     return f'"{safe}"'
 
 
+def _default_tv_filters() -> Dict[str, Any]:
+    return {
+        "global": {"whitelist": [], "blacklist": []},
+        "drama": {"whitelist": []},
+        "channels": {},
+    }
+
+
+def _load_tv_filters(path: str) -> Dict[str, Any]:
+    if not path:
+        return _default_tv_filters()
+    if not os.path.exists(path):
+        return _default_tv_filters()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return _default_tv_filters()
+    except Exception:
+        return _default_tv_filters()
+
+    if "global" not in data or not isinstance(data.get("global"), dict):
+        data["global"] = {"whitelist": [], "blacklist": []}
+    if "drama" not in data or not isinstance(data.get("drama"), dict):
+        data["drama"] = {"whitelist": []}
+    if "channels" not in data or not isinstance(data.get("channels"), dict):
+        data["channels"] = {}
+    return data
+
+
+def _save_tv_filters(path: str, data: Dict[str, Any]) -> None:
+    if not path:
+        return
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _collect_existing_tv_filter_titles(path: str) -> Set[str]:
+    data = _load_tv_filters(path)
+    drama = data.get("drama") if isinstance(data, dict) else {}
+    whitelist = drama.get("whitelist") if isinstance(drama, dict) else []
+    titles = []
+    for entry in whitelist or []:
+        if not isinstance(entry, str):
+            continue
+        titles.extend(_extract_titles_from_regex_value(entry))
+    norms = set()
+    for t in titles:
+        norm = _normalize_title_for_match(t)
+        if norm:
+            norms.add(norm)
+    return norms
+
+
+def _update_tv_filters_drama_whitelist(
+    path: str,
+    titles: Sequence[str],
+    append_mode: bool,
+    dry_run: bool,
+) -> str:
+    data = _load_tv_filters(path)
+    drama = data.get("drama") if isinstance(data, dict) else {}
+    if not isinstance(drama, dict):
+        drama = {}
+    whitelist = drama.get("whitelist") if isinstance(drama, dict) else []
+    if not isinstance(whitelist, list):
+        whitelist = []
+
+    existing_titles = []
+    kept_entries = []
+    for entry in whitelist:
+        if not isinstance(entry, str):
+            continue
+        extracted = _extract_titles_from_regex_value(entry)
+        if extracted:
+            existing_titles.extend(extracted)
+        else:
+            kept_entries.append(entry)
+
+    if append_mode:
+        combined = list(existing_titles) + list(titles)
+    else:
+        combined = list(titles)
+
+    combined = dedupe_titles_normalized(combined)
+    regex = build_regex_from_titles(combined) if combined else ""
+
+    new_list = list(kept_entries)
+    if regex:
+        new_list.append(regex)
+
+    drama["whitelist"] = new_list
+    data["drama"] = drama
+
+    if not dry_run:
+        _save_tv_filters(path, data)
+    return regex
+
+
 def update_env_content_append(env_content: str, key: str, value: str) -> str:
     lines = env_content.splitlines()
     updated = False
@@ -1729,8 +1829,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--env-files",
-        required=True,
-        help="目标 .env 文件路径，多个用逗号分隔",
+        default="",
+        help="目标 .env 文件路径，多个用逗号分隔（可选，若使用 tv-filters-file 可留空）",
     )
     parser.add_argument(
         "--env-key",
@@ -1741,6 +1841,7 @@ def main() -> int:
     parser.add_argument("--append", action="store_true", help="将结果追加到目标变量（适用于关键词白名单）")
     parser.add_argument("--allow-create-env", action="store_true", help="允许自动创建不存在的 .env 文件（默认禁止）")
     parser.add_argument("--dry-run", action="store_true", help="仅打印结果，不落盘")
+    parser.add_argument("--tv-filters-file", default="", help="将结果写入 tvchannel_filters.json（内部配置文件）")
     args = parser.parse_args()
     try:
         args.source = _normalize_sources(args.source)
@@ -1761,9 +1862,10 @@ def main() -> int:
 
     title_alias_map = _parse_title_alias_map(args.title_alias_map)
 
+    tv_filters_file = (args.tv_filters_file or "").strip()
     env_files = [p.strip() for p in args.env_files.split(",") if p.strip()]
-    if not env_files:
-        print("[ERROR] env-files 不能为空", file=sys.stderr)
+    if not env_files and not tv_filters_file:
+        print("[ERROR] env-files 不能为空（除非指定 --tv-filters-file）", file=sys.stderr)
         return 2
 
     env_keys = _parse_env_keys(args.env_key)
@@ -2290,8 +2392,11 @@ def main() -> int:
         skipped_existing_titles: List[str] = []
         if bool(args.append):
             existing_monitored_norm: Set[str] = set()
-            for env_key in env_keys:
-                existing_monitored_norm |= _collect_existing_monitored_titles(env_files, env_key)
+            if tv_filters_file:
+                existing_monitored_norm = _collect_existing_tv_filter_titles(tv_filters_file)
+            else:
+                for env_key in env_keys:
+                    existing_monitored_norm |= _collect_existing_monitored_titles(env_files, env_key)
             if existing_monitored_norm:
                 for title in titles:
                     norm = _normalize_title_for_match(title)
@@ -2300,7 +2405,7 @@ def main() -> int:
 
         regex = build_regex_from_titles(titles)
 
-        if not args.dry_run:
+        if (not args.dry_run) and (not tv_filters_file):
             for env_key in env_keys:
                 _update_state_source_titles(
                     args.state_file or DEFAULT_STATE_FILE,
@@ -2366,25 +2471,31 @@ def main() -> int:
         if not titles:
             # 有些场景并非抓取失败，而是“全部命中去重/剔除规则后无需更新”。
             if titles_before_append > 0 or skipped_existing_titles or removed_finished_titles:
-                normalized_count = 0
-                if bool(args.append):
-                    for env_path in env_files:
-                        for env_key in env_keys:
-                            changed = normalize_env_regex_file(
-                                env_path,
-                                env_key,
-                                dry_run=args.dry_run,
-                                backup=args.backup,
-                                require_existing=(not bool(args.allow_create_env)),
-                            )
-                            if changed:
-                                normalized_count += 1
-                if normalized_count > 0:
-                    print(f"[INFO] 本次无新增剧名可写入，已规范化 {normalized_count} 个 .env")
+                if tv_filters_file:
+                    print("[INFO] 本次无新增剧名可写入，已跳过 tvchannel_filters.json 更新")
                 else:
-                    print("[INFO] 本次无新增剧名可写入，已跳过 .env 更新")
+                    normalized_count = 0
+                    if bool(args.append):
+                        for env_path in env_files:
+                            for env_key in env_keys:
+                                changed = normalize_env_regex_file(
+                                    env_path,
+                                    env_key,
+                                    dry_run=args.dry_run,
+                                    backup=args.backup,
+                                    require_existing=(not bool(args.allow_create_env)),
+                                )
+                                if changed:
+                                    normalized_count += 1
+                    if normalized_count > 0:
+                        print(f"[INFO] 本次无新增剧名可写入，已规范化 {normalized_count} 个 .env")
+                    else:
+                        print("[INFO] 本次无新增剧名可写入，已跳过 .env 更新")
                 return 0
-            print("[WARN] 未提取到任何剧名，不更新 .env", file=sys.stderr)
+            if tv_filters_file:
+                print("[WARN] 未提取到任何剧名，不更新 tvchannel_filters.json", file=sys.stderr)
+            else:
+                print("[WARN] 未提取到任何剧名，不更新 .env", file=sys.stderr)
             return 1
 
         for t in titles:
@@ -2392,20 +2503,29 @@ def main() -> int:
 
         print(f"[INFO] 生成正则: {regex}")
 
-        for env_path in env_files:
-            for env_key in env_keys:
-                write_env_file(
-                    env_path,
-                    env_key,
-                    regex,
-                    dry_run=args.dry_run,
-                    backup=args.backup,
-                    append_mode=args.append,
-                    source_tag=source_label,
-                    state_file=(args.state_file or DEFAULT_STATE_FILE),
-                    managed_scope=(args.managed_scope or "source"),
-                    require_existing=(not bool(args.allow_create_env)),
-                )
+        if tv_filters_file:
+            _update_tv_filters_drama_whitelist(
+                tv_filters_file,
+                titles,
+                append_mode=bool(args.append),
+                dry_run=bool(args.dry_run),
+            )
+            print(f"[INFO] 已写入 tvchannel_filters.json: {tv_filters_file}")
+        else:
+            for env_path in env_files:
+                for env_key in env_keys:
+                    write_env_file(
+                        env_path,
+                        env_key,
+                        regex,
+                        dry_run=args.dry_run,
+                        backup=args.backup,
+                        append_mode=args.append,
+                        source_tag=source_label,
+                        state_file=(args.state_file or DEFAULT_STATE_FILE),
+                        managed_scope=(args.managed_scope or "source"),
+                        require_existing=(not bool(args.allow_create_env)),
+                    )
 
         return 0
     except requests.RequestException as e:
