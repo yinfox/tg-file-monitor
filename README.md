@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.77-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.78-orange.svg)](.)
 
 </div>
 
@@ -74,7 +74,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.4.74`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.4.78`
 
 升级示例：
 
@@ -86,7 +86,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.4.74
+y1nf0x/tg-file-monitor:0.4.78
 ```
 
 如果你要写入“另一个容器使用的 `.env` 文件”，请先把该 `.env` 所在宿主机目录挂载到本容器。
@@ -342,7 +342,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.77 (2026-03-15) - 当前版本
+### v0.4.78 (2026-03-15) - 当前版本
+- ✅ Threads 通过 embed 页面解析直链（无需 yt-dlp 原生支持）
+- ✅ Threads 直链可达性校验并自动下载
+
+### v0.4.77 (2026-03-15)
 - ✅ Threads 链接在 Bot 侧强制规范化到 /t/ 短链
 - ✅ Threads 解析候选顺序优化（优先 /t/）
 

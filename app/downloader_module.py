@@ -7,7 +7,9 @@ import subprocess
 import shutil
 import time
 import re
+import html
 from urllib.parse import urlparse, urlunparse
+import requests
 from concurrent.futures import ThreadPoolExecutor
 
 # Global logging configuration setup
@@ -144,6 +146,7 @@ class Downloader:
 
         if shortcode:
             candidates.append(f"https://www.threads.net/t/{shortcode}")
+            candidates.append(f"https://www.threads.net/t/{shortcode}/embed")
 
         if normalized:
             candidates.append(normalized)
@@ -159,6 +162,34 @@ class Downloader:
             seen.add(c)
             result.append(c)
         return result
+
+    def _extract_threads_mp4_url(self, url: str) -> str:
+        candidates = self._build_threads_url_candidates(url)
+        for cand in candidates:
+            if '/embed' not in cand:
+                if cand.endswith('/'):
+                    embed_url = cand + 'embed'
+                else:
+                    embed_url = cand + '/embed'
+            else:
+                embed_url = cand
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Referer': 'https://www.threads.net/',
+            }
+            try:
+                resp = requests.get(embed_url, headers=headers, timeout=20)
+            except Exception as e:
+                self.log(f"Threads embed 请求失败: {type(e).__name__}: {e}", "warning")
+                continue
+            if resp.status_code != 200 or not resp.text:
+                continue
+            matches = re.findall(r"https?://[^\"'\\s]+\\.mp4[^\"'\\s]*", resp.text)
+            if matches:
+                return html.unescape(matches[0])
+        return ""
 
     def log(self, message, level="info"):
         """Adds a log message to the buffer."""
@@ -553,6 +584,14 @@ class Downloader:
                             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                         },
                     ]
+
+                    mp4_url = self._extract_threads_mp4_url(url)
+                    if mp4_url:
+                        self.log("Threads 解析到直链，准备下载", "info")
+                        base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.threads.net/'
+                        url = mp4_url
+                        return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
+
                     candidates = self._build_threads_url_candidates(url)
                     last_err = None
                     for cand in candidates:
