@@ -7,6 +7,7 @@ import subprocess
 import shutil
 import time
 import re
+from urllib.parse import urlparse, urlunparse
 from concurrent.futures import ThreadPoolExecutor
 
 # Global logging configuration setup
@@ -106,6 +107,21 @@ class Downloader:
             self.log(f"下载完成: {d['filename']}", "success")
         elif d['status'] == 'error':
              self.log(f"错误: {d}", "error")
+
+    def _normalize_threads_url(self, url: str) -> str:
+        if not url:
+            return url
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return url
+        host = (parsed.netloc or '').lower()
+        if 'threads.com' not in host and 'threads.net' not in host:
+            return url
+        # Use threads.net domain and strip tracking query params.
+        new_netloc = 'www.threads.net'
+        new_path = parsed.path or ''
+        return urlunparse((parsed.scheme or 'https', new_netloc, new_path, '', '', ''))
 
     def log(self, message, level="info"):
         """Adds a log message to the buffer."""
@@ -292,6 +308,11 @@ class Downloader:
             except Exception as e:
                 self.log(f"无法创建目录 {output_dir}: {e}", "error")
                 return None
+
+        normalized_url = self._normalize_threads_url(url or '')
+        if normalized_url and normalized_url != url:
+            self.log(f"Threads 链接已规范化: {url} -> {normalized_url}", "info")
+            url = normalized_url
 
         # Reset per-run state regardless of output_dir existence.
         self.last_error_message = ""

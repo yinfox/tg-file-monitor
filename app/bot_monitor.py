@@ -42,6 +42,8 @@ if not os.path.exists(CONFIG_DIR):
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 TELEGRAM_SESSION_NAME = "bot_session"
 BOT_LOCK_FILE = os.path.join(CONFIG_DIR, 'bot_monitor.lock')
+RECENT_URL_REQUESTS = {}
+RECENT_URL_REQUESTS_TTL_SECONDS = 15
 
 # Load environment variables
 load_dotenv(os.path.join(CONFIG_DIR, '.env'))
@@ -76,6 +78,21 @@ def _is_telegram_url(url: str) -> bool:
         return False
     host = (parsed.netloc or '').lower()
     return host in ("t.me", "telegram.me", "telegram.dog")
+
+
+def _is_recent_url_request(sender_id: int, url: str) -> bool:
+    now = time.time()
+    key = (int(sender_id), url)
+    ts = RECENT_URL_REQUESTS.get(key)
+    if ts and (now - ts) < RECENT_URL_REQUESTS_TTL_SECONDS:
+        return True
+    # cleanup stale entries
+    cutoff = now - RECENT_URL_REQUESTS_TTL_SECONDS
+    for k, v in list(RECENT_URL_REQUESTS.items()):
+        if v < cutoff:
+            RECENT_URL_REQUESTS.pop(k, None)
+    RECENT_URL_REQUESTS[key] = now
+    return False
 
 
 def _extract_bot_id_from_token(bot_token: str) -> Optional[int]:
@@ -1089,6 +1106,8 @@ async def main():
             url = url_match.group(0).rstrip(')>,.;!\"\'')
             if _is_telegram_url(url):
                 await event.reply("⚠️ Telegram 链接不支持下载，已忽略。")
+                return
+            if _is_recent_url_request(sender_id, url):
                 return
             # sender = await event.get_sender() # Might fail if user restricted privacy? just use sender_id
             downloader.log(f"Received URL from {sender_id}: {url}")
