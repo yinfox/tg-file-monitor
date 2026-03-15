@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.75-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.76-orange.svg)](.)
 
 </div>
 
@@ -342,7 +342,11 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
-### v0.4.75 (2026-03-15) - 当前版本
+### v0.4.76 (2026-03-15) - 当前版本
+- ✅ Threads 链接新增备用解析（/t/ 短链），进一步规避 Unsupported URL
+- ✅ yt-dlp 最低版本提升，确保最新站点支持
+
+### v0.4.75 (2026-03-15)
 - ✅ Threads 链接自动规范化（threads.com -> threads.net，移除追踪参数）
 - ✅ Bot 下载链接 15 秒内去重，避免重复回复
 

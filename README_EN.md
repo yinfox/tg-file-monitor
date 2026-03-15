@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.75-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.76-orange.svg)](.)
 
 </div>
 
@@ -188,7 +188,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.75 (2026-03-15) - Current
+### v0.4.76 (2026-03-15) - Current
+- Threads fallback URL support (`/t/` short links) to reduce Unsupported URL errors
+- Bump minimum yt-dlp version for latest site support
+
+### v0.4.75 (2026-03-15)
 - Normalize Threads URLs (threads.com -> threads.net, strip tracking params)
 - Deduplicate bot download replies within 15s for the same user+URL
 

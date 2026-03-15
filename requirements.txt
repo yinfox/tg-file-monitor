@@ -1,7 +1,7 @@
 Telethon
 Flask[async]
 python-dotenv
-yt-dlp
+yt-dlp>=2024.01.01
 nest_asyncio
 emoji
 requests

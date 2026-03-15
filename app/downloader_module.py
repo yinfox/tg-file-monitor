@@ -123,6 +123,42 @@ class Downloader:
         new_path = parsed.path or ''
         return urlunparse((parsed.scheme or 'https', new_netloc, new_path, '', '', ''))
 
+    def _build_threads_url_candidates(self, url: str) -> list:
+        normalized = self._normalize_threads_url(url or '')
+        candidates = []
+        if normalized:
+            candidates.append(normalized)
+        elif url:
+            candidates.append(url)
+
+        try:
+            parsed = urlparse(normalized or url or '')
+            parts = [p for p in (parsed.path or '').split('/') if p]
+        except Exception:
+            parts = []
+
+        shortcode = None
+        if parts:
+            if parts[0] == 't' and len(parts) > 1:
+                shortcode = parts[1]
+            elif 'post' in parts:
+                idx = parts.index('post')
+                if idx + 1 < len(parts):
+                    shortcode = parts[idx + 1]
+
+        if shortcode:
+            candidates.append(f"https://www.threads.net/t/{shortcode}")
+
+        # de-dup while preserving order
+        seen = set()
+        result = []
+        for c in candidates:
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            result.append(c)
+        return result
+
     def log(self, message, level="info"):
         """Adds a log message to the buffer."""
         # 如果是 debug 级别的日志，检查 debug_mode 是否开启
@@ -516,7 +552,22 @@ class Downloader:
                             'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
                         },
                     ]
-                    return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
+                    candidates = self._build_threads_url_candidates(url)
+                    last_err = None
+                    for cand in candidates:
+                        if cand != url:
+                            self.log(f"Threads 备用链接尝试: {cand}", "info")
+                        url = cand
+                        try:
+                            return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
+                        except Exception as e:
+                            last_err = e
+                            if "Unsupported URL" in str(e) and cand != candidates[-1]:
+                                continue
+                            break
+                    if last_err:
+                        raise last_err
+                    return None
 
                 if is_instagram:
                     base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.instagram.com/'
