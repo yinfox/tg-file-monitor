@@ -95,6 +95,32 @@ def _is_recent_url_request(sender_id: int, url: str) -> bool:
     return False
 
 
+def _normalize_threads_url(url: str) -> str:
+    if not url:
+        return url
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return url
+    host = (parsed.netloc or '').lower()
+    if 'threads.com' not in host and 'threads.net' not in host:
+        return url
+    path = parsed.path or ''
+    parts = [p for p in path.split('/') if p]
+    shortcode = None
+    if parts:
+        if parts[0] == 't' and len(parts) > 1:
+            shortcode = parts[1]
+        elif 'post' in parts:
+            idx = parts.index('post')
+            if idx + 1 < len(parts):
+                shortcode = parts[idx + 1]
+    if shortcode:
+        return f"https://www.threads.net/t/{shortcode}"
+    # fallback: keep path but strip query
+    return urlparse(url)._replace(netloc='www.threads.net', query='', fragment='').geturl()
+
+
 def _extract_bot_id_from_token(bot_token: str) -> Optional[int]:
     """Extract bot id prefix from token like '<bot_id>:<secret>' for validation."""
     if not bot_token or ':' not in bot_token:
@@ -1107,6 +1133,11 @@ async def main():
             if _is_telegram_url(url):
                 await event.reply("⚠️ Telegram 链接不支持下载，已忽略。")
                 return
+            if "threads.com" in url or "threads.net" in url:
+                normalized_threads_url = _normalize_threads_url(url)
+                if normalized_threads_url != url:
+                    downloader.log(f"Threads 链接已规范化: {url} -> {normalized_threads_url}", "info")
+                    url = normalized_threads_url
             if _is_recent_url_request(sender_id, url):
                 return
             # sender = await event.get_sender() # Might fail if user restricted privacy? just use sender_id

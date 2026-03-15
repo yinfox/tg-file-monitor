@@ -126,10 +126,6 @@ class Downloader:
     def _build_threads_url_candidates(self, url: str) -> list:
         normalized = self._normalize_threads_url(url or '')
         candidates = []
-        if normalized:
-            candidates.append(normalized)
-        elif url:
-            candidates.append(url)
 
         try:
             parsed = urlparse(normalized or url or '')
@@ -148,6 +144,11 @@ class Downloader:
 
         if shortcode:
             candidates.append(f"https://www.threads.net/t/{shortcode}")
+
+        if normalized:
+            candidates.append(normalized)
+        elif url:
+            candidates.append(url)
 
         # de-dup while preserving order
         seen = set()

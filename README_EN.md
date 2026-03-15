@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.76-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.77-orange.svg)](.)
 
 </div>
 
@@ -188,7 +188,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.76 (2026-03-15) - Current
+### v0.4.77 (2026-03-15) - Current
+- Force Threads URLs to `/t/` short links in bot flow
+- Prefer `/t/` candidates when resolving Threads URLs
+
+### v0.4.76 (2026-03-15)
 - Threads fallback URL support (`/t/` short links) to reduce Unsupported URL errors
 - Bump minimum yt-dlp version for latest site support
 
