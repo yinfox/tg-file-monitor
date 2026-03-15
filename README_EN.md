@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.78-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.4.79-orange.svg)](.)
 
 </div>
 
@@ -74,7 +74,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.4.78`
+Latest image: `y1nf0x/tg-file-monitor:0.4.79`
 
 Upgrade example:
 
@@ -86,7 +86,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.4.78
+y1nf0x/tg-file-monitor:0.4.79
 ```
 
 ## 🖥️ VPS Notes
@@ -188,7 +188,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.78 (2026-03-15) - Current
+### v0.4.79 (2026-03-15) - Current
+- Treat Threads direct mp4 as streaming-compatible to avoid failed transcode
+- Tag Threads source in download metadata for upload flow
+
+### v0.4.78 (2026-03-15)
 - Extract Threads direct mp4 from embed page (works without native yt-dlp support)
 - Validate direct video URL before download
 

@@ -69,6 +69,8 @@ class Downloader:
         self.ffmpeg_path = None
         self.ffprobe_path = None
         self.last_download_metadata = {}
+        self._source_platform_override = None
+        self._assume_streaming_compatible = False
 
     def _ensure_ffmpeg_tools(self):
         import shutil
@@ -386,6 +388,8 @@ class Downloader:
         self.last_error_message = ""
         self.js_runtime_missing = False
         self.last_cookies_supplied = False
+        self._source_platform_override = None
+        self._assume_streaming_compatible = False
         
         ffmpeg_path, ffprobe_path = self._ensure_ffmpeg_tools()
         if ffmpeg_path:
@@ -590,6 +594,8 @@ class Downloader:
                         self.log("Threads 解析到直链，准备下载", "info")
                         base_ydl_opts.setdefault('http_headers', {})['Referer'] = 'https://www.threads.net/'
                         url = mp4_url
+                        self._source_platform_override = 'threads'
+                        self._assume_streaming_compatible = True
                         return _run_non_youtube_retry(threads_attempt_headers, 'Threads')
 
                     candidates = self._build_threads_url_candidates(url)
@@ -728,6 +734,10 @@ class Downloader:
             pass
 
         self.last_download_metadata = self._extract_download_metadata(info)
+        if self._source_platform_override:
+            self.last_download_metadata['source_platform'] = self._source_platform_override
+        if self._assume_streaming_compatible:
+            self.last_download_metadata['assume_streaming_compatible'] = True
 
         filename = ydl.prepare_filename(info)
         if os.path.exists(filename):

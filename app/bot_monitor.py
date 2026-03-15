@@ -1217,20 +1217,25 @@ async def main():
                     False,
                 )
                 download_elapsed = time.perf_counter() - download_started_at
-                
+
                 if filename and os.path.exists(filename):
                     original_download_path = filename
                     original_probe = None
                     original_streaming_compatible = False
+                    download_meta = downloader.get_last_download_metadata()
                     try:
                         original_probe = downloader._probe_media_streams(original_download_path)
                         original_streaming_compatible = is_streaming_compatible_media(original_probe)
                     except Exception:
                         original_probe = None
                         original_streaming_compatible = False
+                    if (not original_streaming_compatible) and download_meta.get('assume_streaming_compatible'):
+                        original_streaming_compatible = True
+                        downloader.log("Threads 视频标记为兼容流媒体，跳过转码判断。", "info")
 
                     compat_elapsed = 0.0
                     transcoded_for_upload = False
+                    force_document_fallback = False
                     part_size_kb = 512
                     max_upload_parts = 4000
                     max_upload_bytes = part_size_kb * 1024 * max_upload_parts
@@ -1258,16 +1263,16 @@ async def main():
                         # In transcode mode, if original media is not stream-compatible but transcode did not produce
                         # a converted file, do not continue with a misleading "upload success" flow.
                         if (not original_streaming_compatible) and (not transcoded_for_upload):
+                            force_document_fallback = True
                             await msg.edit(
-                                "❌ **上传已中止（转码失败）**\n"
+                                "⚠️ **转码失败，改用文件方式上传**\n"
                                 "当前源视频不兼容 Telegram 流媒体播放，且兼容转码未成功。\n"
-                                "请重试，或在下载设置中切换为 `上传: 原码直传`。"
+                                "已切换为文件上传（不保证流媒体播放）。"
                             )
                             downloader.log(
-                                f"转码模式下中止上传: 源文件不兼容(vcodec={(original_probe or {}).get('vcodec')}, pix_fmt={(original_probe or {}).get('pix_fmt')}) 且转码失败。",
+                                f"转码失败，改为文件上传: 源文件不兼容(vcodec={(original_probe or {}).get('vcodec')}, pix_fmt={(original_probe or {}).get('pix_fmt')})。",
                                 "warning",
                             )
-                            return
 
                     try:
                         file_size_bytes = os.path.getsize(filename)
@@ -1297,7 +1302,7 @@ async def main():
                         )
                         return
 
-                    download_meta = downloader.get_last_download_metadata()
+                    download_meta = download_meta if 'download_meta' in locals() else downloader.get_last_download_metadata()
                     source_url = (download_meta.get('source_url') or url or '').strip()
                     source_title = (download_meta.get('title') or '').strip()
                     source_resolution = (download_meta.get('resolution') or '').strip()
@@ -1358,6 +1363,11 @@ async def main():
                                 upload_attributes = None
                     except Exception as attr_err:
                         downloader.log(f"Upload video attribute probe failed, fallback to auto attributes: {attr_err}", "warning")
+
+                    if force_document_fallback:
+                        force_document_upload = True
+                        supports_streaming_upload = False
+                        upload_attributes = None
 
                     if force_document_upload and not force_document_mode:
                         downloader.log(
