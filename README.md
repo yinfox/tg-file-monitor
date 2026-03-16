@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.04`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.05`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.04
+y1nf0x/tg-file-monitor:0.5.05
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -557,6 +557,9 @@ Web 界面 → 配置 → 代理配置
 ### v0.4.30 (2026-03-10)
 - ✅ 修复下载器运行时报错：补充 `shutil` 导入，解决 `name 'shutil' is not defined`
 - ✅ 已通过 `py_compile` 快速语法校验
+
+### v0.5.05 (2026-03-16)
+- ✅ 自助观影资源选择优化：官组优先、积分从低到高
 
 ### v0.5.04 (2026-03-16)
 - ✅ 红包极速点击模式：优先按钮文本匹配，减少上下文请求

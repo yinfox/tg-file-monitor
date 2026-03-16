@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.04"
+VERSION = "0.5.05"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -2609,11 +2609,67 @@ def _sort_hdhive_resources(resources: list) -> list:
         official = bool(item.get("is_official", False))
         return (
             0 if unlocked else 1,
-            points if points is not None else 999999,
             0 if official else 1,
+            points if points is not None else 999999,
         )
 
     return sorted(resources, key=_score)
+
+
+def _prioritize_hdhive_candidates(
+    candidates: list,
+    *,
+    base_url: str,
+    open_api_key: str = "",
+    cookie: str = "",
+    max_items: int = 10,
+) -> list:
+    if not candidates:
+        return []
+    seen = set()
+    uniq = []
+    for item in candidates:
+        if item in seen:
+            continue
+        seen.add(item)
+        uniq.append(item)
+    candidates = uniq
+
+    scored = []
+    limit = min(len(candidates), max(1, int(max_items)))
+    for idx, cand in enumerate(candidates):
+        official = None
+        unlocked = None
+        points = None
+        if idx < limit:
+            slug = _normalize_hdhive_test_slug(cand)
+            if slug:
+                if open_api_key:
+                    try:
+                        detail = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
+                    except Exception:
+                        detail = None
+                    data = detail.get("data") if isinstance(detail, dict) else None
+                    if isinstance(data, dict):
+                        official = bool(data.get("is_official", False))
+                        unlocked = bool(data.get("already_owned") or data.get("is_unlocked"))
+                        points = _hdhive_open_api_extract_unlock_points(data)
+                if points is None and cookie:
+                    try:
+                        points = _hdhive_cookie_query_unlock_points(slug, cookie)
+                    except Exception:
+                        points = None
+        scored.append((idx, cand, official, unlocked, points))
+
+    def _score(item):
+        idx, _cand, official, unlocked, points = item
+        official_rank = 0 if official is True else (1 if official is False else 2)
+        unlocked_rank = 0 if unlocked is True else (1 if unlocked is False else 2)
+        points_rank = points if isinstance(points, int) else 999999
+        return (unlocked_rank, official_rank, points_rank, idx)
+
+    scored.sort(key=_score)
+    return [item[1] for item in scored]
 
 
 def _pick_hdhive_resource(resources: list, threshold: int) -> dict:
@@ -3618,6 +3674,14 @@ def _run_self_service_request(payload: dict) -> None:
             candidates = _apply_dolby_preference_to_urls(candidates)
             if dolby_preference == "exclude" and original_count > 0 and not candidates:
                 dolby_filtered_empty = True
+        if candidates:
+            candidates = _prioritize_hdhive_candidates(
+                candidates,
+                base_url=base_url,
+                open_api_key=open_api_key,
+                cookie=hdhive_cookie,
+                max_items=max_results,
+            )
     if not candidates:
         detail = _build_self_service_detail([
             f"片名: {title}" if title else "",

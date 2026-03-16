@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.04`
+Latest image: `y1nf0x/tg-file-monitor:0.5.05`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.04
+y1nf0x/tg-file-monitor:0.5.05
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,10 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.04 (2026-03-16) - Current
+### v0.5.05 (2026-03-16) - Current
+- Self-service resource selection: prefer official items, then lower points
+
+### v0.5.04 (2026-03-16)
 - Fast red packet click mode: prefer button text and skip context fetch
 - Optional "skip follow-up processing" after click for maximum speed
 - HDHive cookie test/monitoring: unlock-points fallback, force cookie test, sync test result to status
