@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.4.90`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.04`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.4.90
+y1nf0x/tg-file-monitor:0.5.04
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -557,6 +557,13 @@ Web 界面 → 配置 → 代理配置
 ### v0.4.30 (2026-03-10)
 - ✅ 修复下载器运行时报错：补充 `shutil` 导入，解决 `name 'shutil' is not defined`
 - ✅ 已通过 `py_compile` 快速语法校验
+
+### v0.5.04 (2026-03-16)
+- ✅ 红包极速点击模式：优先按钮文本匹配，减少上下文请求
+- ✅ 支持“点击后跳过后续处理”加速
+- ✅ HDHive Cookie 测试/监测优化：积分解析兜底、强制 Cookie 测试、测试结果同步到状态
+- ✅ 自助观影记录优化：右侧显示、默认折叠详情、展示条数限制
+- ✅ 追剧调度日志仅保留最近一次
 
 ### v0.4.29 (2026-03-10)
 - ✅ 修复下载页保存设置交互：按钮文案与状态统一为“保存下载设置（含画质）”

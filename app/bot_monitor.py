@@ -46,6 +46,7 @@ if not os.path.exists(CONFIG_DIR):
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 TELEGRAM_SESSION_NAME = "bot_session"
 BOT_LOCK_FILE = os.path.join(CONFIG_DIR, 'bot_monitor.lock')
+MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
 RECENT_URL_REQUESTS = {}
 RECENT_URL_REQUESTS_TTL_SECONDS = 15
 PENDING_115_SHARE = {}
@@ -75,6 +76,53 @@ def load_config():
     except Exception as e:
         logger.error(f"Failed to load config: {e}")
         return {}
+
+
+def _should_send_queue_via_bot(cfg: dict) -> bool:
+    try:
+        mode = str(cfg.get('self_service_notify_sender', 'telegram_monitor')).lower()
+    except Exception:
+        mode = 'telegram_monitor'
+    return mode in ('bot_monitor', 'bot')
+
+
+async def message_queue_loop(client):
+    """Background loop to send pending messages from app.py"""
+    downloader.log("消息发送队列轮询已启动。", "info")
+    while True:
+        try:
+            cfg = load_config()
+            if not _should_send_queue_via_bot(cfg):
+                await asyncio.sleep(3)
+                continue
+
+            if os.path.exists(MESSAGE_QUEUE_FILE):
+                pending = []
+                try:
+                    with open(MESSAGE_QUEUE_FILE, 'r+', encoding='utf-8') as f:
+                        content = f.read().strip()
+                        if content:
+                            pending = json.loads(content)
+                            f.seek(0)
+                            f.truncate()
+                except Exception as e:
+                    downloader.log(f"读取消息队列失败: {e}", "warning")
+
+                if pending:
+                    for msg in pending:
+                        chat_id = msg.get('chat_id')
+                        text = msg.get('text')
+                        if chat_id and text:
+                            try:
+                                downloader.log(f"发送队列消息到 {chat_id}...", "info")
+                                await client.send_message(chat_id, text)
+                            except Exception as e:
+                                downloader.log(f"发送队列消息失败: {e}", "warning")
+
+            await asyncio.sleep(2)
+        except Exception as e:
+            downloader.log(f"消息队列循环异常: {e}", "warning")
+            await asyncio.sleep(5)
 
 
 def _token_fingerprint(token: str) -> str:
@@ -1071,6 +1119,15 @@ async def main():
         if text.startswith('/'):
             return
 
+        # Ignore self-service notifications pushed by app.py message queue
+        if text.startswith((
+            "📩 自助观影申请已提交",
+            "✅ 资源已入库",
+            "⚠️ 已解析到资源链接",
+            "❌ 资源未找到",
+        )):
+            return
+
         # Ignore auto-click notifications to avoid triggering downloader
         if text.startswith("已自动点击红包按钮"):
             return
@@ -1861,6 +1918,7 @@ async def main():
         downloader.log(f"Failed to set bot commands: {e}", "error")
 
     downloader.log("Bot is running...")
+    asyncio.create_task(message_queue_loop(client))
     await client.run_until_disconnected()
 
 if __name__ == '__main__':

@@ -77,7 +77,7 @@
     <script>
         // Auto-dismiss flash alerts
         setTimeout(() => {
-            const alerts = document.querySelectorAll('.alert');
+            const alerts = document.querySelectorAll('.alert.alert-dismissible');
             alerts.forEach(alert => {
                 try {
                     const bsAlert = bootstrap.Alert.getOrCreateInstance(alert);

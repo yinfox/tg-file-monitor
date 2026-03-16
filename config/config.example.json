@@ -33,6 +33,14 @@
   "hdhive_base_url": "https://hdhive.com",
   "hdhive_open_api_key": "",
   "hdhive_open_api_direct_unlock": false,
+  "hdhive_cookie_test_resource": "",
+  "hdhive_cookie_monitor": {
+    "enabled": false,
+    "interval_minutes": 60,
+    "notify_user_ids": "",
+    "on_invalid": "notify",
+    "force_cookie_test": true
+  },
   "restricted_channels": [],
   "proxy": {},
   "115_cookie": "",

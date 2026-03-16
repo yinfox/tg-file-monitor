@@ -8,6 +8,7 @@ import sqlite3
 import re
 import codecs
 import shutil
+from functools import lru_cache
 from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
@@ -926,6 +927,32 @@ def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
     return _hdhive_open_api_request("POST", url, api_key, json_body={"slug": slug})
 
 
+def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> dict:
+    api_base = base_url.rstrip("/") + "/api/open"
+    url = f"{api_base}/resources/{slug}"
+    return _hdhive_open_api_request("GET", url, api_key)
+
+
+def _hdhive_open_api_extract_unlock_points(data: dict) -> Optional[int]:
+    if not isinstance(data, dict):
+        return None
+    for key in ("unlock_points", "unlockPoints", "points", "unlock_point", "unlockPoint"):
+        if key in data:
+            try:
+                return int(data.get(key))
+            except Exception:
+                return None
+    unlock_info = data.get("unlock") if isinstance(data.get("unlock"), dict) else None
+    if unlock_info:
+        for key in ("points", "unlock_points", "unlockPoints"):
+            if key in unlock_info:
+                try:
+                    return int(unlock_info.get(key))
+                except Exception:
+                    return None
+    return None
+
+
 def _build_hdhive_full_url(data: dict) -> Optional[str]:
     if not isinstance(data, dict):
         return None
@@ -1490,32 +1517,62 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
     except Exception:
         allow_open_api_direct = False
     if open_api_key and allow_open_api_direct:
-        resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
-        if isinstance(resp, dict) and resp.get("success") is True:
-            data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
-            real = _build_hdhive_full_url(data)
-            already_owned = bool(data.get("already_owned", False)) if isinstance(data, dict) else False
-            msg = str(resp.get("message") or "解锁成功")
-            if real:
-                if already_owned:
-                    return real, "Open API：已拥有该资源"
-                return real, f"Open API：{msg}"
-            open_api_note = f"Open API：{msg}，但未返回链接"
+        threshold = 0
+        try:
+            threshold = int((current_config or {}).get('hdhive_auto_unlock_points_threshold', 0) or 0)  # type: ignore[name-defined]
+        except Exception:
+            threshold = 0
+        skip_open_api_unlock = False
+        detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
+        detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
+        unlock_points = None
+        already_owned = False
+        if isinstance(detail_data, dict):
+            real = _build_hdhive_full_url(detail_data)
+            already_owned = bool(detail_data.get("already_owned") or detail_data.get("is_unlocked"))
+            if real and already_owned:
+                return real, "Open API：已拥有该资源"
+            unlock_points = _hdhive_open_api_extract_unlock_points(detail_data)
         else:
-            code = str((resp or {}).get("code") or "")
-            msg = str((resp or {}).get("message") or (resp or {}).get("description") or "解锁失败")
-            if code.upper() == "INSUFFICIENT_POINTS" or code == "402":
-                return None, f"Open API：积分不足（{msg}）"
-            if code == "404":
-                return None, f"Open API：资源不存在（{msg}）"
-            if code == "400":
-                return None, f"Open API：资源参数无效（{msg}）"
-            if code == "401":
-                open_api_note = f"Open API：认证失败（{msg}）"
-            elif code == "NETWORK_ERROR":
-                open_api_note = f"Open API：网络错误（{msg}）"
+            open_api_note = "Open API：未获取积分信息，改用 Cookie 判定"
+            skip_open_api_unlock = True
+        if not already_owned:
+            if unlock_points is None:
+                open_api_note = f"Open API：未获取积分信息，已跳过解锁（阈值 {threshold}）"
+                skip_open_api_unlock = True
+            elif unlock_points > 0 and unlock_points > threshold:
+                open_api_note = f"Open API：需要 {unlock_points} 积分 > 阈值 {threshold}，已跳过解锁"
+                skip_open_api_unlock = True
+        if skip_open_api_unlock:
+            # fallback to cookie-based resolve below
+            pass
+        else:
+            resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+            if isinstance(resp, dict) and resp.get("success") is True:
+                data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+                real = _build_hdhive_full_url(data)
+                already_owned = bool(data.get("already_owned", False)) if isinstance(data, dict) else False
+                msg = str(resp.get("message") or "解锁成功")
+                if real:
+                    if already_owned:
+                        return real, "Open API：已拥有该资源"
+                    return real, f"Open API：{msg}"
+                open_api_note = f"Open API：{msg}，但未返回链接"
             else:
-                open_api_note = f"Open API：解锁失败（{msg}）"
+                code = str((resp or {}).get("code") or "")
+                msg = str((resp or {}).get("message") or (resp or {}).get("description") or "解锁失败")
+                if code.upper() == "INSUFFICIENT_POINTS" or code == "402":
+                    return None, f"Open API：积分不足（{msg}）"
+                if code == "404":
+                    return None, f"Open API：资源不存在（{msg}）"
+                if code == "400":
+                    return None, f"Open API：资源参数无效（{msg}）"
+                if code == "401":
+                    open_api_note = f"Open API：认证失败（{msg}）"
+                elif code == "NETWORK_ERROR":
+                    open_api_note = f"Open API：网络错误（{msg}）"
+                else:
+                    open_api_note = f"Open API：解锁失败（{msg}）"
     elif open_api_key and not allow_open_api_direct:
         open_api_note = "Open API 直链解锁已关闭"
 
@@ -1716,7 +1773,11 @@ async def convert_message_hdhive_links(msg) -> Tuple[bool, str]:
             else:
                 summary_lines.append(f"✅ 真实链接（{note}）：{real}")
         else:
-            summary_lines.append(f"⚠️ 未解析（{note}）：{hit.hdhive_url}")
+            # Avoid repeating the original URL if it already exists in the message text.
+            if hit.hdhive_url and hit.hdhive_url in new_text:
+                summary_lines.append(f"⚠️ 未解析（{note}）")
+            else:
+                summary_lines.append(f"⚠️ 未解析（{note}）：{hit.hdhive_url}")
 
     summary_lines = list(dict.fromkeys(summary_lines))
     if summary_lines:
@@ -1729,6 +1790,14 @@ async def message_queue_loop():
     log_message("消息发送队列轮询已启动。")
     while True:
         try:
+            try:
+                sender_mode = str((current_config or {}).get('self_service_notify_sender', 'telegram_monitor')).lower()
+            except Exception:
+                sender_mode = 'telegram_monitor'
+            if sender_mode not in ('telegram_monitor', 'userbot', 'telegram', 'tg'):
+                await asyncio.sleep(3)
+                continue
+
             if os.path.exists(MESSAGE_QUEUE_FILE):
                 pending = []
                 # Use a lock-free approach for simplicity, but we should be careful
@@ -2066,25 +2135,36 @@ def sanitize_filename(text, limit=60):
         
     return text.strip()
 
-def match_keyword(pattern, text):
+@lru_cache(maxsize=1024)
+def _compile_keyword_regex(pattern_str: str):
+    try:
+        return re.compile(pattern_str, re.IGNORECASE | re.DOTALL)
+    except Exception:
+        return None
+
+
+def match_keyword(pattern, text, text_lower: Optional[str] = None):
     """Checks if a pattern (regex or string) matches the text."""
     if not pattern:
         return False
-    if not text:
+    if text is None:
         text = ""  # Ensure text is at least an empty string
-        
+
     pattern_str = str(pattern).strip()
+    if not pattern_str:
+        return False
     text_str = str(text)
+    if text_lower is None:
+        text_lower = text_str.lower()
 
     try:
-        # 1. 优先尝试完全匹配字符串（去空格）
-        if pattern_str.lower() in text_str.lower():
+        # 1. 优先尝试完全匹配字符串（忽略大小写）
+        if pattern_str.lower() in text_lower:
             return True
-            
+
         # 2. 尝试作为正则表达式匹配
-        # 注意：如果 pattern 本身不是合法的正则，re.search 会抛出异常进入 except
-        import re
-        if re.search(pattern_str, text_str, re.IGNORECASE | re.DOTALL):
+        regex = _compile_keyword_regex(pattern_str)
+        if regex and regex.search(text_str):
             return True
     except Exception:
         # 如果正则解析失败，上面已经做了字符串包含检查，这里直接返回 False
@@ -2185,53 +2265,84 @@ def _build_message_link(event, msg) -> str:
     return ''
 
 
-async def _maybe_auto_click_buttons(event, msg, restricted_entry: dict, message_text_for_filter: str) -> None:
+async def _maybe_auto_click_buttons(
+    event,
+    msg,
+    restricted_entry: dict,
+    message_text_for_filter: str,
+    *,
+    fast_mode: bool = False,
+) -> bool:
     rules = _get_auto_click_rules(restricted_entry)
     keywords = rules.get('keywords') or []
-    if not keywords:
-        return
+    button_texts = rules.get('button_texts') or []
+    if not keywords and not button_texts:
+        return False
 
     # Only handle incoming messages
     if getattr(event, 'out', False):
-        return
+        return False
 
-    if not message_text_for_filter:
-        return
+    if not fast_mode:
+        if not message_text_for_filter:
+            return False
 
-    matched = False
-    for keyword in keywords:
-        if match_keyword(keyword, message_text_for_filter):
-            matched = True
-            break
-    if not matched:
-        return
+        matched = False
+        message_text_lower = message_text_for_filter.lower()
+        for keyword in keywords:
+            if match_keyword(keyword, message_text_for_filter, message_text_lower):
+                matched = True
+                break
+        if not matched:
+            return False
 
     chat_id = getattr(event, 'chat_id', None)
     msg_id = getattr(msg, 'id', None)
     if chat_id is None or msg_id is None:
-        return
+        return False
 
     if _auto_click_recently(chat_id, msg_id):
         debug_log(f" 自动点击已触发过，跳过: ch={chat_id} msg={msg_id}")
-        return
+        return False
 
-    button_texts = rules.get('button_texts') or []
     candidate = None
-    for r_idx, c_idx, btn in _iter_message_buttons(msg):
-        btn_text = getattr(btn, 'text', None) or ''
+
+    if fast_mode:
+        message_text_lower = (message_text_for_filter or '').lower()
         if button_texts:
-            for bt in button_texts:
-                if match_keyword(bt, btn_text):
-                    candidate = (r_idx, c_idx, btn_text)
+            for r_idx, c_idx, btn in _iter_message_buttons(msg):
+                btn_text = getattr(btn, 'text', None) or ''
+                for bt in button_texts:
+                    if match_keyword(bt, btn_text):
+                        candidate = (r_idx, c_idx, btn_text)
+                        break
+                if candidate:
                     break
-        else:
-            candidate = (r_idx, c_idx, btn_text)
-        if candidate:
-            break
+
+        if not candidate and keywords and message_text_for_filter:
+            for keyword in keywords:
+                if match_keyword(keyword, message_text_for_filter, message_text_lower):
+                    for r_idx, c_idx, btn in _iter_message_buttons(msg):
+                        btn_text = getattr(btn, 'text', None) or ''
+                        candidate = (r_idx, c_idx, btn_text)
+                        break
+                    break
+    else:
+        for r_idx, c_idx, btn in _iter_message_buttons(msg):
+            btn_text = getattr(btn, 'text', None) or ''
+            if button_texts:
+                for bt in button_texts:
+                    if match_keyword(bt, btn_text):
+                        candidate = (r_idx, c_idx, btn_text)
+                        break
+            else:
+                candidate = (r_idx, c_idx, btn_text)
+            if candidate:
+                break
 
     if not candidate:
         debug_log(f" 自动点击未找到按钮: ch={chat_id} msg={msg_id}")
-        return
+        return False
 
     try:
         r_idx, c_idx, btn_text = candidate
@@ -2261,8 +2372,10 @@ async def _maybe_auto_click_buttons(event, msg, restricted_entry: dict, message_
                     await client.send_message(target, base_text)
                 except Exception as e:
                     log_message(f"自动点击通知失败: target={target} err={e}")
+        return True
     except Exception as e:
         log_message(f"自动点击失败: ch={chat_id} msg={msg_id} err={e}")
+    return False
 
 # --- Message Handler ---
 async def new_message_handler(event):
@@ -2282,8 +2395,10 @@ async def new_message_handler(event):
     # --- 全局黑名单检查 ---
     global_blacklist = current_config.get('global_blacklist_keywords', [])
     if global_blacklist and msg.message:
+        msg_text = msg.message
+        msg_text_lower = msg_text.lower()
         for keyword in global_blacklist:
-            if match_keyword(keyword, msg.message):
+            if match_keyword(keyword, msg_text, msg_text_lower):
                 debug_log(f" 触发全局黑名单关键词 '{keyword}'，跳过消息 {msg.id}")
                 return
 
@@ -2320,6 +2435,23 @@ async def new_message_handler(event):
             media_trace = _build_media_trace(msg)
 
             message_text_for_filter = msg.message or ""
+            auto_click_fast = bool(restricted_entry.get('auto_click_fast', False))
+            auto_click_fast_skip = bool(restricted_entry.get('auto_click_fast_skip_processing', False))
+            auto_click_clicked = False
+            if auto_click_fast:
+                try:
+                    auto_click_clicked = await _maybe_auto_click_buttons(
+                        event,
+                        msg,
+                        restricted_entry,
+                        message_text_for_filter,
+                        fast_mode=True,
+                    )
+                except Exception as e:
+                    debug_log(f" 自动点击(极速)处理异常: {e}")
+                if auto_click_clicked and auto_click_fast_skip:
+                    return
+
             if not message_text_for_filter and msg.grouped_id:
                 try:
                     nearby_msgs = await client.get_messages(
@@ -2336,57 +2468,71 @@ async def new_message_handler(event):
                 except Exception:
                     pass
 
+            force_forward_all = bool(restricted_entry.get('force_forward_all', False))
+            message_text_lower = message_text_for_filter.lower() if message_text_for_filter else ""
+
             # --- Auto Click Buttons (e.g., 红包) ---
             try:
                 await _maybe_auto_click_buttons(event, msg, restricted_entry, message_text_for_filter)
             except Exception as e:
                 debug_log(f" 自动点击处理异常: {e}")
 
-            use_tv_filters = bool(restricted_entry.get('use_tvchannel_filters'))
-            extra_blacklist = []
-            extra_whitelist = []
-            if use_tv_filters:
-                channel_filters_cfg = load_channel_filters()
-                channel_filters = channel_filters_cfg.get('channels', {}) if isinstance(channel_filters_cfg, dict) else {}
-                channel_rule = channel_filters.get(str(restricted_channel_id), {}) if isinstance(channel_filters, dict) else {}
-                global_rule = channel_filters_cfg.get('global', {}) if isinstance(channel_filters_cfg, dict) else {}
-                drama_rule = channel_filters_cfg.get('drama', {}) if isinstance(channel_filters_cfg, dict) else {}
+            if not force_forward_all:
+                use_tv_filters = bool(restricted_entry.get('use_tvchannel_filters'))
+                extra_blacklist = []
+                extra_whitelist = []
+                tv_drama_whitelist = []
+                if use_tv_filters:
+                    channel_filters_cfg = load_channel_filters()
+                    channel_filters = channel_filters_cfg.get('channels', {}) if isinstance(channel_filters_cfg, dict) else {}
+                    channel_rule = channel_filters.get(str(restricted_channel_id), {}) if isinstance(channel_filters, dict) else {}
+                    global_rule = channel_filters_cfg.get('global', {}) if isinstance(channel_filters_cfg, dict) else {}
+                    drama_rule = channel_filters_cfg.get('drama', {}) if isinstance(channel_filters_cfg, dict) else {}
 
-                extra_blacklist = _normalize_keyword_list(global_rule.get('blacklist')) + _normalize_keyword_list(channel_rule.get('blacklist'))
-                extra_whitelist = (
-                    _normalize_keyword_list(global_rule.get('whitelist'))
-                    + _normalize_keyword_list(channel_rule.get('whitelist'))
-                    + _normalize_keyword_list(drama_rule.get('whitelist'))
-                )
+                    extra_blacklist = _normalize_keyword_list(global_rule.get('blacklist')) + _normalize_keyword_list(channel_rule.get('blacklist'))
+                    extra_whitelist = (
+                        _normalize_keyword_list(global_rule.get('whitelist'))
+                        + _normalize_keyword_list(channel_rule.get('whitelist'))
+                        + _normalize_keyword_list(drama_rule.get('whitelist'))
+                    )
+                    tv_drama_whitelist = _normalize_keyword_list(drama_rule.get('whitelist'))
 
-            # --- Blacklist Check ---
-            blacklist = _normalize_keyword_list(restricted_entry.get('blacklist_keywords')) + extra_blacklist
-            if blacklist and message_text_for_filter:
-                for keyword in blacklist:
-                    if match_keyword(keyword, message_text_for_filter):
+                # --- Blacklist Check ---
+                blacklist = _normalize_keyword_list(restricted_entry.get('blacklist_keywords')) + extra_blacklist
+                if blacklist and message_text_for_filter:
+                    for keyword in blacklist:
+                        if match_keyword(keyword, message_text_for_filter, message_text_lower):
+                            if getattr(msg, 'media', None):
+                                trace_log(
+                                    f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=blacklist keyword='{keyword}' | {media_trace}",
+                                )
+                            debug_log(f"在频道 {restricted_channel_id} 中检测到黑名单关键词或正则 '{keyword}'，跳过。")
+                            return
+
+                # --- Whitelist Check ---
+                whitelist = _normalize_keyword_list(restricted_entry.get('whitelist_keywords')) + extra_whitelist
+                tv_whitelist_hit = False
+                if whitelist:
+                    found_whitelist = False
+                    if message_text_for_filter:
+                        for keyword in whitelist:
+                            if match_keyword(keyword, message_text_for_filter, message_text_lower):
+                                found_whitelist = True
+                                break
+                        if tv_drama_whitelist:
+                            for keyword in tv_drama_whitelist:
+                                if match_keyword(keyword, message_text_for_filter, message_text_lower):
+                                    tv_whitelist_hit = True
+                                    break
+                    if not found_whitelist:
                         if getattr(msg, 'media', None):
                             trace_log(
-                                f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=blacklist keyword='{keyword}' | {media_trace}",
+                                f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=whitelist_miss | {media_trace}",
                             )
-                        debug_log(f"在频道 {restricted_channel_id} 中检测到黑名单关键词或正则 '{keyword}'，跳过。")
+                        debug_log(f"在频道 {restricted_channel_id} 中未检测到白名单关键词或正则，跳过消息 {msg.id}。")
                         return
-
-            # --- Whitelist Check ---
-            whitelist = _normalize_keyword_list(restricted_entry.get('whitelist_keywords')) + extra_whitelist
-            if whitelist:
-                found_whitelist = False
-                if message_text_for_filter:
-                    for keyword in whitelist:
-                        if match_keyword(keyword, message_text_for_filter):
-                            found_whitelist = True
-                            break
-                if not found_whitelist:
-                    if getattr(msg, 'media', None):
-                        trace_log(
-                            f"[TRACE_SKIP] ch={restricted_channel_id} msg={msg.id} reason=whitelist_miss | {media_trace}",
-                        )
-                    debug_log(f"在频道 {restricted_channel_id} 中未检测到白名单关键词或正则，跳过消息 {msg.id}。")
-                    return
+            else:
+                debug_log("已开启强制转发，跳过黑白名单过滤。")
 
             # --- Detect Message Type ---
             media_type_detected = 'text'
@@ -2420,11 +2566,22 @@ async def new_message_handler(event):
                 single_type = str(restricted_entry.get('monitor_type', 'all')).strip().lower()
                 normalized_types = [single_type] if single_type else ['all']
 
-            if 'all' not in normalized_types and media_type_detected not in normalized_types:
+            type_allowed = ('all' in normalized_types) or (media_type_detected in normalized_types)
+            if not type_allowed:
                 if has_hdhive_hit:
                     debug_log(
                         f" 频道监控类型为 '{','.join(normalized_types)}'，"
                         f"但检测到 HDHive 链接，继续处理。"
+                    )
+                elif tv_whitelist_hit:
+                    debug_log(
+                        f" 频道监控类型为 '{','.join(normalized_types)}'，"
+                        f"但 TV 白名单已命中，继续处理。"
+                    )
+                elif force_forward_all:
+                    debug_log(
+                        f" 频道监控类型为 '{','.join(normalized_types)}'，"
+                        f"但已开启强制转发，继续处理。"
                     )
                 else:
                     if getattr(msg, 'media', None):
@@ -2443,11 +2600,21 @@ async def new_message_handler(event):
             should_forward = restricted_entry.get('keep_video_message', False)
             # If download_directory is set, we consider download enabled for non-text media
             should_download = bool(download_directory) and media_type_detected != 'text'
+            forward_only = bool(restricted_entry.get('forward_only', False))
 
             # Special case: if message contains HDHive 115 links (explicit/implicit/buttons),
             # always send the resolved real link(s) to configured target users.
             if has_hdhive_hit:
                 should_forward = True
+            if force_forward_all:
+                should_forward = True
+
+            if forward_only:
+                should_forward = True
+                should_download = False
+            elif not type_allowed and not has_hdhive_hit:
+                # Force-forwarded messages should not trigger downloads for mismatched types.
+                should_download = False
             
             debug_log(f" 配置读取 - 转发开关(keep_video_message): {should_forward}, 下载目录: '{download_directory}'")
             debug_log(f" 最终判定 - 下载: {should_download}, 转发: {should_forward}")

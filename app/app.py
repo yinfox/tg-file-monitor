@@ -15,7 +15,7 @@ import datetime
 import shutil
 import requests
 from urllib.parse import quote_plus
-from typing import Tuple
+from typing import Tuple, Optional
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError
@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.4.90"
+VERSION = "0.5.04"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -51,9 +51,11 @@ DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
 DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
 TV_CHANNEL_FILTERS_FILE = os.path.join(CONFIG_DIR, 'tvchannel_filters.json')
+TV_FILTERS_STATE_KEY = 'tvchannel_filters.json'
 DRAMA_RUN_BUSY_MESSAGE = '当前已有追剧任务在运行（可能是自动调度），请稍后重试。'
 MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
 SELF_SERVICE_LOG_FILE = os.path.join(LOG_DIR, 'self_service.log')
+SELF_SERVICE_RESULT_FILE = os.path.join(CONFIG_DIR, 'self_service_results.json')
 
 # Log performance safeguards
 LOG_TAIL_LINES = 200
@@ -62,8 +64,12 @@ LOG_FILE_MAX_BYTES = 50 * 1024 * 1024
 LOG_FILE_TRIM_BYTES = 5 * 1024 * 1024
 LOG_FILE_SIZE_CHECK_INTERVAL = 15
 LOG_REFRESH_INTERVAL_DEFAULT = 10
+SELF_SERVICE_RESULT_TTL_SECONDS = None
+SELF_SERVICE_RESULT_MAX_ITEMS = 200
+SELF_SERVICE_RECENT_DISPLAY_LIMIT = 8
 
 _MESSAGE_QUEUE_LOCK = threading.Lock()
+_SELF_SERVICE_RESULT_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_CACHE = {}
 
@@ -102,6 +108,8 @@ def load_config():
         "log_tail_max_bytes": LOG_TAIL_MAX_BYTES,
         "self_service_enabled": False,
         "self_service_target_user_ids": "",
+        "self_service_notify_user_ids": "",
+        "self_service_notify_sender": "telegram_monitor",
         "self_service_search_max_results": 5,
         "self_service_cookie_check_mode": "warn",
         "self_service_use_open_api": False,
@@ -116,6 +124,14 @@ def load_config():
         "hdhive_base_url": "https://hdhive.com",
         "hdhive_open_api_key": "",
         "hdhive_open_api_direct_unlock": False,
+        "hdhive_cookie_test_resource": "",
+        "hdhive_cookie_monitor": {
+            "enabled": False,
+            "interval_minutes": 60,
+            "notify_user_ids": "",
+            "on_invalid": "notify",
+            "force_cookie_test": True,
+        },
         "allowed_browse_path": os.getcwd(),
         "restricted_channels": [],
         "proxy": {},
@@ -211,6 +227,10 @@ def load_config():
                     config["self_service_enabled"] = default_config["self_service_enabled"]
                 if "self_service_target_user_ids" not in config:
                     config["self_service_target_user_ids"] = default_config["self_service_target_user_ids"]
+                if "self_service_notify_user_ids" not in config:
+                    config["self_service_notify_user_ids"] = default_config["self_service_notify_user_ids"]
+                if "self_service_notify_sender" not in config:
+                    config["self_service_notify_sender"] = default_config["self_service_notify_sender"]
                 if "self_service_search_max_results" not in config:
                     config["self_service_search_max_results"] = default_config["self_service_search_max_results"]
                 if "self_service_cookie_check_mode" not in config:
@@ -240,6 +260,14 @@ def load_config():
                     config["hdhive_open_api_key"] = default_config["hdhive_open_api_key"]
                 if "hdhive_open_api_direct_unlock" not in config:
                     config["hdhive_open_api_direct_unlock"] = default_config["hdhive_open_api_direct_unlock"]
+                if "hdhive_cookie_monitor" not in config or not isinstance(config.get("hdhive_cookie_monitor"), dict):
+                    config["hdhive_cookie_monitor"] = default_config["hdhive_cookie_monitor"].copy()
+                else:
+                    merged_monitor = default_config["hdhive_cookie_monitor"].copy()
+                    merged_monitor.update(config.get("hdhive_cookie_monitor") or {})
+                    config["hdhive_cookie_monitor"] = merged_monitor
+                if "hdhive_cookie_test_resource" not in config:
+                    config["hdhive_cookie_test_resource"] = default_config["hdhive_cookie_test_resource"]
                 if "proxy" not in config:
                     config["proxy"] = {}
                 if "trace_media_detection" not in config:
@@ -659,6 +687,44 @@ def _label_for_source_tag(source_tag: str) -> str:
     return f'来源：{tag}'
 
 
+def _default_tv_channel_filters():
+    return {
+        "global": {"whitelist": [], "blacklist": []},
+        "drama": {"whitelist": []},
+        "channels": {},
+    }
+
+
+def _load_tv_channel_filters():
+    if not os.path.exists(TV_CHANNEL_FILTERS_FILE):
+        return _default_tv_channel_filters()
+    try:
+        with open(TV_CHANNEL_FILTERS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return _default_tv_channel_filters()
+    except Exception:
+        return _default_tv_channel_filters()
+
+    if "global" not in data or not isinstance(data.get("global"), dict):
+        data["global"] = {"whitelist": [], "blacklist": []}
+    if "drama" not in data or not isinstance(data.get("drama"), dict):
+        data["drama"] = {"whitelist": []}
+    if "channels" not in data or not isinstance(data.get("channels"), dict):
+        data["channels"] = {}
+    return data
+
+
+def _save_tv_channel_filters(data: dict) -> bool:
+    try:
+        os.makedirs(os.path.dirname(TV_CHANNEL_FILTERS_FILE) or '.', exist_ok=True)
+        with open(TV_CHANNEL_FILTERS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception:
+        return False
+
+
 def _build_env_edit_source_view(drama_cfg: dict) -> tuple:
     env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
     env_keys = _parse_env_keys(str(drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX')) or ['DRAMA_CALENDAR_REGEX']
@@ -794,6 +860,254 @@ def _build_env_edit_source_view(drama_cfg: dict) -> tuple:
         source['env_groups'].sort(key=lambda g: g.get('env_display') or '')
 
     return sources, env_errors
+
+
+def _collect_state_source_norms(state: dict) -> dict:
+    source_titles = state.get('source_titles') if isinstance(state, dict) else None
+    if not isinstance(source_titles, dict):
+        source_titles = {}
+    norms_by_source = {}
+    tv_abs = os.path.abspath(TV_CHANNEL_FILTERS_FILE)
+    for env_path, env_entry in source_titles.items():
+        if not isinstance(env_entry, dict):
+            continue
+        for key, key_entry in env_entry.items():
+            if not isinstance(key_entry, dict):
+                continue
+            if str(key) == TV_FILTERS_STATE_KEY and os.path.abspath(str(env_path)) == tv_abs:
+                continue
+            for source_tag, titles in key_entry.items():
+                if not isinstance(titles, list):
+                    continue
+                tag = str(source_tag or '').strip() or 'manual'
+                norm_set = norms_by_source.setdefault(tag, set())
+                for t in titles:
+                    norm = _normalize_title_for_match(t)
+                    if norm:
+                        norm_set.add(norm)
+    records = state.get('records') if isinstance(state, dict) else None
+    if isinstance(records, list):
+        for rec in records:
+            if not isinstance(rec, dict):
+                continue
+            source_tag = str(rec.get('source') or '').strip() or 'manual'
+            value = str(rec.get('value') or '')
+            titles = _extract_titles_from_regex_value(value)
+            if not titles:
+                continue
+            norm_set = norms_by_source.setdefault(source_tag, set())
+            for t in titles:
+                norm = _normalize_title_for_match(t)
+                if norm:
+                    norm_set.add(norm)
+    return norms_by_source
+
+
+def _apply_tv_filters_source_norms(state: dict, titles: list, raw_entries: list, source_norms: dict) -> dict:
+    if not titles or not source_norms:
+        return {}
+    order = [
+        'calendar',
+        'maoyan',
+        'douban',
+        'douban_asia',
+        'douban_domestic',
+        'douban_variety',
+        'douban_animation',
+        'all',
+    ]
+    per_source_titles = {}
+    matched = False
+    for title in titles:
+        norm = _normalize_title_for_match(title)
+        if not norm:
+            continue
+        assigned = None
+        for tag in order:
+            if norm in source_norms.get(tag, set()):
+                assigned = tag
+                matched = True
+                break
+        if not assigned:
+            assigned = 'manual'
+        per_source_titles.setdefault(assigned, []).append(title)
+
+    if raw_entries:
+        per_source_titles.setdefault('manual', [])
+
+    if not matched:
+        return {}
+
+    source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
+    if not isinstance(source_titles_state, dict):
+        source_titles_state = {}
+    tv_abs = os.path.abspath(TV_CHANNEL_FILTERS_FILE)
+    env_entry = source_titles_state.get(tv_abs)
+    if not isinstance(env_entry, dict):
+        env_entry = {}
+    env_entry[TV_FILTERS_STATE_KEY] = dict(per_source_titles)
+    source_titles_state[tv_abs] = env_entry
+    state['source_titles'] = source_titles_state
+    _save_drama_calendar_state(state)
+    return per_source_titles
+
+
+def _backfill_tv_filters_source_titles(state: dict, titles: list, raw_entries: list) -> dict:
+    if not titles:
+        return {}
+    source_norms = _collect_state_source_norms(state)
+    return _apply_tv_filters_source_norms(state, titles, raw_entries, source_norms)
+
+
+def _backfill_tv_filters_source_titles_from_map(state: dict, titles: list, raw_entries: list, source_title_map: dict) -> dict:
+    if not titles:
+        return {}
+    norms_by_source = {}
+    for tag, values in (source_title_map or {}).items():
+        if not isinstance(values, list):
+            continue
+        tag_name = str(tag or '').strip() or 'manual'
+        norm_set = norms_by_source.setdefault(tag_name, set())
+        for t in values:
+            norm = _normalize_title_for_match(t)
+            if norm:
+                norm_set.add(norm)
+    return _apply_tv_filters_source_norms(state, titles, raw_entries, norms_by_source)
+
+
+def _build_tv_filters_edit_view() -> tuple:
+    errors = []
+    data = _load_tv_channel_filters()
+    drama = data.get('drama') if isinstance(data, dict) else {}
+    whitelist = drama.get('whitelist') if isinstance(drama, dict) else []
+    if not isinstance(whitelist, list):
+        whitelist = []
+
+    titles = []
+    raw_entries = []
+    seen_norm = set()
+    for entry in whitelist:
+        if not isinstance(entry, str):
+            continue
+        extracted = _extract_titles_from_regex_value(entry)
+        if extracted:
+            for t in extracted:
+                norm = _normalize_title_for_match(t)
+                if not norm or norm in seen_norm:
+                    continue
+                seen_norm.add(norm)
+                titles.append(t)
+        else:
+            raw_entries.append(entry)
+
+    current_norms = set()
+    for t in titles:
+        norm = _normalize_title_for_match(t)
+        if norm:
+            current_norms.add(norm)
+
+    state = _load_drama_calendar_state()
+    source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
+    if not isinstance(source_titles_state, dict):
+        source_titles_state = {}
+    tv_abs = os.path.abspath(TV_CHANNEL_FILTERS_FILE)
+    source_map_for_env = {}
+    env_entry = source_titles_state.get(tv_abs)
+    if isinstance(env_entry, dict):
+        key_entry = env_entry.get(TV_FILTERS_STATE_KEY)
+        if isinstance(key_entry, dict):
+            source_map_for_env = key_entry
+    if not source_map_for_env and titles:
+        source_map_for_env = _backfill_tv_filters_source_titles(state, titles, raw_entries)
+
+    used_norms = set()
+    source_titles_map = {}
+    if source_map_for_env:
+        for source_tag, source_titles in source_map_for_env.items():
+            if not isinstance(source_titles, list):
+                continue
+            cleaned = []
+            for t in source_titles:
+                norm = _normalize_title_for_match(t)
+                if not norm or norm in used_norms or norm not in current_norms:
+                    continue
+                used_norms.add(norm)
+                cleaned.append(t)
+            if cleaned:
+                source_titles_map.setdefault(source_tag, []).extend(cleaned)
+
+    untracked = []
+    for t in titles:
+        norm = _normalize_title_for_match(t)
+        if norm and norm not in used_norms:
+            untracked.append(t)
+    if untracked:
+        source_titles_map.setdefault('manual', []).extend(untracked)
+    if raw_entries and 'manual' not in source_titles_map:
+        source_titles_map['manual'] = []
+
+    sources_map = {}
+    group_index = 0
+
+    def _ensure_source(tag: str) -> dict:
+        if tag not in sources_map:
+            sources_map[tag] = {
+                'tag': tag,
+                'label': _label_for_source_tag(tag),
+                'env_groups': [],
+            }
+        return sources_map[tag]
+
+    if source_titles_map:
+        for tag, group_titles in source_titles_map.items():
+            if not group_titles and not (tag == 'manual' and raw_entries):
+                continue
+            group_index += 1
+            source_entry = _ensure_source(tag)
+            group = {
+                'id': f'tv{group_index}',
+                'tag': tag,
+                'env_path': TV_CHANNEL_FILTERS_FILE,
+                'env_display': os.path.basename(TV_CHANNEL_FILTERS_FILE),
+                'titles': group_titles,
+            }
+            if tag == 'manual' and raw_entries:
+                group['raw_entries'] = raw_entries
+            source_entry['env_groups'].append(group)
+    elif raw_entries:
+        group_index += 1
+        source_entry = _ensure_source('manual')
+        source_entry['env_groups'].append(
+            {
+                'id': f'tv{group_index}',
+                'tag': 'manual',
+                'env_path': TV_CHANNEL_FILTERS_FILE,
+                'env_display': os.path.basename(TV_CHANNEL_FILTERS_FILE),
+                'titles': [],
+                'raw_entries': raw_entries,
+            }
+        )
+
+    order = [
+        'calendar',
+        'maoyan',
+        'douban',
+        'douban_asia',
+        'douban_domestic',
+        'douban_variety',
+        'douban_animation',
+        'all',
+        'manual',
+        'key',
+        'unknown',
+    ]
+
+    def _source_sort(item: dict) -> tuple:
+        tag = item.get('tag')
+        return (order.index(tag) if tag in order else len(order), item.get('label') or '')
+
+    sources = sorted(sources_map.values(), key=_source_sort)
+    return sources, errors
 
 
 def _clear_drama_calendar_state_records(env_path: str, key: str) -> None:
@@ -1111,14 +1425,208 @@ def _append_drama_calendar_log(lines):
         pass
 
 
-def _read_drama_calendar_log_lines(max_lines: int = 2000):
+def _reset_drama_calendar_log():
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(DRAMA_CALENDAR_LOG_FILE, 'w', encoding='utf-8') as f:
+            f.write('')
+    except Exception:
+        pass
+
+
+def _prune_tv_filters_finished_titles(drama_cfg: dict, trigger: str = 'scheduler', dry_run: bool = False) -> dict:
+    result = {
+        "removed": 0,
+        "before": 0,
+        "after": 0,
+        "status": "skipped",
+        "message": "",
+        "items": [],
+    }
+
+    try:
+        remove_days = int(drama_cfg.get('remove_finished_after_days', -1) or -1)
+    except Exception:
+        remove_days = -1
+    if remove_days < 0:
+        result["message"] = "remove_finished_after_days disabled"
+        return result
+
+    finish_mode = str(drama_cfg.get('finish_detect_mode') or 'hybrid').strip().lower()
+    if finish_mode not in ('tmdb', 'hybrid'):
+        result["message"] = "finish_detect_mode not tmdb/hybrid"
+        return result
+
+    tmdb_api_key = (drama_cfg.get('tmdb_api_key') or os.environ.get('TMDB_API_KEY') or '').strip()
+    if not tmdb_api_key:
+        result["message"] = "tmdb api key missing"
+        return result
+
+    data = _load_tv_channel_filters()
+    drama = data.get('drama') if isinstance(data, dict) else {}
+    if not isinstance(drama, dict):
+        drama = {}
+    whitelist = drama.get('whitelist') if isinstance(drama, dict) else []
+    if not isinstance(whitelist, list):
+        whitelist = []
+
+    titles = []
+    raw_entries = []
+    for entry in whitelist:
+        if not isinstance(entry, str):
+            continue
+        extracted = _extract_titles_from_regex_value(entry)
+        if extracted:
+            titles.extend(extracted)
+        else:
+            raw_entries.append(entry)
+
+    seen_norm = set()
+    unique_titles = []
+    for title in titles:
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        unique_titles.append(title)
+
+    if not unique_titles:
+        result["message"] = "no titles"
+        return result
+
+    result["before"] = len(unique_titles)
+
+    try:
+        from scripts import update_drama_calendar_env as drama_env
+    except Exception as e:
+        result["message"] = f"import_failed: {e}"
+        return result
+
+    tmdb_language = (drama_cfg.get('tmdb_language') or 'zh-CN').strip() or 'zh-CN'
+    tmdb_region = (drama_cfg.get('tmdb_region') or 'CN').strip() or 'CN'
+    try:
+        tmdb_year_tolerance = max(0, int(drama_cfg.get('tmdb_year_tolerance', 2) or 2))
+    except Exception:
+        tmdb_year_tolerance = 2
+    try:
+        tmdb_min_score = max(1, int(drama_cfg.get('tmdb_min_score', 70) or 70))
+    except Exception:
+        tmdb_min_score = 70
+
+    tmdb_cache_file = getattr(drama_env, 'DEFAULT_TMDB_CACHE_FILE', os.path.join(CONFIG_DIR, 'tmdb_tv_status_cache.json'))
+    tmdb_cache = drama_env._load_tmdb_cache(tmdb_cache_file)
+    tmdb_marked = []
+    kept, removed, cache_dirty = drama_env._remove_finished_titles_by_tmdb(
+        unique_titles,
+        remove_days=remove_days,
+        tmdb_enabled=True,
+        finish_detect_mode=finish_mode,
+        tmdb_api_key=tmdb_api_key,
+        tmdb_language=tmdb_language,
+        tmdb_region=tmdb_region,
+        tmdb_timeout=15,
+        tmdb_cache=tmdb_cache,
+        tmdb_cache_ttl_hours=24,
+        tmdb_year_tolerance=tmdb_year_tolerance,
+        tmdb_min_score=tmdb_min_score,
+        tmdb_marked_finished_titles=tmdb_marked,
+        tmdb_max_workers=getattr(drama_env, 'TMDB_MAX_WORKERS_DEFAULT', 6),
+    )
+
+    if cache_dirty and not dry_run:
+        try:
+            drama_env._save_tmdb_cache(tmdb_cache_file, tmdb_cache)
+        except Exception:
+            pass
+
+    result["after"] = len(kept)
+    result["removed"] = len(removed)
+    if removed:
+        result["items"] = [{"title": title, "days": days} for title, days in removed[:50]]
+    if not removed:
+        result["status"] = "no_change"
+        return result
+
+    if dry_run:
+        result["status"] = "preview"
+        return result
+
+    regex_value = _build_regex_from_titles(kept)
+    new_whitelist = list(raw_entries)
+    if regex_value:
+        new_whitelist.append(regex_value)
+
+    if new_whitelist == whitelist:
+        result["status"] = "no_change"
+        return result
+
+    drama['whitelist'] = new_whitelist
+    data['drama'] = drama
+    if not _save_tv_channel_filters(data):
+        result["status"] = "error"
+        result["message"] = "save_failed"
+        return result
+
+    removed_norms = set()
+    for title, _days in removed:
+        norm = _normalize_title_for_match(title)
+        if norm:
+            removed_norms.add(norm)
+
+    if removed_norms:
+        state = _load_drama_calendar_state()
+        source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
+        if not isinstance(source_titles_state, dict):
+            source_titles_state = {}
+        tv_abs = os.path.abspath(TV_CHANNEL_FILTERS_FILE)
+        env_entry = source_titles_state.get(tv_abs)
+        if isinstance(env_entry, dict):
+            key_entry = env_entry.get(TV_FILTERS_STATE_KEY)
+            if isinstance(key_entry, dict):
+                updated_map = {}
+                for tag, items in key_entry.items():
+                    if not isinstance(items, list):
+                        continue
+                    filtered = []
+                    for title in items:
+                        norm = _normalize_title_for_match(title)
+                        if norm and norm in removed_norms:
+                            continue
+                        filtered.append(title)
+                    updated_map[tag] = filtered
+                env_entry[TV_FILTERS_STATE_KEY] = updated_map
+                source_titles_state[tv_abs] = env_entry
+                state['source_titles'] = source_titles_state
+                _save_drama_calendar_state(state)
+
+    ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    log_lines = [
+        f'[{ts}] [INFO] [DRAMA][AUTO-PRUNE] 完结清理 {len(removed)} 项 trigger={trigger}',
+    ]
+    for title, days in removed[:20]:
+        log_lines.append(f'[{ts}] [INFO] [DRAMA][AUTO-PRUNE] - {title} (完结已 {days} 天)')
+    _append_drama_calendar_log(log_lines)
+
+    result["status"] = "updated"
+    return result
+
+
+def _read_drama_calendar_log_lines(max_lines: int = 2000, max_bytes: int = LOG_TAIL_MAX_BYTES):
     try:
         if not os.path.exists(DRAMA_CALENDAR_LOG_FILE):
             return []
-        lines = _tail_file_lines(DRAMA_CALENDAR_LOG_FILE, max_lines=max_lines)
+        lines = _tail_file_lines(DRAMA_CALENDAR_LOG_FILE, max_lines=max_lines, max_bytes=max_bytes)
         return lines
     except Exception:
         return []
+
+
+def _drama_calendar_log_cache_key(max_lines: int = LOG_TAIL_LINES, max_bytes: int = LOG_TAIL_MAX_BYTES) -> str:
+    try:
+        st = os.stat(DRAMA_CALENDAR_LOG_FILE)
+        return f"{int(st.st_mtime)}:{st.st_size}:{max_lines}:{max_bytes}"
+    except Exception:
+        return f"missing:{max_lines}:{max_bytes}"
 
 
 def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: str = 'manual'):
@@ -1133,6 +1641,8 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
             f'[{ts}] [WARN] [DRAMA] 忽略执行，已有任务运行中 trigger={trigger}',
         ])
         return False, '', DRAMA_RUN_BUSY_MESSAGE
+
+    _reset_drama_calendar_log()
 
     cmd = [
         sys.executable,
@@ -1251,10 +1761,128 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         _DRAMA_RUN_LOCK.release()
 
 
+def _run_drama_calendar_source_map(drama_cfg: dict) -> tuple:
+    if not os.path.exists(DRAMA_CALENDAR_SCRIPT):
+        return False, {}, f"脚本不存在: {DRAMA_CALENDAR_SCRIPT}"
+
+    env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
+    dump_path = os.path.join('/tmp', f"drama_source_map_{uuid.uuid4().hex}.json")
+    cmd = [
+        sys.executable,
+        DRAMA_CALENDAR_SCRIPT,
+        '--source', _drama_sources_csv(drama_cfg.get('source')),
+        '--home-url', (drama_cfg.get('home_url') or 'https://blog.922928.de/').strip(),
+        '--calendar-whitelist-keywords', (drama_cfg.get('calendar_whitelist_keywords') or '').strip(),
+        '--calendar-blacklist-keywords', (drama_cfg.get('calendar_blacklist_keywords') or '').strip(),
+        '--maoyan-url', (drama_cfg.get('maoyan_url') or 'https://piaofang.maoyan.com/box-office?ver=normal').strip(),
+        '--maoyan-top-n', str(int(drama_cfg.get('maoyan_top_n', 0) or 0)),
+        '--maoyan-web-heat-url', (drama_cfg.get('maoyan_web_heat_url') or 'https://piaofang.maoyan.com/web-heat').strip(),
+        '--maoyan-web-heat-top-n', str(int(drama_cfg.get('maoyan_web_heat_top_n', 0) or 0)),
+        '--maoyan-whitelist-keywords', (drama_cfg.get('maoyan_whitelist_keywords') or '').strip(),
+        '--maoyan-blacklist-keywords', (drama_cfg.get('maoyan_blacklist_keywords') or '').strip(),
+        '--douban-url', _normalize_douban_collection_url(
+            str(drama_cfg.get('douban_url') or ''),
+            fallback_url='https://m.douban.com/subject_collection/tv_american',
+        ),
+        '--douban-top-n', str(int(drama_cfg.get('douban_top_n', 0) or 0)),
+        '--douban-asia-top-n', str(int(drama_cfg.get('douban_asia_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-domestic-top-n', str(int(drama_cfg.get('douban_domestic_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-variety-top-n', str(int(drama_cfg.get('douban_variety_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-animation-top-n', str(int(drama_cfg.get('douban_animation_top_n', drama_cfg.get('douban_top_n', 0)) or 0)),
+        '--douban-whitelist-keywords', (drama_cfg.get('douban_whitelist_keywords') or '').strip(),
+        '--douban-blacklist-keywords', (drama_cfg.get('douban_blacklist_keywords') or '').strip(),
+        '--douban-asia-whitelist-keywords', (drama_cfg.get('douban_asia_whitelist_keywords') or '').strip(),
+        '--douban-asia-blacklist-keywords', (drama_cfg.get('douban_asia_blacklist_keywords') or '').strip(),
+        '--douban-domestic-whitelist-keywords', (drama_cfg.get('douban_domestic_whitelist_keywords') or '').strip(),
+        '--douban-domestic-blacklist-keywords', (drama_cfg.get('douban_domestic_blacklist_keywords') or '').strip(),
+        '--douban-variety-whitelist-keywords', (drama_cfg.get('douban_variety_whitelist_keywords') or '').strip(),
+        '--douban-variety-blacklist-keywords', (drama_cfg.get('douban_variety_blacklist_keywords') or '').strip(),
+        '--douban-animation-whitelist-keywords', (drama_cfg.get('douban_animation_whitelist_keywords') or '').strip(),
+        '--douban-animation-blacklist-keywords', (drama_cfg.get('douban_animation_blacklist_keywords') or '').strip(),
+        '--remove-movie-premiere-after-days', str(int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)),
+        '--remove-finished-after-days', str(int(drama_cfg.get('remove_finished_after_days', -1) if drama_cfg.get('remove_finished_after_days', -1) is not None else -1)),
+        '--finish-detect-mode', (drama_cfg.get('finish_detect_mode') or 'hybrid').strip(),
+        '--line-keywords', (drama_cfg.get('line_keywords') or '上线,开播').strip(),
+        '--title-alias-map', (drama_cfg.get('title_alias_map') or '').strip(),
+        '--env-files', ','.join(env_files_list),
+        '--env-key', (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip(),
+        '--tv-filters-file', TV_CHANNEL_FILTERS_FILE,
+        '--managed-scope', ('source' if bool(drama_cfg.get('managed_scope_source_only', True)) else 'key'),
+        '--dump-source-titles', dump_path,
+        '--dry-run',
+    ]
+
+    tmdb_api_key = (drama_cfg.get('tmdb_api_key') or os.environ.get('TMDB_API_KEY') or '').strip()
+    if tmdb_api_key:
+        cmd.extend(['--tmdb-api-key', tmdb_api_key])
+    tmdb_language = (drama_cfg.get('tmdb_language') or 'zh-CN').strip() or 'zh-CN'
+    tmdb_region = (drama_cfg.get('tmdb_region') or 'CN').strip() or 'CN'
+    try:
+        tmdb_year_tolerance = max(0, int(drama_cfg.get('tmdb_year_tolerance', 2) or 2))
+    except Exception:
+        tmdb_year_tolerance = 2
+    try:
+        tmdb_min_score = max(1, int(drama_cfg.get('tmdb_min_score', 70) or 70))
+    except Exception:
+        tmdb_min_score = 70
+    cmd.extend(['--tmdb-language', tmdb_language, '--tmdb-region', tmdb_region])
+    cmd.extend(['--tmdb-year-tolerance', str(tmdb_year_tolerance), '--tmdb-min-score', str(tmdb_min_score)])
+
+    post_url = (drama_cfg.get('post_url') or '').strip()
+    if post_url:
+        cmd.extend(['--post-url', post_url])
+    if bool(drama_cfg.get('include_maoyan_web_heat', True)):
+        cmd.append('--include-maoyan-web-heat')
+    if bool(drama_cfg.get('append_to_whitelist', True)):
+        cmd.append('--append')
+
+    try:
+        timeout_seconds = _estimate_drama_run_timeout(drama_cfg)
+        proc = subprocess.run(
+            cmd,
+            cwd=ROOT_DIR,
+            capture_output=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        stdout_text = _decode_subprocess_output(proc.stdout)
+        stderr_text = _decode_subprocess_output(proc.stderr)
+        if proc.returncode != 0:
+            err_summary = (stderr_text or stdout_text or '').strip() or f'执行失败 (exit={proc.returncode})'
+            return False, {}, err_summary
+        if not os.path.exists(dump_path):
+            return False, {}, '未生成来源映射文件，请重试。'
+        try:
+            with open(dump_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if not isinstance(data, dict):
+                return False, {}, '来源映射格式错误。'
+            return True, data, ''
+        finally:
+            try:
+                os.remove(dump_path)
+            except Exception:
+                pass
+    except subprocess.TimeoutExpired:
+        return False, {}, '执行超时，请检查网络连通性后重试。'
+    except Exception as e:
+        return False, {}, f'执行异常: {e}'
+
+
 _DRAMA_SCHEDULER_STOP_EVENT = threading.Event()
 _DRAMA_SCHEDULER_THREAD = None
 _DRAMA_SCHEDULER_LOCK = threading.Lock()
 _DRAMA_RUN_LOCK = threading.Lock()
+_HDHIVE_COOKIE_MONITOR_STOP_EVENT = threading.Event()
+_HDHIVE_COOKIE_MONITOR_THREAD = None
+_HDHIVE_COOKIE_MONITOR_LOCK = threading.Lock()
+_HDHIVE_COOKIE_MONITOR_STATE = {
+    "enabled": False,
+    "last_check_at": "",
+    "last_status": "",
+    "last_message": "",
+    "last_notified_at": "",
+}
 _DRAMA_SCHEDULER_STATE = {
     'enabled': False,
     'running': False,
@@ -1267,6 +1895,12 @@ _DRAMA_SCHEDULER_STATE = {
         'removed': '',
         'result': '',
     },
+    'last_prune_items': [],
+    'last_prune_count': 0,
+    'last_prune_mode': '',
+    'last_prune_status': '',
+    'last_prune_message': '',
+    'last_prune_at': '',
     'schedule_mode': 'interval',
 }
 
@@ -1286,6 +1920,16 @@ def get_drama_scheduler_state() -> dict:
     _ensure_drama_scheduler_started()
     with _DRAMA_SCHEDULER_LOCK:
         return dict(_DRAMA_SCHEDULER_STATE)
+
+
+def _set_hdhive_cookie_monitor_state(**kwargs):
+    with _HDHIVE_COOKIE_MONITOR_LOCK:
+        _HDHIVE_COOKIE_MONITOR_STATE.update(kwargs)
+
+
+def get_hdhive_cookie_monitor_state() -> dict:
+    with _HDHIVE_COOKIE_MONITOR_LOCK:
+        return dict(_HDHIVE_COOKIE_MONITOR_STATE)
 
 
 def _normalize_cron_expr(expr: str) -> str:
@@ -1312,6 +1956,109 @@ def _ensure_drama_scheduler_started():
             _set_drama_scheduler_state(enabled=False, running=False, schedule_mode='interval', next_run_at='未启用')
     except Exception:
         pass
+
+
+def _hdhive_cookie_monitor_loop():
+    last_check_ts = 0.0
+    last_action_status = ""
+    while not _HDHIVE_COOKIE_MONITOR_STOP_EVENT.is_set():
+        config = load_config()
+        monitor_cfg = config.get("hdhive_cookie_monitor") if isinstance(config, dict) else {}
+        enabled = bool((monitor_cfg or {}).get("enabled", False))
+        force_cookie_test = bool((monitor_cfg or {}).get("force_cookie_test", True))
+        try:
+            interval_minutes = int((monitor_cfg or {}).get("interval_minutes", 60) or 60)
+        except Exception:
+            interval_minutes = 60
+        interval_minutes = max(1, interval_minutes)
+        if not enabled:
+            _set_hdhive_cookie_monitor_state(enabled=False)
+            _HDHIVE_COOKIE_MONITOR_STOP_EVENT.wait(5)
+            continue
+
+        now = time.time()
+        if last_check_ts and (now - last_check_ts) < interval_minutes * 60:
+            _HDHIVE_COOKIE_MONITOR_STOP_EVENT.wait(5)
+            continue
+
+        last_check_ts = now
+        base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip()
+        cookie = (config.get("hdhive_cookie") or "").strip()
+        test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
+        api_key = (config.get("hdhive_open_api_key") or "").strip()
+
+        if not force_cookie_test and api_key:
+            ping = _hdhive_open_api_ping(base_url, api_key)
+            if isinstance(ping, dict) and ping.get("success") is True:
+                status = "ok"
+                message = "Open API Key 有效"
+            else:
+                status = "invalid"
+                message = (ping.get("message") if isinstance(ping, dict) else None) or "Open API Key 无效"
+        else:
+            if not cookie:
+                status = "missing"
+                message = "未配置 HDHive Cookie"
+            else:
+                result = _test_hdhive_cookie(base_url, cookie, test_resource)
+                status = "ok" if result.get("success") else "invalid"
+                message = result.get("message") or ("Cookie 有效" if status == "ok" else "Cookie 无效")
+
+        _set_hdhive_cookie_monitor_state(
+            enabled=True,
+            last_check_at=_format_scheduler_ts(now),
+            last_status=status,
+            last_message=message,
+        )
+        if status == "ok":
+            last_action_status = ""
+
+        if status != "ok":
+            _set_hdhive_cookie_monitor_state(last_notified_at=_format_scheduler_ts(now))
+            notify_ids_raw = (monitor_cfg or {}).get("notify_user_ids") or ""
+            notify_targets = _parse_target_user_ids(notify_ids_raw)
+            if not notify_targets:
+                fallback = config.get("self_service_notify_user_ids") or config.get("self_service_target_user_ids") or ""
+                notify_targets = _parse_target_user_ids(fallback)
+
+            action = str((monitor_cfg or {}).get("on_invalid", "notify") or "notify").strip().lower()
+            action_note = ""
+            if action in ("switch_open_api", "clear_cookie") and last_action_status != status:
+                last_action_status = status
+                if action == "switch_open_api":
+                    if (config.get("hdhive_open_api_key") or "").strip():
+                        config["hdhive_open_api_direct_unlock"] = True
+                        config["self_service_use_open_api"] = True
+                        save_config(config)
+                        action_note = "已切换到 Open API 模式"
+                    else:
+                        action_note = "未配置 Open API Key，无法切换"
+                elif action == "clear_cookie":
+                    if config.get("hdhive_cookie"):
+                        config.pop("hdhive_cookie", None)
+                        save_config(config)
+                    action_note = "已清空 Cookie"
+
+            if notify_targets:
+                note = f"({action_note})" if action_note else ""
+                msg = f"⚠️ HDHive Cookie 状态异常：{message} {note}".strip()
+                for tid in notify_targets:
+                    _enqueue_message(tid, msg)
+
+        _HDHIVE_COOKIE_MONITOR_STOP_EVENT.wait(2)
+
+
+def start_hdhive_cookie_monitor():
+    global _HDHIVE_COOKIE_MONITOR_THREAD
+    if _HDHIVE_COOKIE_MONITOR_THREAD and _HDHIVE_COOKIE_MONITOR_THREAD.is_alive():
+        return
+    _HDHIVE_COOKIE_MONITOR_STOP_EVENT.clear()
+    _HDHIVE_COOKIE_MONITOR_THREAD = threading.Thread(
+        target=_hdhive_cookie_monitor_loop,
+        name="hdhive-cookie-monitor",
+        daemon=True,
+    )
+    _HDHIVE_COOKIE_MONITOR_THREAD.start()
 
 
 def _cron_expr_valid(expr: str) -> bool:
@@ -1591,7 +2338,30 @@ def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, langu
     return ids
 
 
-def _test_hdhive_cookie(base_url: str, cookie: str) -> dict:
+def _normalize_hdhive_test_slug(raw: str) -> str:
+    text = (raw or '').strip()
+    if not text:
+        return ""
+    try:
+        import telegram_monitor as tg_monitor
+        slug = tg_monitor._extract_hdhive_slug(text)
+        if slug:
+            return slug
+    except Exception:
+        pass
+    try:
+        if '://' in text:
+            from urllib.parse import urlparse
+            parsed = urlparse(text)
+            path = parsed.path or ""
+            if path:
+                return path.rstrip('/').split('/')[-1]
+    except Exception:
+        pass
+    return text.rstrip('/').split('/')[-1]
+
+
+def _test_hdhive_cookie(base_url: str, cookie: str, test_resource: str = "") -> dict:
     base_url = (base_url or "https://hdhive.com").rstrip('/')
     cookie = _normalize_hdhive_cookie(cookie or '')
     if not cookie:
@@ -1639,6 +2409,17 @@ def _test_hdhive_cookie(base_url: str, cookie: str) -> dict:
         else:
             if any(token in text for token in ("退出登录", "个人中心", "账户中心", "logout")):
                 return {"success": True, "message": "Cookie 可能有效 (页面已登录)", "details": details}
+
+    test_slug = _normalize_hdhive_test_slug(test_resource)
+    if test_slug:
+        try:
+            points = _hdhive_cookie_query_unlock_points(test_slug, cookie)
+        except Exception:
+            points = None
+        if points is not None:
+            details.append(f"points={points}")
+            details.append(f"slug={test_slug}")
+            return {"success": True, "message": f"Cookie 可用 (可解析积分: {points})", "details": details}
 
     return {"success": False, "message": "Cookie 无效或登录失效", "details": details}
 
@@ -1751,12 +2532,71 @@ def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
     return _hdhive_open_api_request("POST", url, api_key, json_body={"slug": slug})
 
 
-def _resource_unlock_points(item: dict) -> int:
-    pts = item.get("unlock_points") if isinstance(item, dict) else None
+def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> dict:
+    api_base = base_url.rstrip("/") + "/api/open"
+    url = f"{api_base}/resources/{slug}"
+    return _hdhive_open_api_request("GET", url, api_key)
+
+
+def _hdhive_open_api_extract_unlock_points(data: dict) -> Optional[int]:
+    if not isinstance(data, dict):
+        return None
+    for key in ("unlock_points", "unlockPoints", "points", "unlock_point", "unlockPoint"):
+        if key in data:
+            try:
+                return int(data.get(key))
+            except Exception:
+                return None
+    unlock_info = data.get("unlock") if isinstance(data.get("unlock"), dict) else None
+    if unlock_info:
+        for key in ("points", "unlock_points", "unlockPoints"):
+            if key in unlock_info:
+                try:
+                    return int(unlock_info.get(key))
+                except Exception:
+                    return None
+    return None
+
+
+def _hdhive_cookie_query_unlock_points(slug: str, cookie: str) -> Optional[int]:
+    if not slug or not cookie:
+        return None
     try:
-        return int(pts) if pts is not None else 0
+        import telegram_monitor as tg_monitor
     except Exception:
-        return 0
+        return None
+    try:
+        cookie_header = tg_monitor._normalize_hdhive_cookie(cookie)
+    except Exception:
+        cookie_header = cookie
+    try:
+        info = tg_monitor._hdhive_go_api_get_url_info_sync(cookie_header, slug)
+    except Exception:
+        info = None
+    if isinstance(info, dict):
+        if info.get("__unlock_points") is not None:
+            try:
+                return int(info.get("__unlock_points"))
+            except Exception:
+                return None
+        if info.get("unlock_points") is not None:
+            try:
+                return int(info.get("unlock_points"))
+            except Exception:
+                return None
+    return None
+
+
+def _resource_unlock_points(item: dict) -> Optional[int]:
+    if not isinstance(item, dict):
+        return None
+    pts = item.get("unlock_points")
+    if pts is None:
+        return None
+    try:
+        return int(pts)
+    except Exception:
+        return None
 
 
 def _sort_hdhive_resources(resources: list) -> list:
@@ -1769,7 +2609,7 @@ def _sort_hdhive_resources(resources: list) -> list:
         official = bool(item.get("is_official", False))
         return (
             0 if unlocked else 1,
-            points,
+            points if points is not None else 999999,
             0 if official else 1,
         )
 
@@ -1788,6 +2628,8 @@ def _pick_hdhive_resource(resources: list, threshold: int) -> dict:
     # Then affordable
     for item in resources_sorted:
         points = _resource_unlock_points(item)
+        if points is None:
+            continue
         if points <= threshold:
             return item
     return {}
@@ -1795,12 +2637,8 @@ def _pick_hdhive_resource(resources: list, threshold: int) -> dict:
 
 def _format_resource_line(item: dict) -> str:
     title = item.get("title") or "-"
-    points = item.get("unlock_points")
-    try:
-        points = int(points) if points is not None else 0
-    except Exception:
-        points = 0
-    unlocked = "已解锁" if item.get("is_unlocked") else f"{points}积分"
+    points = _resource_unlock_points(item)
+    unlocked = "已解锁" if item.get("is_unlocked") else (f"{points}积分" if points is not None else "未知积分")
     official = "官方" if item.get("is_official") else "普通"
     resolution = ",".join(item.get("video_resolution") or [])
     return f"{title} | {unlocked} | {official} | {resolution}"
@@ -1820,10 +2658,43 @@ def _is_123_url(url: str) -> bool:
     return ("123pan.com" in lower) or ("123pan.cn" in lower)
 
 
-def _self_service_notify_result(target_ids: list, success: bool) -> None:
-    msg = "✅ 资源已入库，请等待3-5分钟后进入服务器观看。" if success else "❌ 资源未找到，请联系管理员。"
+def _build_self_service_detail(lines: list, max_lines: int = 8, max_line_len: int = 240) -> str:
+    cleaned = []
+    for item in (lines or []):
+        text = str(item or '').strip()
+        if not text:
+            continue
+        if len(text) > max_line_len:
+            text = text[: max_line_len - 3] + "..."
+        cleaned.append(text)
+        if len(cleaned) >= max_lines:
+            break
+    return "\n".join(cleaned)
+
+
+def _self_service_notify_result(target_ids: list, success: bool, detail: str = "", resolved: bool = False) -> None:
+    if success:
+        msg = "✅ 资源已入库，请等待3-5分钟后进入服务器观看。"
+    elif resolved:
+        msg = "⚠️ 已解析到资源链接，但入库失败。"
+    else:
+        msg = "❌ 资源未找到，请联系管理员。"
+    detail = (detail or '').strip()
+    if detail:
+        msg = msg + "\n" + detail
     for tid in target_ids:
         _enqueue_message(tid, msg)
+    return msg
+
+
+def _self_service_notify_submit(target_ids: list, detail: str = "") -> None:
+    msg = "📩 自助观影申请已提交，后台处理中。"
+    detail = (detail or '').strip()
+    if detail:
+        msg = msg + "\n" + detail
+    for tid in target_ids:
+        _enqueue_message(tid, msg)
+    return msg
 
 
 def _try_115_share_transfer(real_url: str, payload: dict) -> tuple[bool, str]:
@@ -1873,6 +2744,97 @@ def _match_storage_mode(url: str, mode: str) -> bool:
     return True
 
 
+_DOLBY_DV_TOKEN_RE = re.compile(r'\bDV\b', re.IGNORECASE)
+
+
+def _dolby_preference_label(pref: str) -> str:
+    pref = (pref or "any").lower()
+    if pref == "prefer":
+        return "首选杜比"
+    if pref == "exclude":
+        return "排除杜比"
+    return "不指定"
+
+
+def _text_has_dolby(text: str) -> bool:
+    if not text:
+        return False
+    if "杜比" in text or "全景声" in text:
+        return True
+    lower = text.lower()
+    if "dolby" in lower or "atmos" in lower or "dovi" in lower:
+        return True
+    if _DOLBY_DV_TOKEN_RE.search(text):
+        return True
+    return False
+
+
+def _resource_is_dolby(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    parts = []
+    for key in ("title", "name", "resource_title", "resource_name", "subtitle", "release_name", "description"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    for key in ("tags", "video_resolution", "video_tags"):
+        value = item.get(key)
+        if isinstance(value, (list, tuple)):
+            parts.extend([str(v).strip() for v in value if str(v).strip()])
+        elif isinstance(value, str) and value.strip():
+            parts.append(value.strip())
+    text = " ".join(parts)
+    if not text:
+        try:
+            text = json.dumps(item, ensure_ascii=False)
+        except Exception:
+            text = ""
+    return _text_has_dolby(text)
+
+
+def _normalize_hdhive_url(url: str, base_url: str) -> str:
+    url = (url or "").strip()
+    if not url:
+        return ""
+    if url.startswith("http"):
+        return url
+    base_url = (base_url or "https://hdhive.com").rstrip("/")
+    return f"{base_url}/resource/115/{url.strip('/')}"
+
+
+def _hdhive_url_is_dolby(url: str, base_url: str, cookie_header: str, cache: Optional[dict] = None) -> Optional[bool]:
+    if not url:
+        return None
+    url = _normalize_hdhive_url(url, base_url)
+    if cache is not None and url in cache:
+        return cache[url]
+    if _text_has_dolby(url):
+        if cache is not None:
+            cache[url] = True
+        return True
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Referer": f"{(base_url or 'https://hdhive.com').rstrip('/')}/",
+    }
+    if cookie_header:
+        headers["Cookie"] = cookie_header
+    try:
+        resp = requests.get(url, timeout=12, headers=headers)
+        html_text = resp.text or ""
+    except Exception:
+        html_text = ""
+    if not html_text:
+        if cache is not None:
+            cache[url] = None
+        return None
+    result = _text_has_dolby(html_text)
+    if cache is not None:
+        cache[url] = result
+    return result
+
+
 def _enqueue_message(chat_id, text: str) -> bool:
     if not chat_id or not text:
         return False
@@ -1902,6 +2864,134 @@ def _enqueue_message(chat_id, text: str) -> bool:
             except Exception:
                 pass
     return False
+
+
+def _load_self_service_results() -> dict:
+    if not os.path.exists(SELF_SERVICE_RESULT_FILE):
+        return {}
+    try:
+        with open(SELF_SERVICE_RESULT_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
+def _save_self_service_results(data: dict) -> None:
+    tmp_path = SELF_SERVICE_RESULT_FILE + '.tmp'
+    try:
+        os.makedirs(os.path.dirname(SELF_SERVICE_RESULT_FILE) or '.', exist_ok=True)
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, SELF_SERVICE_RESULT_FILE)
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
+def _prune_self_service_results(data: dict) -> dict:
+    if not isinstance(data, dict):
+        return {}
+    now = time.time()
+    ttl = SELF_SERVICE_RESULT_TTL_SECONDS
+    for key, value in list(data.items()):
+        if not isinstance(value, dict):
+            data.pop(key, None)
+            continue
+        ts = value.get("updated_at") or value.get("created_at") or 0
+        try:
+            ts_val = float(ts)
+        except Exception:
+            ts_val = 0
+        if isinstance(ttl, (int, float)) and ttl > 0:
+            if ts_val and now - ts_val > ttl:
+                data.pop(key, None)
+
+    if len(data) > SELF_SERVICE_RESULT_MAX_ITEMS:
+        def _score(item):
+            value = item[1]
+            ts = value.get("updated_at") or value.get("created_at") or 0
+            try:
+                return float(ts)
+            except Exception:
+                return 0
+        ordered = sorted(data.items(), key=_score, reverse=True)
+        data = dict(ordered[:SELF_SERVICE_RESULT_MAX_ITEMS])
+    return data
+
+
+def _set_self_service_result(request_id: str, status: str, message: str, detail: str = "") -> None:
+    rid = (request_id or "").strip()
+    if not rid:
+        return
+    with _SELF_SERVICE_RESULT_LOCK:
+        data = _load_self_service_results()
+        data = _prune_self_service_results(data)
+        now = time.time()
+        entry = data.get(rid) if isinstance(data, dict) else None
+        if not isinstance(entry, dict):
+            entry = {"created_at": now}
+        entry.update({
+            "status": status,
+            "message": message,
+            "detail": detail,
+            "updated_at": now,
+        })
+        data[rid] = entry
+        _save_self_service_results(data)
+
+
+def _get_self_service_result(request_id: str) -> dict:
+    rid = (request_id or "").strip()
+    if not rid:
+        return {}
+    with _SELF_SERVICE_RESULT_LOCK:
+        data = _load_self_service_results()
+        data = _prune_self_service_results(data)
+        _save_self_service_results(data)
+        entry = data.get(rid) if isinstance(data, dict) else None
+        return entry if isinstance(entry, dict) else {}
+
+
+def _format_ts(ts_val) -> str:
+    try:
+        return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(float(ts_val)))
+    except Exception:
+        return ""
+
+
+def _list_self_service_results(limit: int = 30) -> list:
+    with _SELF_SERVICE_RESULT_LOCK:
+        data = _load_self_service_results()
+        data = _prune_self_service_results(data)
+        _save_self_service_results(data)
+    if not isinstance(data, dict):
+        return []
+    items = []
+    for rid, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        ts = entry.get("updated_at") or entry.get("created_at") or 0
+        items.append({
+            "request_id": rid,
+            "status": entry.get("status") or "",
+            "message": entry.get("message") or "",
+            "detail": entry.get("detail") or "",
+            "updated_at": ts,
+            "updated_at_str": _format_ts(ts),
+        })
+    try:
+        items.sort(key=lambda x: float(x.get("updated_at") or 0), reverse=True)
+    except Exception:
+        pass
+    if isinstance(limit, int) and limit > 0:
+        items = items[:limit]
+    return items
 
 
 def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header: str = "", base_url: str = "https://hdhive.com"):
@@ -2101,9 +3191,10 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
 
 def _run_self_service_request(payload: dict) -> None:
     ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    request_id = (payload.get("request_id") or "").strip()
     query = payload.get("query", "")
     title = payload.get("title", "") or ""
-    target_ids = payload.get("targets", [])
+    target_ids = payload.get("notify_targets") or payload.get("targets", [])
     max_results = int(payload.get("max_results", 5) or 5)
     max_results = max(1, min(max_results, 20))
     hdhive_cookie = payload.get("hdhive_cookie", "") or ""
@@ -2121,31 +3212,129 @@ def _run_self_service_request(payload: dict) -> None:
     if storage_mode not in ("any", "115", "123", "115_123"):
         storage_mode = "any"
     storage_label = _storage_mode_label(storage_mode)
+    dolby_preference = str(payload.get("dolby_preference", "any") or "any").lower()
+    if dolby_preference not in ("any", "prefer", "exclude"):
+        dolby_preference = "any"
+    dolby_label = _dolby_preference_label(dolby_preference)
+
+    def _record_result(success: bool, detail: str = "", resolved: bool = False) -> None:
+        if success:
+            msg = "✅ 资源已入库，请等待3-5分钟后进入服务器观看。"
+        elif resolved:
+            msg = "⚠️ 已解析到资源链接，但入库失败。"
+        else:
+            msg = "❌ 资源未找到，请联系管理员。"
+        if not detail:
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"年份: {request_year}" if request_year else "",
+                f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+            ])
+        if request_id:
+            status = "success" if success else ("partial" if resolved else "error")
+            _set_self_service_result(request_id, status, msg, detail)
+        _self_service_notify_result(target_ids, success, detail=detail, resolved=resolved)
 
     if use_open_api and direct_url and not allow_open_api_direct:
         use_open_api = False
 
     _append_self_service_log([f"[{ts}] [INFO] submit query={query} targets={target_ids}"])
 
+    dolby_url_cache: dict = {}
+
+    def _apply_dolby_preference_to_urls(urls: list) -> list:
+        if dolby_preference == "any":
+            return urls
+        if not urls:
+            return urls
+        detected = {}
+        for u in urls:
+            detected[u] = _hdhive_url_is_dolby(u, base_url, hdhive_cookie, cache=dolby_url_cache)
+        if dolby_preference == "exclude":
+            return [u for u in urls if detected.get(u) is not True]
+        # prefer
+        dolby_urls = [u for u in urls if detected.get(u) is True]
+        unknown_urls = [u for u in urls if detected.get(u) is None]
+        non_dolby_urls = [u for u in urls if detected.get(u) is False]
+        return dolby_urls + unknown_urls + non_dolby_urls
+
     if not target_ids:
         _append_self_service_log([f"[{ts}] [WARN] no targets configured"])
+        if request_id:
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"年份: {request_year}" if request_year else "",
+                "说明: 未配置通知用户",
+            ])
+            _set_self_service_result(request_id, "error", "未配置通知用户。", detail)
         return
 
     if use_open_api:
         if not open_api_key:
-            _self_service_notify_result(target_ids, False)
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                "说明: Open API Key 缺失",
+            ])
+            _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api missing api key"])
             return
 
         # Direct resource slug unlock
         if direct_url:
             slug = direct_url.rstrip('/').split('/')[-1]
+            detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
+            detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
+            unlock_points = None
+            already_owned = False
+            if isinstance(detail_data, dict):
+                unlock_points = _hdhive_open_api_extract_unlock_points(detail_data)
+                already_owned = bool(detail_data.get("already_owned") or detail_data.get("is_unlocked"))
+            else:
+                unlock_points = _hdhive_cookie_query_unlock_points(slug, hdhive_cookie)
+            if not already_owned:
+                if unlock_points is None:
+                    detail = _build_self_service_detail([
+                        f"片名: {title}" if title else "",
+                        f"网盘: {storage_label}" if storage_label != "不限" else "",
+                        "来源: Open API 直链",
+                        f"说明: 未获取到积分信息，已跳过解锁（阈值 {unlock_threshold}）",
+                    ])
+                    _record_result(False, detail=detail, resolved=False)
+                    _append_self_service_log([f"[{ts}] [WARN] open_api direct points unknown threshold {unlock_threshold} slug={slug}"])
+                    return
+                if unlock_points > 0 and unlock_points > unlock_threshold:
+                    detail = _build_self_service_detail([
+                        f"片名: {title}" if title else "",
+                        f"网盘: {storage_label}" if storage_label != "不限" else "",
+                        "来源: Open API 直链",
+                        f"说明: 需要 {unlock_points} 积分 > 阈值 {unlock_threshold}，已跳过解锁",
+                    ])
+                    _record_result(False, detail=detail, resolved=False)
+                    _append_self_service_log([f"[{ts}] [WARN] open_api direct points {unlock_points} > threshold {unlock_threshold} slug={slug}"])
+                    return
             unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
             if not unlock_resp.get("success"):
-                _self_service_notify_result(target_ids, False)
+                detail = _build_self_service_detail([
+                    f"片名: {title}" if title else "",
+                    f"网盘: {storage_label}" if storage_label != "不限" else "",
+                    f"说明: Open API 解锁失败",
+                ])
+                _record_result(False, detail=detail, resolved=False)
                 _append_self_service_log([f"[{ts}] [WARN] open_api unlock failed slug={slug}"])
                 return
             data = unlock_resp.get("data") if isinstance(unlock_resp, dict) else {}
+            is_dolby = _resource_is_dolby(data) if isinstance(data, dict) else False
+            if dolby_preference == "exclude" and is_dolby:
+                detail = _build_self_service_detail([
+                    f"片名: {title}" if title else "",
+                    f"网盘: {storage_label}" if storage_label != "不限" else "",
+                    "来源: Open API 直链",
+                    "说明: 杜比资源已排除",
+                ])
+                _record_result(False, detail=detail, resolved=False)
+                _append_self_service_log([f"[{ts}] [WARN] open_api direct excluded dolby slug={slug}"])
+                return
             full_url = ""
             if isinstance(data, dict):
                 full_url = data.get("full_url") or ""
@@ -2158,11 +3347,25 @@ def _run_self_service_request(payload: dict) -> None:
                     else:
                         full_url = url
             if full_url and not _match_storage_mode(full_url, storage_mode):
-                _self_service_notify_result(target_ids, False)
+                detail = _build_self_service_detail([
+                    f"片名: {title}" if title else "",
+                    f"网盘: {storage_label}" if storage_label != "不限" else "",
+                    "来源: Open API 直链",
+                    "说明: 非目标网盘，已过滤",
+                ])
+                _record_result(False, detail=detail, resolved=False)
                 _append_self_service_log([f"[{ts}] [WARN] open_api non-115 filtered slug={slug}"])
                 return
             transfer_ok, transfer_note = _try_115_share_transfer(full_url, payload)
-            _self_service_notify_result(target_ids, transfer_ok)
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                "来源: Open API 直链",
+                f"链接: {full_url}" if full_url else "",
+                f"入库: {transfer_note}" if transfer_note else "",
+                f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+            ])
+            _record_result(transfer_ok, detail=detail, resolved=bool(full_url))
             _append_self_service_log([f"[{ts}] [INFO] open_api direct transfer={transfer_ok} note={transfer_note} slug={slug}"])
             return
 
@@ -2186,7 +3389,12 @@ def _run_self_service_request(payload: dict) -> None:
                         tmdb_ids += [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, "movie")]
 
         if not tmdb_ids:
-            _self_service_notify_result(target_ids, False)
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                "说明: 未找到 TMDB 资源",
+            ])
+            _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no tmdb id query={query}"])
             return
 
@@ -2208,7 +3416,12 @@ def _run_self_service_request(payload: dict) -> None:
                 break
 
         if not collected_resources:
-            _self_service_notify_result(target_ids, False)
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                "说明: Open API 未返回可用资源",
+            ])
+            _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
             return
 
@@ -2221,11 +3434,31 @@ def _run_self_service_request(payload: dict) -> None:
             if item in candidate_pool:
                 continue
             points = _resource_unlock_points(item)
+            if points is None:
+                continue
             if points <= unlock_threshold:
                 candidate_pool.append(item)
 
+        filtered_out_by_dolby = False
+        if dolby_preference != "any" and candidate_pool:
+            tagged = [(item, _resource_is_dolby(item)) for item in candidate_pool]
+            if dolby_preference == "exclude":
+                before_count = len(candidate_pool)
+                candidate_pool = [item for item, is_dolby in tagged if not is_dolby]
+                filtered_out_by_dolby = before_count > 0 and not candidate_pool
+            else:
+                dolby_items = [item for item, is_dolby in tagged if is_dolby]
+                non_dolby_items = [item for item, is_dolby in tagged if not is_dolby]
+                candidate_pool = dolby_items + non_dolby_items
+
         if not candidate_pool:
-            _self_service_notify_result(target_ids, False)
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                "说明: 杜比资源已排除" if filtered_out_by_dolby else "说明: 无可用/可解锁资源",
+                f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+            ])
+            _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no affordable resources query={query}"])
             return
 
@@ -2263,12 +3496,26 @@ def _run_self_service_request(payload: dict) -> None:
             break
 
         if not picked:
-            _self_service_notify_result(target_ids, False)
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                "说明: 未找到可用资源或被过滤",
+            ])
+            _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no usable resources query={query} filtered={filtered_count}"])
             return
 
         transfer_ok, transfer_note = _try_115_share_transfer(picked_full_url, payload)
-        _self_service_notify_result(target_ids, transfer_ok)
+        detail = _build_self_service_detail([
+            f"片名: {title}" if title else "",
+            f"网盘: {storage_label}" if storage_label != "不限" else "",
+            "来源: Open API 搜索",
+            f"资源: {_format_resource_line(picked)}" if picked else "",
+            f"链接: {picked_full_url}" if picked_full_url else "",
+            f"入库: {transfer_note}" if transfer_note else "",
+            f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+        ])
+        _record_result(transfer_ok, detail=detail, resolved=bool(picked_full_url))
         _append_self_service_log([f"[{ts}] [INFO] open_api success slug={picked_slug} transfer={transfer_ok} note={transfer_note}"])
         return
 
@@ -2277,11 +3524,24 @@ def _run_self_service_request(payload: dict) -> None:
     used_query = query
     tmdb_urls = []
     tmdb_ids = []
+    dolby_filtered_empty = False
 
     if direct_url:
         normalized = direct_url
         if not normalized.startswith("http"):
             normalized = f"{base_url.rstrip('/')}/resource/115/{normalized.strip('/')}"
+        if dolby_preference == "exclude":
+            is_dolby = _hdhive_url_is_dolby(normalized, base_url, hdhive_cookie, cache=dolby_url_cache)
+            if is_dolby is True:
+                detail = _build_self_service_detail([
+                    f"片名: {title}" if title else "",
+                    f"网盘: {storage_label}" if storage_label != "不限" else "",
+                    "说明: 杜比资源已排除",
+                    f"杜比: {dolby_label}",
+                ])
+                _record_result(False, detail=detail, resolved=False)
+                _append_self_service_log([f"[{ts}] [WARN] direct url excluded dolby"])
+                return
         candidates = [normalized]
         used_query = query or title or direct_url
     else:
@@ -2353,8 +3613,19 @@ def _run_self_service_request(payload: dict) -> None:
                             break
                     if candidates:
                         break
+        if candidates:
+            original_count = len(candidates)
+            candidates = _apply_dolby_preference_to_urls(candidates)
+            if dolby_preference == "exclude" and original_count > 0 and not candidates:
+                dolby_filtered_empty = True
     if not candidates:
-        _self_service_notify_result(target_ids, False)
+        detail = _build_self_service_detail([
+            f"片名: {title}" if title else "",
+            f"网盘: {storage_label}" if storage_label != "不限" else "",
+            "说明: 杜比资源已排除" if dolby_filtered_empty else "说明: 未找到可用资源",
+            f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+        ])
+        _record_result(False, detail=detail, resolved=False)
         log_line = f"[{ts}] [WARN] no results for query={query}"
         if debug_lines:
             _append_self_service_log([log_line] + [f"[{ts}] [DEBUG] {line}" for line in debug_lines])
@@ -2399,6 +3670,8 @@ def _run_self_service_request(payload: dict) -> None:
                     continue
                 tmdb_url = f"{base_url}/tmdb/{mt}/{tid}?_rsc={int(time.time() * 1000)}"
                 _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, extra_candidates, max_results, debug_lines)
+            if extra_candidates:
+                extra_candidates = _apply_dolby_preference_to_urls(extra_candidates)
             tried = {url for url, _ in candidate_notes}
             for cand in extra_candidates:
                 if cand in tried:
@@ -2422,7 +3695,15 @@ def _run_self_service_request(payload: dict) -> None:
     else:
         transfer_ok, transfer_note = False, "no_real_url"
 
-    _self_service_notify_result(target_ids, transfer_ok)
+    detail = _build_self_service_detail([
+        f"片名: {title}" if title else "",
+        f"网盘: {storage_label}" if storage_label != "不限" else "",
+        f"链接: {real_url}" if real_url else "",
+        f"说明: {note}" if note else "",
+        f"入库: {transfer_note}" if transfer_note else "",
+        f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+    ])
+    _record_result(transfer_ok, detail=detail, resolved=bool(real_url))
 
     _append_self_service_log([
         f"[{ts}] [INFO] done query={used_query} primary={primary} ok={bool(real_url)} transfer={transfer_ok} note={transfer_note}"
@@ -2454,6 +3735,52 @@ def _resolve_log_view_config(cfg: dict):
     max_bytes = max(256 * 1024, min(max_bytes, 10 * 1024 * 1024))
 
     return interval, auto_refresh, max_lines, max_bytes
+
+
+def _tail_lines_by_bytes(lines: list, max_bytes: int) -> list:
+    if not lines:
+        return []
+    if not max_bytes or max_bytes <= 0:
+        return list(lines)
+    total = 0
+    kept = []
+    for line in reversed(lines):
+        try:
+            size = len((str(line) + '\n').encode('utf-8'))
+        except Exception:
+            size = len(str(line) + '\n')
+        if kept and total + size > max_bytes:
+            break
+        kept.append(line)
+        total += size
+        if total >= max_bytes:
+            break
+    return list(reversed(kept))
+
+
+def _downloader_log_cache_key(max_lines: int, max_bytes: int) -> str:
+    try:
+        import hashlib
+        logs = downloader.download_logs or []
+        tail = logs[-1] if logs else ''
+        summary = downloader.get_last_download_summary() or {}
+        summary_sig = f"{summary.get('file_path','')}|{summary.get('title','')}|{summary.get('resolution','')}"
+        raw = f"{len(logs)}|{tail}|{summary_sig}|{max_lines}|{max_bytes}"
+        return hashlib.md5(raw.encode('utf-8', errors='ignore')).hexdigest()
+    except Exception:
+        return f"downloader:{max_lines}:{max_bytes}"
+
+
+def _downloader_log_output(max_lines: int, max_bytes: int) -> str:
+    logs = list(downloader.download_logs or [])
+    if max_lines:
+        logs = logs[-max_lines:]
+    if max_bytes:
+        logs = _tail_lines_by_bytes(logs, max_bytes)
+    if not logs:
+        return "暂无日志。"
+    colored = [colorize_log_line(str(line)) for line in logs]
+    return "\n".join(colored)
 
 
 def _drama_scheduler_loop():
@@ -2528,9 +3855,34 @@ def _drama_scheduler_loop():
         output_lines = [ln for ln in (out or '').splitlines() if ln.strip()]
         err_lines = [ln for ln in (err or '').splitlines() if ln.strip()]
         summary_items = _build_drama_summary_items(output_lines, err_lines, ok=ok, dry_run=False)
+        prune_items = []
+        prune_count = 0
+        prune_mode = ''
+        prune_status = ''
+        prune_message = ''
+        prune_at = ''
         if ok:
             summary = _summarize_drama_output_lines(output_lines, prefer_write=True, max_parts=4) or '自动执行成功'
             status = 'success'
+            prune_info = _prune_tv_filters_finished_titles(cfg, trigger='scheduler')
+            removed_auto = int(prune_info.get('removed') or 0)
+            prune_items = prune_info.get('items') or []
+            prune_count = removed_auto
+            prune_status = prune_info.get('status') or ''
+            prune_message = prune_info.get('message') or ''
+            if prune_status == 'skipped':
+                prune_mode = 'skipped'
+            else:
+                prune_mode = 'apply'
+                prune_at = _format_scheduler_ts(time.time())
+            if removed_auto > 0:
+                prune_text = f"自动清理 {removed_auto}"
+                current_removed = summary_items.get('removed') if isinstance(summary_items, dict) else ''
+                if current_removed and current_removed != '无':
+                    summary_items['removed'] = f"{current_removed} / {prune_text}"
+                else:
+                    summary_items['removed'] = prune_text
+                summary = f"{summary} / {prune_text}"
         elif (err or '').strip() == DRAMA_RUN_BUSY_MESSAGE:
             summary = '已有任务在运行，已跳过本次自动调度'
             status = 'success'
@@ -2552,6 +3904,12 @@ def _drama_scheduler_loop():
             last_status=status,
             last_message=summary,
             last_summary=summary_items,
+            last_prune_items=prune_items,
+            last_prune_count=prune_count,
+            last_prune_mode=prune_mode,
+            last_prune_status=prune_status,
+            last_prune_message=prune_message,
+            last_prune_at=prune_at,
             schedule_mode=('cron' if use_cron else 'interval'),
             next_run_at=_format_scheduler_ts(next_run_ts),
         )
@@ -2931,13 +4289,13 @@ def colorize_log_line(line):
     # Step 5: Apply additional colorization based on keywords (only if no ANSI color detected)
     has_ansi_color = any(marker in line for marker in markers.keys()) or '<span style="color:' in line
     if not has_ansi_color:
-        if "ERROR:" in line or "失败:" in line or "失败。" in line:
+        if "[ERROR]" in line or "ERROR:" in line or "失败:" in line or "失败。" in line:
             return f'<span class="text-danger fw-bold">{line}</span>'
-        elif "成功" in line or "已启动" in line:
+        elif "[SUCCESS]" in line or "成功" in line or "已启动" in line:
             return f'<span class="text-success fw-bold">{line}</span>'
-        elif "警告" in line or "warning" in line:
+        elif "[WARNING]" in line or "[WARN]" in line or "警告" in line or "warning" in line:
             return f'<span class="text-warning fw-bold">{line}</span>'
-        elif "INFO:" in line or "info" in line or "正在连接" in line or "已更新" in line:
+        elif "[INFO]" in line or "INFO:" in line or "info" in line or "正在连接" in line or "已更新" in line:
             return f'<span class="text-info fw-bold">{line}</span>'
     
     return line
@@ -3192,6 +4550,7 @@ def manage_config():
             download_directory = request.form.get('download_directory', '').strip()
             download_video = request.form.get('download_video') == 'on'
             keep_video_message = request.form.get('keep_video_message') == 'on'
+            force_forward_all = request.form.get('force_forward_all') == 'on'
             convert_hdhive = request.form.get('convert_hdhive') == 'on'
             target_user_ids_restricted = request.form['target_user_ids_restricted']
             group_name = request.form.get('group_name', '默认分组').strip()
@@ -3206,9 +4565,19 @@ def manage_config():
             auto_click_keywords = [k.strip() for k in request.form.get('auto_click_keywords', '').split(',') if k.strip()]
             auto_click_button_texts = [k.strip() for k in request.form.get('auto_click_button_texts', '').split(',') if k.strip()]
             auto_click_notify_targets = [k.strip() for k in request.form.get('auto_click_notify_targets', '').split(',') if k.strip()]
+            auto_click_fast = request.form.get('auto_click_fast') == 'on'
+            auto_click_fast_skip_processing = request.form.get('auto_click_fast_skip_processing') == 'on'
             monitor_types = request.form.getlist('monitor_types')
+            forward_only = False
+            forward_enabled = keep_video_message or force_forward_all
             if not monitor_types:
-                monitor_types = ['video']  # 默认监控视频
+                if forward_enabled:
+                    monitor_types = ['all']
+                    forward_only = True
+                    flash("未选择下载类型，已切换为全类型转发（不下载）。", "info")
+                else:
+                    monitor_types = ['text']
+                    flash("未选择下载类型，已默认改为文本监控。", "info")
             
             # 调试日志
             print(f"DEBUG: channel_id={channel_id}, old_channel_id='{old_channel_id}', keep_video_message={keep_video_message}")
@@ -3220,7 +4589,7 @@ def manage_config():
                 auto_click_enabled = auto_click_redpacket or bool(auto_click_keywords)
 
                 # 如果不是转发模式，检查下载目录必须存在
-                if not keep_video_message and (not download_directory or not os.path.isdir(download_directory)):
+                if not forward_enabled and (not download_directory or not os.path.isdir(download_directory)):
                     # 如果 monitor_types 只包含 'text'，则不需要下载目录
                     if monitor_types != ['text']:
                         # 仅做红包/自动点击且未配置下载目录时，自动降级为文本监控
@@ -3248,6 +4617,7 @@ def manage_config():
                             entry['download_directory'] = download_directory
                             entry['download_video'] = download_video
                             entry['keep_video_message'] = keep_video_message
+                            entry['force_forward_all'] = force_forward_all
                             entry['convert_hdhive'] = convert_hdhive
                             entry['target_user_ids'] = target_user_ids_list
                             entry['group_name'] = group_name
@@ -3259,7 +4629,10 @@ def manage_config():
                             entry['auto_click_keywords'] = auto_click_keywords
                             entry['auto_click_button_texts'] = auto_click_button_texts
                             entry['auto_click_notify_targets'] = auto_click_notify_targets
+                            entry['auto_click_fast'] = auto_click_fast
+                            entry['auto_click_fast_skip_processing'] = auto_click_fast_skip_processing
                             entry['monitor_types'] = monitor_types
+                            entry['forward_only'] = forward_only
                             found = True
                             break
                     
@@ -3284,6 +4657,7 @@ def manage_config():
                         "download_directory": download_directory,
                         "download_video": download_video,
                         "keep_video_message": keep_video_message,
+                        "force_forward_all": force_forward_all,
                         "convert_hdhive": convert_hdhive,
                         "target_user_ids": target_user_ids_list,
                         "group_name": group_name,
@@ -3295,7 +4669,10 @@ def manage_config():
                         "auto_click_keywords": auto_click_keywords,
                         "auto_click_button_texts": auto_click_button_texts,
                         "auto_click_notify_targets": auto_click_notify_targets,
-                        "monitor_types": monitor_types
+                        "auto_click_fast": auto_click_fast,
+                        "auto_click_fast_skip_processing": auto_click_fast_skip_processing,
+                        "monitor_types": monitor_types,
+                        "forward_only": forward_only
                     })
                     # Update group_order if new group
                     if group_name not in config.get('group_order', []):
@@ -3332,10 +4709,17 @@ def manage_config():
 
         elif action == 'update_hdhive_cookie':
             hdhive_cookie = (request.form.get('hdhive_cookie') or '').strip()
+            hdhive_cookie_clear = request.form.get('hdhive_cookie_clear') == 'on'
             threshold_raw = (request.form.get('hdhive_auto_unlock_points_threshold') or '').strip()
             hdhive_base_url = (request.form.get('hdhive_base_url') or '').strip()
+            hdhive_cookie_test_resource = (request.form.get('hdhive_cookie_test_resource') or '').strip()
             hdhive_open_api_key = (request.form.get('hdhive_open_api_key') or '').strip()
             hdhive_open_api_direct_unlock = (request.form.get('hdhive_open_api_direct_unlock') or 'off').strip().lower() == 'on'
+            monitor_enabled = request.form.get('hdhive_cookie_monitor_enabled') == 'on'
+            monitor_interval_raw = (request.form.get('hdhive_cookie_monitor_interval_minutes') or '').strip()
+            monitor_notify_ids = (request.form.get('hdhive_cookie_monitor_notify_user_ids') or '').strip()
+            monitor_on_invalid = (request.form.get('hdhive_cookie_monitor_on_invalid') or 'notify').strip().lower()
+            monitor_force_cookie_test = request.form.get('hdhive_cookie_monitor_force_cookie_test') == 'on'
             try:
                 threshold = int(threshold_raw) if threshold_raw != '' else 0
                 if threshold < 0:
@@ -3343,22 +4727,37 @@ def manage_config():
             except ValueError:
                 threshold = 0
                 flash("自动解锁阈值必须是整数，已回退为 0。", "warning")
+            try:
+                monitor_interval = max(1, int(monitor_interval_raw or 60))
+            except Exception:
+                monitor_interval = 60
+            if monitor_on_invalid not in ("notify", "switch_open_api", "clear_cookie"):
+                monitor_on_invalid = "notify"
 
             config['hdhive_auto_unlock_points_threshold'] = threshold
-            if hdhive_cookie:
-                config['hdhive_cookie'] = hdhive_cookie
-                flash("HDHive Cookie 已更新！", "success")
-            else:
-                # Allow clearing
+            if hdhive_cookie_clear:
                 if 'hdhive_cookie' in config:
                     config.pop('hdhive_cookie', None)
                 flash("HDHive Cookie 已清除。", "info")
+            elif hdhive_cookie:
+                config['hdhive_cookie'] = hdhive_cookie
+                flash("HDHive Cookie 已更新！", "success")
+            else:
+                flash("HDHive Cookie 保持不变。", "info")
 
             if hdhive_base_url:
                 config['hdhive_base_url'] = hdhive_base_url
+            config['hdhive_cookie_test_resource'] = hdhive_cookie_test_resource
             if hdhive_open_api_key:
                 config['hdhive_open_api_key'] = hdhive_open_api_key
             config['hdhive_open_api_direct_unlock'] = hdhive_open_api_direct_unlock
+            config['hdhive_cookie_monitor'] = {
+                "enabled": monitor_enabled,
+                "interval_minutes": monitor_interval,
+                "notify_user_ids": monitor_notify_ids,
+                "on_invalid": monitor_on_invalid,
+                "force_cookie_test": monitor_force_cookie_test,
+            }
             save_config(config)
 
         elif action == 'update_self_service':
@@ -3369,6 +4768,8 @@ def manage_config():
             public_rate_window_raw = (request.form.get('self_service_public_rate_limit_window_seconds') or '').strip()
             public_rate_max_raw = (request.form.get('self_service_public_rate_limit_max_requests') or '').strip()
             target_user_ids = (request.form.get('self_service_target_user_ids') or '').strip()
+            notify_user_ids = (request.form.get('self_service_notify_user_ids') or '').strip()
+            notify_sender = (request.form.get('self_service_notify_sender') or 'telegram_monitor').strip().lower()
             storage_mode = (request.form.get('self_service_storage_mode') or 'any').strip().lower()
             if storage_mode not in ('any', '115', '123', '115_123'):
                 storage_mode = 'any'
@@ -3402,6 +4803,10 @@ def manage_config():
                 "max_requests": public_rate_max,
             }
             config['self_service_target_user_ids'] = target_user_ids
+            config['self_service_notify_user_ids'] = notify_user_ids
+            if notify_sender not in ('telegram_monitor', 'userbot', 'bot_monitor', 'bot'):
+                notify_sender = 'telegram_monitor'
+            config['self_service_notify_sender'] = notify_sender
             config['self_service_storage_mode'] = storage_mode
             config['self_service_search_max_results'] = max_results
             config['self_service_cookie_check_mode'] = cookie_check_mode
@@ -3498,7 +4903,11 @@ def manage_config():
 
         return redirect(url_for('manage_config'))
 
-    return render_template('config.html', config=config)
+    return render_template(
+        'config.html',
+        config=config,
+        hdhive_cookie_monitor_state=get_hdhive_cookie_monitor_state(),
+    )
 
 
 @app.route('/drama_calendar', methods=['GET', 'POST'])
@@ -3618,167 +5027,296 @@ def drama_calendar_settings():
             flash(f'追剧日历配置已保存。自动抓取：{auto_tip}（{plan_tip}）', 'success')
 
         elif action == 'update_drama_env_titles':
-            drama_cfg = config.get('drama_calendar', {})
-            env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
-            env_key = (drama_cfg.get('env_key') or 'DRAMA_CALENDAR_REGEX').strip() or 'DRAMA_CALENDAR_REGEX'
-            if not env_files_list:
-                flash('请先在追剧日历配置中填写至少一个 .env 路径。', 'error')
+            group_ids = request.form.getlist('env_group_id')
+            if not group_ids:
+                flash('没有可更新的条目。', 'warning')
             else:
-                allowed = {os.path.abspath(p): p for p in env_files_list}
-                group_ids = request.form.getlist('env_group_id')
-                if not group_ids:
-                    flash('没有可更新的条目。', 'warning')
-                else:
-                    updates_by_env = {}
-                    totals_by_env = {}
-                    source_titles_updates = {}
-                    for gid in group_ids:
-                        tag = (request.form.get(f'group_tag_{gid}') or '').strip() or 'manual'
-                        env_path = (request.form.get(f'group_env_{gid}') or '').strip()
-                        if not env_path:
+                data = _load_tv_channel_filters()
+                drama = data.get('drama') if isinstance(data, dict) else {}
+                if not isinstance(drama, dict):
+                    drama = {}
+                current_whitelist = drama.get('whitelist') if isinstance(drama, dict) else []
+                if not isinstance(current_whitelist, list):
+                    current_whitelist = []
+
+                current_titles = []
+                current_raw_entries = []
+                for entry in current_whitelist:
+                    if not isinstance(entry, str):
+                        continue
+                    extracted = _extract_titles_from_regex_value(entry)
+                    if extracted:
+                        current_titles.extend(extracted)
+                    else:
+                        current_raw_entries.append(entry)
+
+                before_norms = set()
+                for title in current_titles:
+                    norm = _normalize_title_for_match(title)
+                    if norm:
+                        before_norms.add(norm)
+                before_count = len(before_norms)
+
+                tv_abs = os.path.abspath(TV_CHANNEL_FILTERS_FILE)
+                current_norms = set()
+                for title in current_titles:
+                    norm = _normalize_title_for_match(title)
+                    if norm:
+                        current_norms.add(norm)
+
+                state = _load_drama_calendar_state()
+                source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
+                if not isinstance(source_titles_state, dict):
+                    source_titles_state = {}
+                env_entry = source_titles_state.get(tv_abs)
+                if not isinstance(env_entry, dict):
+                    env_entry = {}
+                source_map_for_env = {}
+                key_entry = env_entry.get(TV_FILTERS_STATE_KEY)
+                if isinstance(key_entry, dict):
+                    source_map_for_env = key_entry
+                if not source_map_for_env and current_titles:
+                    source_map_for_env = _backfill_tv_filters_source_titles(state, current_titles, current_raw_entries)
+
+                base_map = {}
+                used_norms = set()
+                if source_map_for_env:
+                    for source_tag, source_titles in source_map_for_env.items():
+                        if not isinstance(source_titles, list):
                             continue
-                        env_abs = os.path.abspath(env_path)
-                        if env_abs not in allowed:
-                            continue
+                        cleaned = []
+                        for title in source_titles:
+                            norm = _normalize_title_for_match(title)
+                            if not norm or norm in used_norms or norm not in current_norms:
+                                continue
+                            used_norms.add(norm)
+                            cleaned.append(title)
+                        if cleaned:
+                            base_map.setdefault(source_tag, []).extend(cleaned)
+
+                untracked = []
+                for title in current_titles:
+                    norm = _normalize_title_for_match(title)
+                    if norm and norm not in used_norms:
+                        untracked.append(title)
+                if untracked:
+                    base_map.setdefault('manual', []).extend(untracked)
+                if current_raw_entries and 'manual' not in base_map:
+                    base_map['manual'] = []
+
+                edited_titles = {}
+                edited_title_tags = set()
+                edited_raw_entries = None
+                edited_raw_seen = set()
+                edited_title_seen = {}
+                has_valid_group = False
+
+                def _push_edited_title(tag: str, value: str) -> None:
+                    tag = tag or 'manual'
+                    cleaned = (value or '').strip()
+                    if not cleaned:
+                        return
+                    norm = _normalize_title_for_match(cleaned)
+                    if not norm:
+                        return
+                    tag_seen = edited_title_seen.setdefault(tag, set())
+                    if norm in tag_seen:
+                        return
+                    tag_seen.add(norm)
+                    edited_titles.setdefault(tag, []).append(cleaned)
+
+                def _push_edited_raw(value: str) -> None:
+                    cleaned = (value or '').strip()
+                    if not cleaned:
+                        return
+                    if cleaned in edited_raw_seen:
+                        return
+                    edited_raw_seen.add(cleaned)
+                    if edited_raw_entries is None:
+                        return
+                    edited_raw_entries.append(cleaned)
+
+                for gid in group_ids:
+                    tag = (request.form.get(f'group_tag_{gid}') or '').strip() or 'manual'
+                    env_path = (request.form.get(f'group_env_{gid}') or '').strip()
+                    if env_path and os.path.abspath(env_path) != tv_abs:
+                        continue
+                    has_valid_group = True
+
+                    titles_key = f'titles_{gid}'
+                    titles_list_key = f'title_{gid}[]'
+                    if titles_key in request.form:
+                        edited_title_tags.add(tag)
+                        raw_titles = request.form.get(titles_key) or ''
+                        for part in re.split(r'[\n,，]+', raw_titles):
+                            _push_edited_title(tag, part)
+                    elif titles_list_key in request.form:
+                        edited_title_tags.add(tag)
                         orig_list = request.form.getlist(f'orig_{gid}[]')
-                        title_list = request.form.getlist(f'title_{gid}[]')
+                        title_list = request.form.getlist(titles_list_key)
                         remove_list = set(request.form.getlist(f'remove_{gid}[]'))
-                        new_titles = []
-                        seen_norm = set()
-                        totals = totals_by_env.setdefault(env_abs, {'before': 0, 'after': 0})
-                        totals['before'] += len(orig_list)
                         for orig, new in zip(orig_list, title_list):
                             if orig in remove_list:
                                 continue
-                            cleaned = (new or '').strip()
-                            if not cleaned:
+                            _push_edited_title(tag, new)
+
+                    raw_text_key = f'raw_{gid}'
+                    raw_list_key = f'raw_{gid}[]'
+                    if raw_text_key in request.form and raw_list_key not in request.form:
+                        if edited_raw_entries is None:
+                            edited_raw_entries = []
+                        raw_text = request.form.get(raw_text_key) or ''
+                        for line in raw_text.splitlines():
+                            _push_edited_raw(line)
+                    elif raw_list_key in request.form:
+                        if edited_raw_entries is None:
+                            edited_raw_entries = []
+                        orig_raw_list = request.form.getlist(f'orig_raw_{gid}[]')
+                        raw_list = request.form.getlist(raw_list_key)
+                        remove_raw_list = set(request.form.getlist(f'remove_raw_{gid}[]'))
+                        for orig, new in zip(orig_raw_list, raw_list):
+                            if orig in remove_raw_list:
                                 continue
-                            norm = _normalize_title_for_match(cleaned)
-                            if not norm or norm in seen_norm:
+                            _push_edited_raw(new)
+
+                if not has_valid_group:
+                    flash('没有可更新的条目。', 'warning')
+                else:
+                    candidate_map = {k: list(v) for k, v in base_map.items()}
+                    for tag in edited_title_tags:
+                        candidate_map[tag] = edited_titles.get(tag, [])
+
+                    if edited_raw_entries is None:
+                        raw_entries = list(current_raw_entries)
+                    else:
+                        raw_entries = list(edited_raw_entries)
+
+                    titles = []
+                    per_source_titles = {}
+                    seen_norm = set()
+
+                    order = [
+                        'calendar',
+                        'maoyan',
+                        'douban',
+                        'douban_asia',
+                        'douban_domestic',
+                        'douban_variety',
+                        'douban_animation',
+                        'all',
+                        'manual',
+                        'key',
+                        'unknown',
+                    ]
+
+                    def _tag_sort(tag_name: str) -> tuple:
+                        return (order.index(tag_name) if tag_name in order else len(order), tag_name or '')
+
+                    for tag in sorted(candidate_map.keys(), key=_tag_sort):
+                        tag_titles = candidate_map.get(tag) or []
+                        cleaned = []
+                        tag_seen = set()
+                        for title in tag_titles:
+                            value = (title or '').strip()
+                            if not value:
+                                continue
+                            norm = _normalize_title_for_match(value)
+                            if not norm or norm in tag_seen:
+                                continue
+                            tag_seen.add(norm)
+                            if norm in seen_norm:
                                 continue
                             seen_norm.add(norm)
-                            new_titles.append(cleaned)
-                        totals['after'] += len(new_titles)
-                        updates_by_env.setdefault(env_abs, []).append(
-                            (tag, _build_regex_from_titles(new_titles), _build_regex_from_titles(orig_list))
-                        )
-                        source_titles_updates.setdefault(env_abs, {})[tag] = new_titles
+                            titles.append(value)
+                            cleaned.append(value)
+                        if cleaned or (tag == 'manual' and raw_entries):
+                            per_source_titles[tag] = cleaned
 
-                    if not updates_by_env:
-                        flash('没有可更新的条目。', 'warning')
+                    regex_value = _build_regex_from_titles(titles)
+                    new_whitelist = list(raw_entries)
+                    if regex_value:
+                        new_whitelist.append(regex_value)
+
+                    after_count = len(titles)
+                    save_ok = True
+                    if new_whitelist == current_whitelist:
+                        flash('未检测到变更。', 'info')
                     else:
-                        managed_scope = 'source' if bool(drama_cfg.get('managed_scope_source_only', True)) else 'key'
+                        drama['whitelist'] = new_whitelist
+                        data['drama'] = drama
+                        if _save_tv_channel_filters(data):
+                            flash(f'追剧白名单已更新（{before_count} → {after_count}）。', 'success')
+                            ts = time.strftime('%Y-%m-%d %H:%M:%S')
+                            _append_drama_calendar_log([
+                                f'[{ts}] [INFO] [DRAMA][TV-EDIT] {TV_CHANNEL_FILTERS_FILE} {before_count}->{after_count}',
+                            ])
+                        else:
+                            save_ok = False
+                            flash('写入 tvchannel_filters.json 失败。', 'error')
+                            ts = time.strftime('%Y-%m-%d %H:%M:%S')
+                            _append_drama_calendar_log([
+                                f'[{ts}] [ERROR] [DRAMA][TV-EDIT] 写入失败: {TV_CHANNEL_FILTERS_FILE}',
+                            ])
+
+                    if save_ok:
                         state = _load_drama_calendar_state()
-                        records = state.get('records') if isinstance(state, dict) else []
-                        if not isinstance(records, list):
-                            records = []
                         source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
                         if not isinstance(source_titles_state, dict):
                             source_titles_state = {}
-                        had_change = False
-
-                        for env_abs, updates in updates_by_env.items():
-                            if not os.path.exists(env_abs):
-                                flash(f'目标 .env 不存在：{env_abs}', 'error')
-                                continue
-                            try:
-                                with open(env_abs, 'r', encoding='utf-8') as f:
-                                    original = f.read()
-                            except Exception as e:
-                                flash(f'读取 .env 失败：{env_abs} ({e})', 'error')
-                                continue
-
-                            if managed_scope == 'key':
-                                combined_titles = []
-                                seen_norm = set()
-                                for _, regex_value, _ in updates:
-                                    for title in _extract_titles_from_regex_value(regex_value):
-                                        norm = _normalize_title_for_match(title)
-                                        if not norm or norm in seen_norm:
-                                            continue
-                                        seen_norm.add(norm)
-                                        combined_titles.append(title)
-                                current_value = _extract_env_value_by_key(original, env_key)
-                                updates = [('key', _build_regex_from_titles(combined_titles), current_value)]
-
-                            updated = original
-                            for tag, regex_value, old_regex in updates:
-                                target_env_abs = os.path.abspath(env_abs)
-                                has_record = False
-                                for rec in records:
-                                    if not isinstance(rec, dict):
-                                        continue
-                                    rec_env = os.path.abspath(str(rec.get('env_path') or ''))
-                                    rec_key = str(rec.get('key') or '')
-                                    rec_source = str(rec.get('source') or '')
-                                    if managed_scope == 'key':
-                                        if rec_env == target_env_abs and rec_key == env_key:
-                                            has_record = True
-                                            break
-                                    else:
-                                        if rec_env == target_env_abs and rec_key == env_key and rec_source == tag:
-                                            has_record = True
-                                            break
-                                if not has_record and old_regex:
-                                    records.append(
-                                        {
-                                            'env_path': target_env_abs,
-                                            'key': env_key,
-                                            'source': tag,
-                                            'value': old_regex,
-                                            'updated_at': datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-                                        }
-                                    )
-                                updated, records = _replace_managed_append_value_in_memory(
-                                    env_content=updated,
-                                    key=env_key,
-                                    source_tag=tag,
-                                    env_path=env_abs,
-                                    new_value=regex_value,
-                                    records=records,
-                                    managed_scope=managed_scope,
-                                )
-
-                            if updated == original:
-                                flash(f'未检测到变更：{env_abs}', 'info')
-                                continue
-
-                            try:
-                                emergency_backup = f"{env_abs}.autosnap_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-                                shutil.copy2(env_abs, emergency_backup)
-                                if bool(drama_cfg.get('backup_before_write', False)):
-                                    _make_env_backup_if_needed(env_abs)
-                                with open(env_abs, 'w', encoding='utf-8') as f:
-                                    f.write(updated)
-                                had_change = True
-                                totals = totals_by_env.get(os.path.abspath(env_abs), {'before': 0, 'after': 0})
-                                flash(
-                                    f'已更新 .env：{env_abs}（{totals.get("before", 0)} → {totals.get("after", 0)}）',
-                                    'success',
-                                )
-                                ts = time.strftime('%Y-%m-%d %H:%M:%S')
-                                _append_drama_calendar_log([
-                                    f'[{ts}] [INFO] [DRAMA][ENV-EDIT] {env_abs} key={env_key} {totals.get("before", 0)}->{totals.get("after", 0)}',
-                                ])
-                            except Exception as e:
-                                flash(f'写入 .env 失败：{env_abs} ({e})', 'error')
-
-                        state['records'] = records
-                        for env_abs, per_source in source_titles_updates.items():
-                            env_entry = source_titles_state.get(env_abs)
-                            if not isinstance(env_entry, dict):
-                                env_entry = {}
-                            key_entry = env_entry.get(env_key)
-                            if not isinstance(key_entry, dict):
-                                key_entry = {}
-                            for tag, titles in per_source.items():
-                                key_entry[tag] = list(titles or [])
-                            env_entry[env_key] = key_entry
-                            source_titles_state[env_abs] = env_entry
+                        env_entry = source_titles_state.get(tv_abs)
+                        if not isinstance(env_entry, dict):
+                            env_entry = {}
+                        env_entry[TV_FILTERS_STATE_KEY] = dict(per_source_titles)
+                        source_titles_state[tv_abs] = env_entry
                         state['source_titles'] = source_titles_state
                         _save_drama_calendar_state(state)
-                        if not had_change:
-                            flash('未检测到需要写入的变更。', 'info')
+
+        elif action == 'backfill_tv_filters_sources':
+            if not _DRAMA_RUN_LOCK.acquire(blocking=False):
+                flash(DRAMA_RUN_BUSY_MESSAGE, 'warning')
+            else:
+                try:
+                    drama_cfg = config.get('drama_calendar', {})
+                    ok, source_map, err = _run_drama_calendar_source_map(drama_cfg)
+                finally:
+                    _DRAMA_RUN_LOCK.release()
+
+                if not ok:
+                    flash(f'回填失败：{err}', 'error')
+                elif not source_map:
+                    flash('未获取到来源数据，无法回填分类。', 'warning')
+                else:
+                    data = _load_tv_channel_filters()
+                    drama = data.get('drama') if isinstance(data, dict) else {}
+                    whitelist = drama.get('whitelist') if isinstance(drama, dict) else []
+                    if not isinstance(whitelist, list):
+                        whitelist = []
+                    titles = []
+                    raw_entries = []
+                    for entry in whitelist:
+                        if not isinstance(entry, str):
+                            continue
+                        extracted = _extract_titles_from_regex_value(entry)
+                        if extracted:
+                            titles.extend(extracted)
+                        else:
+                            raw_entries.append(entry)
+                    state = _load_drama_calendar_state()
+                    per_source = _backfill_tv_filters_source_titles_from_map(state, titles, raw_entries, source_map)
+                    if not per_source:
+                        flash('未匹配到可分类的剧名，请稍后重试。', 'warning')
+                    else:
+                        summary_parts = []
+                        for tag, items in per_source.items():
+                            if not items:
+                                continue
+                            summary_parts.append(f'{_label_for_source_tag(tag)} {len(items)}')
+                        summary = ' / '.join(summary_parts) if summary_parts else '完成'
+                        flash(f'已回填分类：{summary}', 'success')
+                        ts = time.strftime('%Y-%m-%d %H:%M:%S')
+                        _append_drama_calendar_log([
+                            f'[{ts}] [INFO] [DRAMA][TV-EDIT] 已回填分类 {summary}',
+                        ])
 
         elif action == 'run_drama_calendar':
             drama_cfg = config.get('drama_calendar', {})
@@ -3795,16 +5333,66 @@ def drama_calendar_settings():
 
             if ok:
                 label = '预览成功' if dry_run else '写入成功'
+                prune_items = []
+                prune_count = 0
+                prune_mode = ''
+                prune_status = ''
+                prune_message = ''
+                prune_at = ''
                 if dry_run:
                     summary = _summarize_drama_output_lines(output_lines, prefer_write=False, max_parts=6) or '无输出'
+                    prune_info = _prune_tv_filters_finished_titles(drama_cfg, trigger='preview', dry_run=True)
+                    removed_auto = int(prune_info.get('removed') or 0)
+                    prune_items = prune_info.get('items') or []
+                    prune_count = removed_auto
+                    prune_status = prune_info.get('status') or ''
+                    prune_message = prune_info.get('message') or ''
+                    if prune_status == 'skipped':
+                        prune_mode = 'skipped'
+                    else:
+                        prune_mode = 'preview'
+                        prune_at = _format_scheduler_ts(time.time())
+                    if removed_auto > 0:
+                        prune_text = f"预计清理 {removed_auto}"
+                        current_removed = summary_items.get('removed') if isinstance(summary_items, dict) else ''
+                        if current_removed and current_removed != '无':
+                            summary_items['removed'] = f"{current_removed} / {prune_text}"
+                        else:
+                            summary_items['removed'] = prune_text
+                        summary = f"{summary} / {prune_text}"
                 else:
                     summary = _summarize_drama_output_lines(output_lines, prefer_write=True, max_parts=6) or '无输出'
+                    prune_info = _prune_tv_filters_finished_titles(drama_cfg, trigger='manual')
+                    removed_auto = int(prune_info.get('removed') or 0)
+                    prune_items = prune_info.get('items') or []
+                    prune_count = removed_auto
+                    prune_status = prune_info.get('status') or ''
+                    prune_message = prune_info.get('message') or ''
+                    if prune_status == 'skipped':
+                        prune_mode = 'skipped'
+                    else:
+                        prune_mode = 'apply'
+                        prune_at = _format_scheduler_ts(time.time())
+                    if removed_auto > 0:
+                        prune_text = f"自动清理 {removed_auto}"
+                        current_removed = summary_items.get('removed') if isinstance(summary_items, dict) else ''
+                        if current_removed and current_removed != '无':
+                            summary_items['removed'] = f"{current_removed} / {prune_text}"
+                        else:
+                            summary_items['removed'] = prune_text
+                        summary = f"{summary} / {prune_text}"
                 flash(f'{label}：{summary}', 'success')
                 _set_drama_scheduler_state(
                     last_run_at=_format_scheduler_ts(time.time()),
                     last_status='success',
                     last_message=summary,
                     last_summary=summary_items,
+                    last_prune_items=prune_items,
+                    last_prune_count=prune_count,
+                    last_prune_mode=prune_mode,
+                    last_prune_status=prune_status,
+                    last_prune_message=prune_message,
+                    last_prune_at=prune_at,
                 )
             elif (err or '').strip() == DRAMA_RUN_BUSY_MESSAGE:
                 flash(DRAMA_RUN_BUSY_MESSAGE, 'warning')
@@ -3813,6 +5401,12 @@ def drama_calendar_settings():
                     last_status='warning',
                     last_message=DRAMA_RUN_BUSY_MESSAGE,
                     last_summary={'extract': '', 'removed': '', 'result': '已有任务运行'},
+                    last_prune_items=[],
+                    last_prune_count=0,
+                    last_prune_mode='',
+                    last_prune_status='',
+                    last_prune_message='',
+                    last_prune_at='',
                 )
             else:
                 summary_out = ' | '.join(output_lines[:4]) if output_lines else ''
@@ -3823,6 +5417,12 @@ def drama_calendar_settings():
                     last_status='error',
                     last_message=(summary_out + ' ' + summary_err).strip(),
                     last_summary=summary_items,
+                    last_prune_items=[],
+                    last_prune_count=0,
+                    last_prune_mode='',
+                    last_prune_status='',
+                    last_prune_message='',
+                    last_prune_at='',
                 )
 
         elif action == 'clear_drama_calendar_env':
@@ -3834,7 +5434,7 @@ def drama_calendar_settings():
 
         return redirect(url_for('drama_calendar_settings'))
 
-    env_edit_sources, env_edit_errors = [], []
+    env_edit_sources, env_edit_errors = _build_tv_filters_edit_view()
     return render_template(
         'drama_calendar.html',
         config=config,
@@ -3893,10 +5493,32 @@ def monitor_log_data():
 @app.route('/drama_calendar_log')
 @login_required
 def drama_calendar_log():
-    log_lines = _read_drama_calendar_log_lines()
+    cfg = load_config()
+    interval, auto_refresh, max_lines, max_bytes = _resolve_log_view_config(cfg)
+    log_lines = _read_drama_calendar_log_lines(max_lines=max_lines, max_bytes=max_bytes)
     colored_log_lines = [colorize_log_line(line) for line in log_lines]
-    log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无追剧日志。"
-    return render_template('drama_calendar_log.html', log_output=log_output)
+    log_output = "\n".join(colored_log_lines) if colored_log_lines else "暂无追剧日志。"
+    return render_template(
+        'drama_calendar_log.html',
+        log_output=log_output,
+        refresh_interval=interval,
+        auto_refresh=auto_refresh,
+    )
+
+
+@app.route('/drama_calendar_log_data')
+@login_required
+def drama_calendar_log_data():
+    cfg = load_config()
+    _, _, max_lines, max_bytes = _resolve_log_view_config(cfg)
+    last_key = (request.args.get("last_key") or "").strip()
+    current_key = _drama_calendar_log_cache_key(max_lines=max_lines, max_bytes=max_bytes)
+    if last_key and last_key == current_key:
+        return jsonify({"changed": False, "key": current_key})
+    log_lines = _read_drama_calendar_log_lines(max_lines=max_lines, max_bytes=max_bytes)
+    colored_log_lines = [colorize_log_line(line) for line in log_lines]
+    log_output = "\n".join(colored_log_lines) if colored_log_lines else "暂无追剧日志。"
+    return jsonify({"changed": True, "key": current_key, "log_output": log_output})
 
 @app.route('/file_config', methods=['GET', 'POST'])
 @login_required
@@ -4280,6 +5902,7 @@ async def api_get_channel_info():
 @login_required
 def downloader_page():
     config = load_config()
+    interval, auto_refresh, _, _ = _resolve_log_view_config(config)
     # Use project root/downloads as default if not set
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     default_path = config.get('downloader', {}).get('default_path')
@@ -4288,13 +5911,36 @@ def downloader_page():
         quality_mode = 'balanced_hd'
     if not default_path:
         default_path = os.path.join(project_root, 'downloads')
-    return render_template('downloader.html', default_path=default_path, quality_mode=quality_mode)
+    return render_template(
+        'downloader.html',
+        default_path=default_path,
+        quality_mode=quality_mode,
+        refresh_interval=interval,
+        auto_refresh=auto_refresh,
+    )
 
 @app.route('/downloader/log')
 @login_required
 def downloader_log():
     return jsonify({
         "logs": downloader.download_logs,
+        "last_download": downloader.get_last_download_summary(),
+    })
+
+
+@app.route('/downloader/log_data')
+@login_required
+def downloader_log_data():
+    cfg = load_config()
+    _, _, max_lines, max_bytes = _resolve_log_view_config(cfg)
+    last_key = (request.args.get("last_key") or "").strip()
+    current_key = _downloader_log_cache_key(max_lines=max_lines, max_bytes=max_bytes)
+    if last_key and last_key == current_key:
+        return jsonify({"changed": False, "key": current_key})
+    return jsonify({
+        "changed": True,
+        "key": current_key,
+        "log_output": _downloader_log_output(max_lines=max_lines, max_bytes=max_bytes),
         "last_download": downloader.get_last_download_summary(),
     })
 
@@ -4311,9 +5957,12 @@ def self_service_request():
     config = load_config()
     enabled = bool(config.get("self_service_enabled", False))
     targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
+    notify_targets = _parse_target_user_ids(config.get("self_service_notify_user_ids", ""))
+    effective_targets = notify_targets or targets
     max_results = int(config.get("self_service_search_max_results", 5) or 5)
     max_results = max(1, min(max_results, 20))
     hdhive_cookie = (config.get("hdhive_cookie") or "").strip()
+    hdhive_cookie_test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
     hdhive_api_key = (config.get("hdhive_open_api_key") or "").strip()
     use_open_api = bool(config.get("self_service_use_open_api", False))
     allow_open_api_direct = bool(config.get("hdhive_open_api_direct_unlock", False))
@@ -4333,8 +5982,8 @@ def self_service_request():
             if not hdhive_cookie:
                 flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
                 return redirect(url_for('self_service_request'))
-        if not targets:
-            flash("未配置接收用户，请先在配置页填写目标用户 ID。", "error")
+        if not effective_targets:
+            flash("未配置通知用户，请先在配置页填写通知用户 ID。", "error")
             return redirect(url_for('self_service_request'))
 
         if not effective_use_open_api:
@@ -4342,7 +5991,11 @@ def self_service_request():
             if cookie_check_mode not in ("strict", "warn", "off"):
                 cookie_check_mode = "warn"
             if cookie_check_mode != "off":
-                cookie_check = _test_hdhive_cookie((config.get("hdhive_base_url") or "https://hdhive.com"), hdhive_cookie)
+                cookie_check = _test_hdhive_cookie(
+                    (config.get("hdhive_base_url") or "https://hdhive.com"),
+                    hdhive_cookie,
+                    hdhive_cookie_test_resource,
+                )
                 if not cookie_check.get("success"):
                     msg = cookie_check.get("message") or "Cookie 无效或登录失效"
                     if cookie_check_mode == "strict":
@@ -4358,6 +6011,9 @@ def self_service_request():
         request_year = (request.form.get('year') or '').strip()
         tmdb_id = ""
         request_note = ""
+        dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
+        if dolby_preference not in ("any", "prefer", "exclude"):
+            dolby_preference = "any"
 
         query_parts = [title]
         if request_year:
@@ -4376,6 +6032,7 @@ def self_service_request():
             "query": query,
             "title": title,
             "targets": targets,
+            "notify_targets": effective_targets,
             "max_results": max_results,
             "hdhive_cookie": hdhive_cookie,
             "base_url": (config.get("hdhive_base_url") or "https://hdhive.com"),
@@ -4390,22 +6047,52 @@ def self_service_request():
             "open_api_direct_unlock": allow_open_api_direct,
             "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
             "storage_mode": storage_mode,
+            "dolby_preference": dolby_preference,
             "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
             "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }
+        request_id = uuid.uuid4().hex
+        payload["request_id"] = request_id
+        processing_detail = _build_self_service_detail([
+            f"片名: {title}" if title else "",
+            f"年份: {request_year}" if request_year else "",
+        ])
+        _set_self_service_result(request_id, "processing", "正在解析中，请稍候。", processing_detail)
+        submit_detail = _build_self_service_detail([
+            "来源: 登录入口",
+            f"片名: {title}" if title else "",
+            f"类型: {request_type}" if request_type else "",
+            f"年份: {request_year}" if request_year else "",
+            f"杜比: {_dolby_preference_label(dolby_preference)}" if dolby_preference != "any" else "",
+            f"RID: {request_id}",
+        ])
+        _self_service_notify_submit(effective_targets, submit_detail)
         threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
-        flash("已提交申请，后台处理中。结果将通过消息通知。", "success")
-        return redirect(url_for('self_service_request'))
+        flash("已提交申请，后台处理中。结果将在页面内展示。", "success")
+        return redirect(url_for('self_service_request', rid=request_id))
 
     return render_template(
         'self_service_request.html',
         enabled=enabled,
-        target_display=", ".join([str(t) for t in targets]) if targets else "未配置",
+        target_display=", ".join([str(t) for t in effective_targets]) if effective_targets else "未配置",
         max_results=max_results,
         has_cookie=bool(hdhive_cookie),
         has_open_api_key=bool(hdhive_api_key),
         use_open_api=use_open_api,
+        request_id=(request.args.get('rid') or '').strip(),
+        request_result=_get_self_service_result(request.args.get('rid') or ''),
+        recent_limit=SELF_SERVICE_RECENT_DISPLAY_LIMIT,
+        recent_results=_list_self_service_results(SELF_SERVICE_RECENT_DISPLAY_LIMIT),
     )
+
+
+@app.route('/self_service_result')
+def self_service_result():
+    rid = (request.args.get('rid') or '').strip()
+    result = _get_self_service_result(rid)
+    if not result:
+        return jsonify({"found": False})
+    return jsonify({"found": True, **result})
 
 @app.route('/self_service_public', methods=['GET', 'POST'])
 def self_service_public():
@@ -4414,9 +6101,12 @@ def self_service_public():
     public_enabled = bool(config.get("self_service_public_enabled", False))
     public_access_key = (config.get("self_service_public_access_key") or "").strip()
     targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
+    notify_targets = _parse_target_user_ids(config.get("self_service_notify_user_ids", ""))
+    effective_targets = notify_targets or targets
     max_results = int(config.get("self_service_search_max_results", 5) or 5)
     max_results = max(1, min(max_results, 20))
     hdhive_cookie = (config.get("hdhive_cookie") or "").strip()
+    hdhive_cookie_test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
     hdhive_api_key = (config.get("hdhive_open_api_key") or "").strip()
     use_open_api = bool(config.get("self_service_use_open_api", False))
     allow_open_api_direct = bool(config.get("hdhive_open_api_direct_unlock", False))
@@ -4452,8 +6142,8 @@ def self_service_public():
                 flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
                 return redirect(url_for('self_service_public'))
 
-        if not targets:
-            flash("未配置接收用户，请联系管理员。", "error")
+        if not effective_targets:
+            flash("未配置通知用户，请联系管理员。", "error")
             return redirect(url_for('self_service_public'))
 
         if not effective_use_open_api:
@@ -4461,7 +6151,11 @@ def self_service_public():
             if cookie_check_mode not in ("strict", "warn", "off"):
                 cookie_check_mode = "warn"
             if cookie_check_mode != "off":
-                cookie_check = _test_hdhive_cookie((config.get("hdhive_base_url") or "https://hdhive.com"), hdhive_cookie)
+                cookie_check = _test_hdhive_cookie(
+                    (config.get("hdhive_base_url") or "https://hdhive.com"),
+                    hdhive_cookie,
+                    hdhive_cookie_test_resource,
+                )
                 if not cookie_check.get("success"):
                     msg = cookie_check.get("message") or "Cookie 无效或登录失效"
                     if cookie_check_mode == "strict":
@@ -4478,6 +6172,9 @@ def self_service_public():
         request_year = (request.form.get('year') or '').strip()
         tmdb_id = ""
         request_note = ""
+        dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
+        if dolby_preference not in ("any", "prefer", "exclude"):
+            dolby_preference = "any"
 
         query_parts = [title]
         if request_year:
@@ -4496,6 +6193,7 @@ def self_service_public():
             "query": query,
             "title": title,
             "targets": targets,
+            "notify_targets": effective_targets,
             "max_results": max_results,
             "hdhive_cookie": hdhive_cookie,
             "base_url": (config.get("hdhive_base_url") or "https://hdhive.com"),
@@ -4510,12 +6208,29 @@ def self_service_public():
             "open_api_direct_unlock": allow_open_api_direct,
             "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
             "storage_mode": storage_mode,
+            "dolby_preference": dolby_preference,
             "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
             "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }
+        request_id = uuid.uuid4().hex
+        payload["request_id"] = request_id
+        processing_detail = _build_self_service_detail([
+            f"片名: {title}" if title else "",
+            f"年份: {request_year}" if request_year else "",
+        ])
+        _set_self_service_result(request_id, "processing", "正在解析中，请稍候。", processing_detail)
+        submit_detail = _build_self_service_detail([
+            "来源: 公共入口",
+            f"片名: {title}" if title else "",
+            f"类型: {request_type}" if request_type else "",
+            f"年份: {request_year}" if request_year else "",
+            f"杜比: {_dolby_preference_label(dolby_preference)}" if dolby_preference != "any" else "",
+            f"RID: {request_id}",
+        ])
+        _self_service_notify_submit(effective_targets, submit_detail)
         threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
-        flash("已提交申请，后台处理中。结果将通过消息通知。", "success")
-        return redirect(url_for('self_service_public'))
+        flash("已提交申请，后台处理中。结果将在页面内展示。", "success")
+        return redirect(url_for('self_service_public', rid=request_id))
 
     return render_template(
         'self_service_public.html',
@@ -4526,7 +6241,9 @@ def self_service_public():
         has_cookie=bool(hdhive_cookie),
         has_open_api_key=bool(hdhive_api_key),
         use_open_api=use_open_api,
-        target_display="管理员" if targets else "未配置",
+        target_display="管理员" if effective_targets else "未配置",
+        request_id=(request.args.get('rid') or '').strip(),
+        request_result=_get_self_service_result(request.args.get('rid') or ''),
     )
 
 @app.route('/api/download', methods=['POST'])
@@ -4681,7 +6398,31 @@ def api_hdhive_test_cookie():
     config = load_config()
     base_url = (config.get('hdhive_base_url') or 'https://hdhive.com').strip()
     api_key = (config.get('hdhive_open_api_key') or '').strip()
-    if api_key:
+    mode = ""
+    try:
+        payload = request.get_json(silent=True) or {}
+        mode = str(payload.get("mode") or "").strip().lower()
+    except Exception:
+        mode = ""
+
+    if mode not in ("cookie", "api", "auto", ""):
+        mode = ""
+
+    monitor_cfg = config.get("hdhive_cookie_monitor") if isinstance(config, dict) else {}
+    monitor_enabled = bool((monitor_cfg or {}).get("enabled", False))
+
+    def _update_monitor_state(success: bool, message: str) -> None:
+        status = "ok" if success else "invalid"
+        if message == "未配置 Cookie":
+            status = "missing"
+        _set_hdhive_cookie_monitor_state(
+            enabled=monitor_enabled,
+            last_check_at=_format_scheduler_ts(time.time()),
+            last_status=status,
+            last_message=message,
+        )
+
+    if mode in ("", "auto", "api") and api_key:
         ping = _hdhive_open_api_ping(base_url, api_key)
         if isinstance(ping, dict) and ping.get("success") is True:
             details = []
@@ -4691,14 +6432,18 @@ def api_hdhive_test_cookie():
                     details.append(f"api_key_id={data.get('api_key_id')}")
                 if data.get("name"):
                     details.append(f"name={data.get('name')}")
+            _update_monitor_state(True, "Open API Key 有效")
             return jsonify({"success": True, "message": "Open API Key 有效", "details": details})
         msg = (ping.get("message") if isinstance(ping, dict) else None) or "Open API Key 无效"
         code = (ping.get("code") if isinstance(ping, dict) else None) or ""
         detail = f"code={code}" if code else "code=unknown"
+        _update_monitor_state(False, msg)
         return jsonify({"success": False, "message": msg, "details": [detail]})
 
     cookie = (config.get('hdhive_cookie') or '').strip()
-    result = _test_hdhive_cookie(base_url, cookie)
+    test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
+    result = _test_hdhive_cookie(base_url, cookie, test_resource)
+    _update_monitor_state(bool(result.get("success")), result.get("message") or "")
     return jsonify(result)
 
 
@@ -4768,5 +6513,6 @@ if __name__ == "__main__":
         start_file_monitor_process()
         start_bot_monitor_process()
         start_drama_scheduler()
+        start_hdhive_cookie_monitor()
 
     app.run(host="0.0.0.0", port=5001, debug=debug_mode, use_reloader=debug_mode)

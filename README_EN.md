@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.4.90`
+Latest image: `y1nf0x/tg-file-monitor:0.5.04`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.4.90
+y1nf0x/tg-file-monitor:0.5.04
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,14 @@ Try:
 
 ## 📊 Release History
 
-### v0.4.90 (2026-03-15) - Current
+### v0.5.04 (2026-03-16) - Current
+- Fast red packet click mode: prefer button text and skip context fetch
+- Optional "skip follow-up processing" after click for maximum speed
+- HDHive cookie test/monitoring: unlock-points fallback, force cookie test, sync test result to status
+- Self-service UI: recent list on the right, details collapsed, limit display count
+- Drama scheduler log now keeps only the latest run
+
+### v0.4.90 (2026-03-15)
 - Channel monitor uses built-in `tvchannel_filters.json` (regex allow/deny)
 - Drama regex no longer depends on external `.env`
 

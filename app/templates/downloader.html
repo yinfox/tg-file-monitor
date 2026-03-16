@@ -93,10 +93,24 @@
             </div>
         </div>
         <div class="card shadow-sm h-100">
-            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 small"><i class="bi bi-terminal me-2"></i>实时下载日志</h5>
-                <button class="btn btn-xs btn-outline-light py-0 px-2 small" id="clearLogBtn"
-                    style="font-size: 0.75rem;">清除</button>
+            <div class="card-header bg-dark text-white">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 small"><i class="bi bi-terminal me-2"></i>实时下载日志</h5>
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="d-flex align-items-center gap-1 small">
+                            <div class="form-check form-switch mb-0">
+                                <input class="form-check-input" type="checkbox" id="autoRefreshToggle" {% if auto_refresh %}checked{% endif %}>
+                                <label class="form-check-label" for="autoRefreshToggle">
+                                    <i class="bi bi-arrow-clockwise"></i> 实时刷新 (<span id="refreshCountdown">{{ refresh_interval }}</span>s)
+                                </label>
+                            </div>
+                        </div>
+                        <div class="btn-group btn-group-sm" role="group" aria-label="log actions">
+                            <button class="btn btn-outline-light" id="refreshLogBtn">刷新</button>
+                            <button class="btn btn-outline-light" id="clearLogBtn">清除</button>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="card-body bg-dark p-0">
                 <pre id="logContainer" class="m-0 p-2"
@@ -146,35 +160,98 @@
     const lastDownloadResolution = document.getElementById('lastDownloadResolution');
     const lastDownloadFile = document.getElementById('lastDownloadFile');
     const lastDownloadUrl = document.getElementById('lastDownloadUrl');
+    const autoRefreshToggle = document.getElementById('autoRefreshToggle');
+    const refreshCountdown = document.getElementById('refreshCountdown');
+    const refreshLogBtn = document.getElementById('refreshLogBtn');
 
-    // Polling logs
+    const refreshInterval = {{ refresh_interval|default(5) }};
+    let autoRefresh = {{ 'true' if auto_refresh else 'false' }};
+    let countdown = refreshInterval;
+    let countdownId = null;
+    let lastKey = "";
+
+    function updateLastDownload(summary) {
+        const last = summary || {};
+        const hasLast = last && (last.title || last.resolution || last.file_name || last.source_url);
+        if (hasLast) {
+            lastDownloadCard.style.display = '';
+            lastDownloadTitle.textContent = last.title || '-';
+            lastDownloadResolution.textContent = last.resolution || '-';
+            lastDownloadFile.textContent = last.file_name || '-';
+            lastDownloadUrl.textContent = last.source_url || '-';
+        } else {
+            lastDownloadCard.style.display = 'none';
+        }
+    }
+
     function pollLogs() {
-        fetch('/downloader/log')
+        const url = new URL('/downloader/log_data', window.location.origin);
+        if (lastKey) {
+            url.searchParams.set('last_key', lastKey);
+        }
+        fetch(url)
             .then(response => response.json())
             .then(data => {
-                logContainer.innerHTML = data.logs.map(line => {
-                    if (line.includes('[ERROR]')) return `<span class="text-danger">${line}</span>`;
-                    if (line.includes('[SUCCESS]')) return `<span class="text-success">${line}</span>`;
-                    if (line.includes('[WARNING]')) return `<span class="text-warning">${line}</span>`;
-                    return line;
-                }).join('\n');
-                logContainer.scrollTop = logContainer.scrollHeight;
-
-                const last = data.last_download || {};
-                const hasLast = last && (last.title || last.resolution || last.file_name || last.source_url);
-                if (hasLast) {
-                    lastDownloadCard.style.display = '';
-                    lastDownloadTitle.textContent = last.title || '-';
-                    lastDownloadResolution.textContent = last.resolution || '-';
-                    lastDownloadFile.textContent = last.file_name || '-';
-                    lastDownloadUrl.textContent = last.source_url || '-';
-                } else {
-                    lastDownloadCard.style.display = 'none';
+                if (data && data.key) {
+                    lastKey = data.key;
+                }
+                if (data && data.changed && typeof data.log_output === 'string') {
+                    logContainer.innerHTML = data.log_output;
+                    logContainer.scrollTop = logContainer.scrollHeight;
+                }
+                if (data && data.last_download) {
+                    updateLastDownload(data.last_download);
                 }
             });
     }
 
-    setInterval(pollLogs, 2000);
+    function updateCountdown() {
+        countdown--;
+        if (countdown <= 0) {
+            countdown = refreshInterval;
+            if (autoRefresh) {
+                pollLogs();
+            }
+        }
+        if (refreshCountdown) {
+            refreshCountdown.textContent = countdown;
+        }
+    }
+
+    function startAutoRefresh() {
+        countdownId = setInterval(updateCountdown, 1000);
+    }
+
+    if (autoRefresh) {
+        pollLogs();
+        startAutoRefresh();
+    } else if (refreshCountdown) {
+        refreshCountdown.textContent = '--';
+    }
+
+    if (autoRefreshToggle) {
+        autoRefreshToggle.addEventListener('change', function () {
+            autoRefresh = this.checked;
+            if (!autoRefresh) {
+                if (countdownId) clearInterval(countdownId);
+                if (refreshCountdown) refreshCountdown.textContent = '--';
+            } else {
+                countdown = refreshInterval;
+                if (refreshCountdown) refreshCountdown.textContent = countdown;
+                startAutoRefresh();
+            }
+        });
+    }
+
+    if (refreshLogBtn) {
+        refreshLogBtn.addEventListener('click', function () {
+            pollLogs();
+            if (autoRefresh) {
+                countdown = refreshInterval;
+                if (refreshCountdown) refreshCountdown.textContent = countdown;
+            }
+        });
+    }
 
     downloadForm.addEventListener('submit', function (e) {
         e.preventDefault();
@@ -220,7 +297,11 @@
 
     clearLogBtn.addEventListener('click', function () {
         fetch('/downloader/clear_log', { method: 'POST' })
-            .then(() => logContainer.textContent = '');
+            .then(() => {
+                logContainer.textContent = '';
+                lastKey = "";
+                updateLastDownload(null);
+            });
     });
 
     saveDirBtn.addEventListener('click', async function () {

@@ -4,17 +4,63 @@
 
 {% block extra_head %}
 <style>
+    @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600;700&display=swap");
+
+    :root {
+        --glass-bg: rgba(255, 255, 255, 0.18);
+        --glass-bg-strong: rgba(255, 255, 255, 0.28);
+        --glass-border: rgba(255, 255, 255, 0.35);
+        --glass-shadow: 0 20px 45px rgba(15, 23, 42, 0.18);
+        --glass-blur: 18px;
+        --ink-900: #0f172a;
+        --ink-700: #334155;
+        --ink-500: #64748b;
+        --accent-cyan: #67e8f9;
+        --accent-blue: #60a5fa;
+        --accent-emerald: #34d399;
+        --accent-violet: #a78bfa;
+    }
+
     .drama-layout {
         max-width: 1280px;
+        position: relative;
+        font-family: "Space Grotesk", "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        color: var(--ink-900);
+        isolation: isolate;
+    }
+
+    .drama-layout::before {
+        content: "";
+        position: absolute;
+        inset: -80px -40px 0;
+        z-index: -2;
+        background:
+            radial-gradient(circle at 12% 20%, rgba(56, 189, 248, 0.25), transparent 35%),
+            radial-gradient(circle at 86% 12%, rgba(167, 139, 250, 0.24), transparent 30%),
+            radial-gradient(circle at 50% 85%, rgba(16, 185, 129, 0.18), transparent 40%),
+            linear-gradient(180deg, rgba(241, 245, 249, 0.92), rgba(226, 232, 240, 0.95));
+        filter: blur(0.2px);
+        pointer-events: none;
+    }
+
+    .drama-layout::after {
+        content: "";
+        position: absolute;
+        inset: -80px -40px 0;
+        z-index: -1;
+        background: radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.4), transparent 40%);
+        opacity: 0.6;
+        pointer-events: none;
     }
 
     .drama-hero {
         margin-bottom: 0.85rem;
-        padding: 0.9rem 1rem;
+        padding: 0.52rem 0.7rem;
         border-radius: 1rem;
         background:
-            radial-gradient(circle at top right, rgba(245, 158, 11, 0.22), transparent 30%),
-            linear-gradient(135deg, rgba(79, 70, 229, 0.96), rgba(37, 99, 235, 0.9));
+            radial-gradient(circle at top right, rgba(245, 158, 11, 0.28), transparent 32%),
+            radial-gradient(circle at 10% 20%, rgba(16, 185, 129, 0.2), transparent 35%),
+            linear-gradient(135deg, rgba(79, 70, 229, 0.98), rgba(37, 99, 235, 0.92));
         color: #fff;
         box-shadow: 0 18px 38px rgba(79, 70, 229, 0.18);
     }
@@ -34,15 +80,16 @@
         display: flex;
         align-items: center;
         gap: 0.55rem;
-        font-size: 1.15rem;
+        font-size: 0.92rem;
         font-weight: 800;
         letter-spacing: -0.02em;
     }
 
     .drama-hero-desc {
         margin-top: 0.28rem;
-        font-size: 0.78rem;
-        color: rgba(255, 255, 255, 0.8);
+        font-size: 0.7rem;
+        line-height: 1.4;
+        color: #e0f2fe;
     }
 
     .drama-hero-meta {
@@ -59,17 +106,18 @@
         max-width: 100%;
         padding: 0.38rem 0.68rem;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.14);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        font-size: 0.76rem;
-        color: rgba(255, 255, 255, 0.92);
+        background: rgba(255, 255, 255, 0.16);
+        border: 1px solid rgba(253, 230, 138, 0.3);
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+        font-size: 0.62rem;
+        color: rgba(255, 255, 255, 0.96);
     }
 
     .drama-hero-chip-label {
-        font-size: 0.68rem;
+        font-size: 0.56rem;
         text-transform: uppercase;
         letter-spacing: 0.08em;
-        color: rgba(255, 255, 255, 0.64);
+        color: #fde68a;
     }
 
     .drama-hero-chip-value {
@@ -77,7 +125,7 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        font-size: 0.8rem;
+        font-size: 0.68rem;
         font-weight: 800;
     }
 
@@ -86,8 +134,8 @@
         flex-wrap: wrap;
         gap: 0.4rem 0.75rem;
         margin-top: 0.55rem;
-        font-size: 0.76rem;
-        color: rgba(255, 255, 255, 0.82);
+        font-size: 0.66rem;
+        color: rgba(255, 255, 255, 0.92);
     }
 
     .drama-hero-subitem {
@@ -97,8 +145,21 @@
         min-width: 0;
     }
 
+    .drama-hero-subitem.full {
+        flex-basis: 100%;
+    }
+
+    .drama-hero-subitem.full .drama-hero-subvalue {
+        max-width: 100%;
+        white-space: normal;
+        overflow: visible;
+        text-overflow: clip;
+    }
+
     .drama-hero-sublabel {
-        color: rgba(255, 255, 255, 0.58);
+        color: #a5f3fc;
+        font-weight: 600;
+        letter-spacing: 0.02em;
     }
 
     .drama-hero-subvalue {
@@ -106,7 +167,9 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+        font-size: 0.72rem;
         font-weight: 700;
+        color: #fef3c7;
     }
 
     .drama-hero-actions {
@@ -118,9 +181,72 @@
 
     .drama-hero-action-btn {
         border-radius: 999px;
-        font-size: 0.7rem;
-        font-weight: 700;
-        padding: 0.3rem 0.75rem;
+        font-size: 0.78rem;
+        font-weight: 800;
+        padding: 0.35rem 0.85rem;
+    }
+
+    .card {
+        background: var(--glass-bg-strong);
+        border: 1px solid var(--glass-border);
+        box-shadow: var(--glass-shadow);
+        backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+    }
+
+    .card-header {
+        background: rgba(255, 255, 255, 0.32);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.25);
+    }
+
+    .card-header.bg-primary {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.7), rgba(14, 165, 233, 0.6));
+        border-bottom-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .card-header.bg-light {
+        background: rgba(255, 255, 255, 0.4);
+    }
+
+    .source-filter-block {
+        background: rgba(255, 255, 255, 0.22);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        backdrop-filter: blur(var(--glass-blur)) saturate(140%);
+    }
+
+    .env-edit-group {
+        background: rgba(255, 255, 255, 0.28);
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        backdrop-filter: blur(12px) saturate(130%);
+    }
+
+    .form-control,
+    .form-select {
+        background: rgba(255, 255, 255, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.45);
+    }
+
+    .form-control:focus,
+    .form-select:focus {
+        background: rgba(255, 255, 255, 0.85);
+        border-color: #60a5fa;
+        box-shadow: 0 0 0 0.2rem rgba(96, 165, 250, 0.2);
+    }
+
+    .form-check-input:checked {
+        background-color: #38bdf8;
+        border-color: #38bdf8;
+    }
+
+    .source-tabs .nav-link {
+        background: rgba(255, 255, 255, 0.5);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        backdrop-filter: blur(10px) saturate(140%);
+    }
+
+    .source-tabs .nav-link.active {
+        background: rgba(79, 70, 229, 0.9);
+        border-color: rgba(255, 255, 255, 0.25);
     }
 
     .drama-status-card {
@@ -130,8 +256,8 @@
         min-height: 100%;
         padding: 0.85rem 0.9rem;
         border-radius: 0.95rem;
-        background: rgba(10, 14, 33, 0.22);
-        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(15, 23, 42, 0.32);
+        border: 1px solid rgba(255, 255, 255, 0.2);
         backdrop-filter: blur(12px);
     }
 
@@ -196,6 +322,26 @@
         word-break: break-word;
     }
 
+    .status-success {
+        color: #34d399;
+    }
+
+    .status-error {
+        color: #f87171;
+    }
+
+    .status-warning {
+        color: #f6c66a;
+    }
+
+    .status-info {
+        color: #60a5fa;
+    }
+
+    .status-muted {
+        color: rgba(255, 255, 255, 0.78);
+    }
+
     .drama-status-message {
         margin-top: 0.6rem;
         padding-top: 0.55rem;
@@ -203,6 +349,48 @@
         font-size: 0.78rem;
         color: rgba(255, 255, 255, 0.82);
         line-height: 1.4;
+    }
+
+    .drama-prune {
+        margin-top: 0.6rem;
+        border-radius: 0.75rem;
+        border: 1px dashed rgba(255, 255, 255, 0.2);
+        background: rgba(15, 23, 42, 0.25);
+        padding: 0.5rem 0.65rem;
+    }
+
+    .drama-prune summary {
+        cursor: pointer;
+        font-size: 0.74rem;
+        font-weight: 700;
+        color: rgba(255, 255, 255, 0.9);
+        list-style: none;
+    }
+
+    .drama-prune summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .drama-prune-list {
+        margin-top: 0.45rem;
+        display: grid;
+        gap: 0.2rem;
+        max-height: 180px;
+        overflow-y: auto;
+        font-size: 0.72rem;
+        color: rgba(255, 255, 255, 0.78);
+    }
+
+    .drama-prune-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.5rem;
+    }
+
+    .drama-prune-note {
+        margin-top: 0.2rem;
+        font-size: 0.68rem;
+        color: rgba(226, 232, 240, 0.7);
     }
 
     .drama-status-summary {
@@ -234,6 +422,18 @@
         word-break: break-word;
     }
 
+    .drama-status-summary-value.accent-extract {
+        color: #67e8f9;
+    }
+
+    .drama-status-summary-value.accent-removed {
+        color: #f7d08a;
+    }
+
+    .drama-status-summary-value.accent-result {
+        color: #34d399;
+    }
+
     .source-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -257,9 +457,11 @@
         width: 100%;
         min-height: 5.6rem;
         padding: 0.7rem 0.8rem;
-        border: 1px solid rgba(79, 70, 229, 0.15);
+        border: 1px solid rgba(148, 163, 184, 0.25);
         border-radius: 0.85rem;
-        background: rgba(255, 255, 255, 0.72);
+        background: var(--glass-bg);
+        backdrop-filter: blur(var(--glass-blur)) saturate(150%);
+        box-shadow: var(--glass-shadow);
         transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
         cursor: pointer;
     }
@@ -288,13 +490,13 @@
         justify-content: space-between;
         gap: 0.5rem;
         font-weight: 700;
-        color: #111827;
+        color: var(--ink-900);
     }
 
     .source-card-desc {
         margin-top: 0.25rem;
         font-size: 0.74rem;
-        color: #6b7280;
+        color: var(--ink-500);
         line-height: 1.35;
         display: -webkit-box;
         -webkit-line-clamp: 2;
@@ -305,9 +507,10 @@
     .source-panel {
         margin-top: 0.65rem;
         padding: 0.65rem 0.75rem 0.1rem;
-        border: 1px dashed rgba(79, 70, 229, 0.2);
+        border: 1px solid rgba(148, 163, 184, 0.28);
         border-radius: 0.9rem;
-        background: rgba(255, 255, 255, 0.38);
+        background: var(--glass-bg);
+        backdrop-filter: blur(var(--glass-blur)) saturate(140%);
     }
 
     .source-panel[hidden] {
@@ -318,7 +521,7 @@
         margin-bottom: 0.45rem;
         font-size: 0.82rem;
         font-weight: 800;
-        color: #4338ca;
+        color: #1d4ed8;
         letter-spacing: 0.02em;
     }
 
@@ -366,21 +569,21 @@
     .panel-toggle-heading {
         font-size: 0.82rem;
         font-weight: 800;
-        color: #4338ca;
+        color: #1d4ed8;
         letter-spacing: 0.02em;
     }
 
     .panel-toggle-meta {
         margin-top: 0.2rem;
         font-size: 0.76rem;
-        color: #6b7280;
+        color: var(--ink-500);
         white-space: nowrap;
         overflow: hidden;
         text-overflow: ellipsis;
     }
 
     .panel-toggle-icon {
-        color: #4f46e5;
+        color: #2563eb;
         transition: transform 0.18s ease;
     }
 
@@ -435,8 +638,9 @@
     .source-filter-block {
         padding: 0.55rem 0.65rem;
         border-radius: 0.8rem;
-        background: rgba(79, 70, 229, 0.05);
-        border: 1px solid rgba(79, 70, 229, 0.12);
+        background: rgba(255, 255, 255, 0.22);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        backdrop-filter: blur(var(--glass-blur)) saturate(140%);
     }
 
     .source-filter-toggle {
@@ -454,18 +658,18 @@
     .source-filter-block-title {
         font-size: 0.74rem;
         font-weight: 800;
-        color: #4338ca;
+        color: #0f172a;
         letter-spacing: 0.03em;
     }
 
     .source-filter-block-meta {
         margin-top: 0.18rem;
         font-size: 0.72rem;
-        color: #6b7280;
+        color: var(--ink-500);
     }
 
     .source-filter-toggle-icon {
-        color: #4f46e5;
+        color: #2563eb;
         transition: transform 0.18s ease;
     }
 
@@ -480,8 +684,9 @@
     .env-edit-group {
         padding: 0.6rem 0.7rem;
         border-radius: 0.75rem;
-        border: 1px solid rgba(148, 163, 184, 0.35);
-        background: #f8fafc;
+        border: 1px solid rgba(148, 163, 184, 0.25);
+        background: rgba(255, 255, 255, 0.28);
+        backdrop-filter: blur(12px) saturate(130%);
         margin-bottom: 0.6rem;
     }
 
@@ -510,6 +715,14 @@
         flex: 1;
     }
 
+    .env-edit-add {
+        margin-top: 0.5rem;
+    }
+
+    .env-edit-add .form-text {
+        margin-top: 0.25rem;
+    }
+
     .env-edit-actions {
         display: flex;
         flex-wrap: wrap;
@@ -534,16 +747,17 @@
     .source-tabs .nav-link {
         border-radius: 999px;
         padding: 0.3rem 0.8rem;
-        border: 1px solid rgba(79, 70, 229, 0.15);
-        background: rgba(255, 255, 255, 0.7);
+        border: 1px solid rgba(148, 163, 184, 0.28);
+        background: rgba(255, 255, 255, 0.5);
+        backdrop-filter: blur(10px) saturate(140%);
         color: #374151;
         font-size: 0.78rem;
         line-height: 1.25;
     }
 
     .source-tabs .nav-link.active {
-        background: #4f46e5;
-        border-color: #4f46e5;
+        background: rgba(79, 70, 229, 0.9);
+        border-color: rgba(255, 255, 255, 0.25);
         color: #fff;
         box-shadow: 0 10px 20px rgba(79, 70, 229, 0.16);
     }
@@ -625,9 +839,12 @@
                         <i class="bi bi-calendar3"></i>
                         <span>追剧日历正则同步</span>
                     </div>
-                    <div class="drama-hero-desc">选择来源后执行预览或写入，详细配置按需展开。</div>
+                    <div class="drama-hero-desc">选择来源后执行预览或写入，详细配置按需展开。<span class="text-danger">预览不会写入配置</span>。</div>
                     <div class="drama-hero-actions">
-                        <span class="badge bg-light text-dark border">内置配置：{{ tv_filters_path }}</span>
+                        <button class="btn btn-light btn-sm drama-hero-action-btn" type="button" data-bs-toggle="collapse"
+                            data-bs-target="#env_edit_panel" aria-expanded="false" aria-controls="env_edit_panel">
+                            <i class="bi bi-pencil-square me-1"></i>白名单编辑
+                        </button>
                     </div>
                     <div class="drama-hero-meta">
                         <span class="drama-hero-chip">
@@ -644,7 +861,7 @@
                         </span>
                     </div>
                     <div class="drama-hero-submeta">
-                        <span class="drama-hero-subitem">
+                        <span class="drama-hero-subitem full">
                             <span class="drama-hero-sublabel">当前来源</span>
                             <span class="drama-hero-subvalue">
                                 {% if 'all' in selected_sources %}
@@ -662,7 +879,7 @@
                                 {% endif %}
                             </span>
                         </span>
-                        <span class="drama-hero-subitem">
+                        <span class="drama-hero-subitem full">
                             <span class="drama-hero-sublabel">目标文件</span>
                             <span class="drama-hero-subvalue">{{ tv_filters_path }}</span>
                         </span>
@@ -691,7 +908,7 @@
                         <div class="drama-status-grid">
                             <div>
                                 <div class="drama-status-item-label">下次执行</div>
-                                <div class="drama-status-item-value">{{ scheduler_state.get('next_run_at', '未启用') or '未启用' }}</div>
+                                <div class="drama-status-item-value status-info">{{ scheduler_state.get('next_run_at', '未启用') or '未启用' }}</div>
                             </div>
                             <div>
                                 <div class="drama-status-item-label">调度模式</div>
@@ -703,7 +920,7 @@
                             </div>
                             <div>
                                 <div class="drama-status-item-label">上次结果</div>
-                                <div class="drama-status-item-value">
+                                <div class="drama-status-item-value{% if scheduler_state.get('last_status') == 'success' %} status-success{% elif scheduler_state.get('last_status') == 'error' %} status-error{% elif scheduler_state.get('last_status') == 'warning' %} status-warning{% else %} status-muted{% endif %}">
                                     {% if scheduler_state.get('last_status') == 'success' %}
                                     成功
                                     {% elif scheduler_state.get('last_status') == 'error' %}
@@ -717,24 +934,184 @@
                     </div>
                     {% set last_summary = scheduler_state.get('last_summary', {}) %}
                     {% if last_summary.get('extract') or last_summary.get('removed') or last_summary.get('result') %}
+                    {% set result_text = last_summary.get('result', '暂无') or '暂无' %}
+                    {% set result_class = 'status-muted' %}
+                    {% if '成功' in result_text %}
+                        {% set result_class = 'status-success' %}
+                    {% elif '失败' in result_text or 'error' in result_text|lower %}
+                        {% set result_class = 'status-error' %}
+                    {% elif '已有' in result_text or '运行' in result_text %}
+                        {% set result_class = 'status-warning' %}
+                    {% endif %}
                     <div class="drama-status-summary">
                         <div class="drama-status-summary-item">
                             <div class="drama-status-summary-label">提取剧名</div>
-                            <div class="drama-status-summary-value">{{ last_summary.get('extract', '0') or '0' }}</div>
+                            <div class="drama-status-summary-value accent-extract">{{ last_summary.get('extract', '0') or '0' }}</div>
                         </div>
                         <div class="drama-status-summary-item">
                             <div class="drama-status-summary-label">剔除统计</div>
-                            <div class="drama-status-summary-value">{{ last_summary.get('removed', '无') or '无' }}</div>
+                            <div class="drama-status-summary-value accent-removed">{{ last_summary.get('removed', '无') or '无' }}</div>
                         </div>
                         <div class="drama-status-summary-item">
                             <div class="drama-status-summary-label">写入结果</div>
-                            <div class="drama-status-summary-value">{{ last_summary.get('result', '暂无') or '暂无' }}</div>
+                            <div class="drama-status-summary-value accent-result {{ result_class }}">{{ result_text }}</div>
                         </div>
                     </div>
                     {% elif scheduler_state.get('last_message') %}
                     <div class="drama-status-message">摘要：{{ scheduler_state.get('last_message') }}</div>
                     {% endif %}
+                    {% set prune_items = scheduler_state.get('last_prune_items', []) %}
+                    {% set prune_count = scheduler_state.get('last_prune_count', 0) %}
+                    {% set prune_mode = scheduler_state.get('last_prune_mode', '') %}
+                    {% set prune_status = scheduler_state.get('last_prune_status', '') %}
+                    {% set prune_message = scheduler_state.get('last_prune_message', '') %}
+                    {% if prune_mode or prune_status or prune_message %}
+                    {% set prune_label = '预计清理' if prune_mode == 'preview' else '已清理' if prune_mode == 'apply' else '未触发' %}
+                    <details class="drama-prune">
+                        <summary>完结清理明细（{{ prune_label }} {{ prune_count }}）</summary>
+                        <div class="drama-prune-list">
+                            {% for item in prune_items %}
+                            <div class="drama-prune-item">
+                                <span>{{ item.title }}</span>
+                                <span class="text-muted">{{ item.days }} 天</span>
+                            </div>
+                            {% endfor %}
+                            {% if prune_count > prune_items|length %}
+                            <div class="drama-prune-note">仅显示前 {{ prune_items|length }} 条，共 {{ prune_count }} 条</div>
+                            {% endif %}
+                            {% if not prune_items %}
+                            <div class="drama-prune-note">本次未发现可清理的完结条目。</div>
+                            {% endif %}
+                            {% if prune_message %}
+                            <div class="drama-prune-note">说明：{{ prune_message }}</div>
+                            {% endif %}
+                            {% if scheduler_state.get('last_prune_at') %}
+                            <div class="drama-prune-note">时间：{{ scheduler_state.get('last_prune_at') }}</div>
+                            {% endif %}
+                        </div>
+                    </details>
+                    {% endif %}
                 </aside>
+            </div>
+        </div>
+
+        <div class="collapse" id="env_edit_panel">
+            <div class="card shadow-sm border-secondary mb-3">
+                <div class="card-header bg-light">
+                    <h5 class="mb-0 small"><i class="bi bi-pencil-square me-2"></i>追剧白名单编辑</h5>
+                </div>
+                <div class="card-body p-3">
+                    {% if env_edit_sources and env_edit_sources|length %}
+                        {% if env_edit_errors and env_edit_errors|length %}
+                            <div class="form-text text-danger mb-2">
+                                {% for item in env_edit_errors %}
+                                    {{ item.env_display }}：{{ item.error }}{% if not loop.last %} ｜ {% endif %}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+
+                        <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-2">
+                            <input type="hidden" name="action" value="backfill_tv_filters_sources">
+                            <button type="submit" class="btn btn-outline-primary btn-sm"
+                                onclick="return confirm('确认联网抓取当前来源并回填分类吗？不会改动白名单内容。');">
+                                <i class="bi bi-cloud-arrow-down me-1"></i>联网回填分类
+                            </button>
+                            <div class="form-text mb-0">用于把现有白名单按最新来源数据自动分组。</div>
+                        </form>
+
+                        {% for source in env_edit_sources %}
+                            <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-2">
+                                <input type="hidden" name="action" value="update_drama_env_titles">
+                                {% set total_titles = namespace(value=0) %}
+                                {% set total_raw = namespace(value=0) %}
+                                {% for group in source.env_groups %}
+                                    {% set total_titles.value = total_titles.value + (group.titles|length) %}
+                                    {% set total_raw.value = total_raw.value + (group.raw_entries|length) %}
+                                {% endfor %}
+
+                                <div class="source-filter-block">
+                                    <button class="source-filter-toggle" type="button" data-bs-toggle="collapse"
+                                        data-bs-target="#env_source_panel_{{ loop.index0 }}" aria-expanded="false"
+                                        aria-controls="env_source_panel_{{ loop.index0 }}">
+                                        <span>
+                                            <div class="source-filter-block-title">{{ source.label }}</div>
+                                            <div class="source-filter-block-meta">{{ source.env_groups|length }} 个条目 · {{ total_titles.value }} 条标题{% if total_raw.value %} · {{ total_raw.value }} 条自定义正则{% endif %}</div>
+                                        </span>
+                                        <i class="bi bi-chevron-down source-filter-toggle-icon"></i>
+                                    </button>
+                                    <div id="env_source_panel_{{ loop.index0 }}" class="collapse">
+                                        <div class="source-filter-body">
+                                            {% if not source.env_groups %}
+                                                <div class="env-edit-empty">暂无条目。</div>
+                                            {% else %}
+                                                {% for group in source.env_groups %}
+                                                    <div class="env-edit-group">
+                                                        <div class="env-edit-group-head">
+                                                            <span>{{ group.env_display }}</span>
+                                                            <span class="env-edit-group-meta">
+                                                                {{ group.titles|length }} 条标题{% if group.raw_entries %} · {{ group.raw_entries|length }} 条自定义正则{% endif %}
+                                                            </span>
+                                                        </div>
+                                                        <input type="hidden" name="env_group_id" value="{{ group.id }}">
+                                                        <input type="hidden" name="group_tag_{{ group.id }}" value="{{ group.tag }}">
+                                                        <input type="hidden" name="group_env_{{ group.id }}" value="{{ group.env_path }}">
+
+                                                        <div class="form-text mb-1">追剧标题</div>
+                                                        <div class="env-edit-title-list" data-group-id="{{ group.id }}">
+                                                            {% if group.titles %}
+                                                                {% for title in group.titles %}
+                                                                    <div class="env-edit-item">
+                                                                        <input class="form-check-input" type="checkbox" name="remove_{{ group.id }}[]" value="{{ title }}">
+                                                                        <input type="hidden" name="orig_{{ group.id }}[]" value="{{ title }}">
+                                                                        <input type="text" class="form-control form-control-sm" name="title_{{ group.id }}[]" value="{{ title }}">
+                                                                    </div>
+                                                                {% endfor %}
+                                                            {% endif %}
+                                                        </div>
+                                                        <div class="env-edit-empty env-edit-empty-title{% if group.titles %} d-none{% endif %}" data-group-id="{{ group.id }}">暂无标题。</div>
+                                                        {% if group.tag == 'manual' %}
+                                                        <div class="env-edit-add" data-group-id="{{ group.id }}">
+                                                            <div class="input-group input-group-sm">
+                                                                <input type="text" class="form-control" data-role="env-add-input"
+                                                                    placeholder="新增关键词，逗号分隔，可回车添加">
+                                                                <button class="btn btn-outline-primary" type="button" data-role="env-add-btn">添加关键词</button>
+                                                            </div>
+                                                            <div class="form-text mb-0">支持多个关键词：用逗号分隔。</div>
+                                                        </div>
+                                                        {% endif %}
+
+                                                        {% if group.raw_entries %}
+                                                            <div class="form-text mt-2">自定义正则</div>
+                                                            {% for raw in group.raw_entries %}
+                                                                <div class="env-edit-item">
+                                                                    <input class="form-check-input" type="checkbox" name="remove_raw_{{ group.id }}[]" value="{{ raw }}">
+                                                                    <input type="hidden" name="orig_raw_{{ group.id }}[]" value="{{ raw }}">
+                                                                    <input type="text" class="form-control form-control-sm" name="raw_{{ group.id }}[]" value="{{ raw }}">
+                                                                </div>
+                                                            {% endfor %}
+                                                        {% endif %}
+                                                    </div>
+                                                {% endfor %}
+                                                <div class="env-edit-actions">
+                                                    <button type="submit" class="btn btn-outline-secondary btn-sm">
+                                                        <i class="bi bi-save me-1"></i>保存此分类
+                                                    </button>
+                                                    <button type="submit" class="btn btn-outline-danger btn-sm"
+                                                        onclick="return confirm('确认删除已勾选的条目吗？');">
+                                                        <i class="bi bi-trash me-1"></i>删除已勾选
+                                                    </button>
+                                                    <div class="form-text mb-0">勾选删除或直接编辑名称，保存后会写入 tvchannel_filters.json。</div>
+                                                </div>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </form>
+                        {% endfor %}
+                    {% else %}
+                        <div class="form-text text-muted">暂无可编辑条目。</div>
+                    {% endif %}
+                </div>
             </div>
         </div>
 
@@ -1482,6 +1859,84 @@
 
         syncSourceState();
 
+    })();
+
+    (function () {
+        const addBlocks = Array.from(document.querySelectorAll('.env-edit-add'));
+        if (!addBlocks.length) {
+            return;
+        }
+
+        addBlocks.forEach((block) => {
+            const groupId = block.dataset.groupId;
+            if (!groupId) {
+                return;
+            }
+            const input = block.querySelector('[data-role="env-add-input"]');
+            const button = block.querySelector('[data-role="env-add-btn"]');
+            const list = document.querySelector(`.env-edit-title-list[data-group-id="${groupId}"]`);
+            const empty = document.querySelector(`.env-edit-empty-title[data-group-id="${groupId}"]`);
+
+            if (!input || !button || !list) {
+                return;
+            }
+
+            const addItems = () => {
+                const raw = (input.value || '').trim();
+                if (!raw) {
+                    return;
+                }
+                const parts = raw
+                    .split(/[\n,，]+/)
+                    .map((item) => item.trim())
+                    .filter(Boolean);
+
+                if (!parts.length) {
+                    return;
+                }
+
+                parts.forEach((title) => {
+                    const item = document.createElement('div');
+                    item.className = 'env-edit-item';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.className = 'form-check-input';
+                    checkbox.type = 'checkbox';
+                    checkbox.name = `remove_${groupId}[]`;
+                    checkbox.value = title;
+
+                    const hidden = document.createElement('input');
+                    hidden.type = 'hidden';
+                    hidden.name = `orig_${groupId}[]`;
+                    hidden.value = title;
+
+                    const text = document.createElement('input');
+                    text.type = 'text';
+                    text.className = 'form-control form-control-sm';
+                    text.name = `title_${groupId}[]`;
+                    text.value = title;
+
+                    item.appendChild(checkbox);
+                    item.appendChild(hidden);
+                    item.appendChild(text);
+                    list.appendChild(item);
+                });
+
+                if (empty) {
+                    empty.classList.add('d-none');
+                }
+                input.value = '';
+                input.focus();
+            };
+
+            button.addEventListener('click', addItems);
+            input.addEventListener('keydown', (event) => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addItems();
+                }
+            });
+        });
     })();
 </script>
 {% endblock %}

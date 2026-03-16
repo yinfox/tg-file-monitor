@@ -2,6 +2,61 @@
 {% block extra_head %}
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <style>
+    .tg-compact {
+        --tg-gap-x: 0.6rem;
+        --tg-gap-y: 0.45rem;
+    }
+    .tg-compact .row {
+        --bs-gutter-x: var(--tg-gap-x);
+        --bs-gutter-y: var(--tg-gap-y);
+    }
+    .tg-compact h3 {
+        font-size: 1.05rem;
+        margin-bottom: 0.35rem !important;
+    }
+    .tg-compact .card {
+        margin-bottom: 0.5rem !important;
+    }
+    .tg-compact .card-header {
+        padding: 0.35rem 0.6rem !important;
+    }
+    .tg-compact .card-body {
+        padding: 0.6rem !important;
+    }
+    .tg-compact .mb-2 {
+        margin-bottom: 0.35rem !important;
+    }
+    .tg-compact .mb-3 {
+        margin-bottom: 0.5rem !important;
+    }
+    .tg-compact .mt-2 {
+        margin-top: 0.35rem !important;
+    }
+    .tg-compact .mt-3 {
+        margin-top: 0.5rem !important;
+    }
+    .tg-compact .form-label {
+        margin-bottom: 0.2rem !important;
+    }
+    .tg-compact .form-text {
+        margin-top: 0.15rem !important;
+        margin-bottom: 0.15rem !important;
+        font-size: 0.72rem;
+        line-height: 1.2;
+    }
+    .tg-compact .alert {
+        padding: 0.35rem 0.6rem !important;
+    }
+    .tg-compact .input-group-sm > .form-control,
+    .tg-compact .input-group-sm > .form-select,
+    .tg-compact .form-control-sm,
+    .tg-compact .form-select-sm {
+        padding-top: 0.2rem;
+        padding-bottom: 0.2rem;
+    }
+    .tg-compact .btn-sm {
+        padding: 0.2rem 0.5rem;
+    }
     .sortable-ghost {
         opacity: 0.4;
         background-color: #e9ecef !important;
@@ -60,6 +115,24 @@
     .accordion-button:not(.collapsed) {
         background-color: #e7f1ff !important;
         box-shadow: none !important;
+    }
+
+    .compact-accordion {
+        margin-left: 0.2rem;
+        margin-right: 0.2rem;
+    }
+    .compact-accordion .accordion-item {
+        border: 1px solid #dee2e6 !important;
+        border-radius: 0.35rem !important;
+        margin-bottom: 0.35rem !important;
+        overflow: hidden;
+    }
+    .compact-accordion .accordion-button {
+        padding: 0.35rem 0.7rem !important;
+        background-color: #f8f9fa !important;
+    }
+    .compact-accordion .accordion-body {
+        padding: 0.5rem 0.7rem !important;
     }
     
     .list-group-item .badge {
@@ -147,6 +220,7 @@
 {% block title %}管理转发配置{% endblock %}
 
 {% block content %}
+<div class="tg-compact">
 <div class="row">
     <div class="col-md-12">
         <h3 class="mb-2"><i class="bi bi-gear-fill me-2"></i>监控管理</h3>
@@ -239,8 +313,11 @@
                                                 <div class="text-muted small d-flex flex-wrap" style="line-height: 1.0; gap: 0.15rem;">
                                                     <span><i class="bi bi-folder2-open"></i><code style="background: #f3f4f6; padding: 0.02rem 0.15rem; border-radius: 0.15rem; margin-left: 0.1rem;">{{ entry.download_directory }}</code></span>
                                                     <span><i class="bi bi-file-earmark-arrow-down me-1"></i>
-                                                        {% if entry.monitor_types %}
-                                                        {{ entry.monitor_types | join(', ') }}
+                                                        {% set entry_types = entry.monitor_types or [] %}
+                                                        {% if entry.force_forward_all or entry.forward_only or ('all' in entry_types) %}
+                                                        全类型转发
+                                                        {% elif entry_types %}
+                                                        {{ entry_types | join(', ') }}
                                                         {% else %}
                                                         video
                                                         {% endif %}
@@ -265,6 +342,12 @@
                                                     {% endif %}
                                                     {% if entry.keep_video_message %}
                                                     <span class="text-success"><i class="bi bi-arrow-right-circle me-1"></i>转发开启</span>
+                                                    {% endif %}
+                                                    {% if entry.force_forward_all %}
+                                                    <span class="text-success"><i class="bi bi-lightning-charge me-1"></i>强制转发</span>
+                                                    {% endif %}
+                                                    {% if entry.force_forward_all or entry.forward_only or ('all' in (entry.monitor_types or [])) %}
+                                                    <span class="badge bg-info text-dark">全类型转发</span>
                                                     {% endif %}
                                                     {% if entry.convert_hdhive %}
                                                     <span class="text-primary"><i class="bi bi-link-45deg me-1"></i>影巢转换</span>
@@ -376,6 +459,10 @@
                                         <label class="form-check-label small" for="monitor_text">文本</label>
                                     </div>
                                 </div>
+                                <div class="form-text small">若开启转发且不选择类型，将视为“全类型转发（不下载）”。</div>
+                                <div id="forward_only_hint" class="alert alert-info small py-1 mb-0 mt-2 d-none">
+                                    当前为全类型转发（不下载）：已开启转发，且未选择下载类型。
+                                </div>
                             </div>
                             <div class="col-md-12 mb-2">
                                 <label for="blacklist_keywords" class="form-label small">黑名单关键词 <span
@@ -403,48 +490,75 @@
                             </div>
                             <div class="col-12">
                                 <div class="card border-warning shadow-sm">
-                                    <div class="card-header bg-warning-subtle py-1">
-                                        <span class="fw-bold small">
-                                            <i class="bi bi-cash-coin me-1"></i>红包相关设置
-                                        </span>
-                                        <span class="text-muted small ms-2">仅影响自动点击与通知</span>
-                                    </div>
-                                    <div class="card-body p-3">
-                                        <div class="row g-2">
-                                            <div class="col-md-12 mb-2">
-                                                <div class="form-check pt-1">
-                                                    <input type="checkbox" class="form-check-input"
-                                                        id="auto_click_redpacket" name="auto_click_redpacket">
-                                                    <label class="form-check-label small" for="auto_click_redpacket">
-                                                        红包自动点击（默认关键词：发了一个红包）
-                                                    </label>
+                                    <div class="card-body p-2">
+                                        <div class="accordion compact-accordion" id="redPacketAccordion">
+                                            <div class="accordion-item">
+                                                <h2 class="accordion-header" id="redPacketHeading">
+                                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                        data-bs-target="#redPacketCollapse" aria-expanded="false"
+                                                        aria-controls="redPacketCollapse">
+                                                        <i class="bi bi-cash-coin me-1"></i>🧧 红包相关设置
+                                                        <span class="text-muted small ms-2">仅影响自动点击与通知</span>
+                                                    </button>
+                                                </h2>
+                                                <div id="redPacketCollapse" class="accordion-collapse collapse"
+                                                    aria-labelledby="redPacketHeading" data-bs-parent="#redPacketAccordion">
+                                                    <div class="accordion-body p-2">
+                                                        <div class="row g-2">
+                                                            <div class="col-md-12 mb-2">
+                                                                <div class="form-check pt-1">
+                                                                    <input type="checkbox" class="form-check-input"
+                                                                        id="auto_click_redpacket" name="auto_click_redpacket">
+                                                                    <label class="form-check-label small" for="auto_click_redpacket">
+                                                                        红包自动点击（默认关键词：发了一个红包）
+                                                                    </label>
+                                                                </div>
+                                                                <div id="auto_click_download_hint"
+                                                                    class="alert alert-warning small py-1 mb-0 mt-1 d-none">
+                                                                    未填写下载目录且启用红包/自动点击时，将自动切换为“文本”监控（不下载媒体）。
+                                                                </div>
+                                                            </div>
+                                                            <div class="col-md-12 mb-2">
+                                                                <label for="auto_click_keywords" class="form-label small">自动点击关键词 <span
+                                                                        class="badge bg-light text-dark fw-normal border"
+                                                                        style="font-size: 0.65rem;">匹配消息文本</span>:</label>
+                                                                <input type="text" class="form-control form-control-sm"
+                                                                    id="auto_click_keywords" name="auto_click_keywords"
+                                                                    placeholder="发了一个红包 (逗号分隔)">
+                                                            </div>
+                                                            <div class="col-md-12 mb-2">
+                                                                <label for="auto_click_button_texts" class="form-label small">按钮文本关键词 <span
+                                                                        class="badge bg-light text-dark fw-normal border"
+                                                                        style="font-size: 0.65rem;">可选</span>:</label>
+                                                                <input type="text" class="form-control form-control-sm"
+                                                                    id="auto_click_button_texts" name="auto_click_button_texts"
+                                                                    placeholder="领取红包,打开 (逗号分隔)">
+                                                            </div>
+                                                            <div class="col-md-12 mb-2">
+                                                                <label for="auto_click_notify_targets" class="form-label small">点击后通知目标:</label>
+                                                                <input type="text" class="form-control form-control-sm"
+                                                                    id="auto_click_notify_targets" name="auto_click_notify_targets"
+                                                                    placeholder="@your_bot, 123456 (逗号分隔)">
+                                                            </div>
+                                                            <div class="col-md-12 mb-2">
+                                                                <div class="form-check pt-1">
+                                                                    <input type="checkbox" class="form-check-input"
+                                                                        id="auto_click_fast" name="auto_click_fast">
+                                                                    <label class="form-check-label small" for="auto_click_fast">
+                                                                        极速点击（优先匹配按钮文本，不拉取上下文）
+                                                                    </label>
+                                                                </div>
+                                                                <div class="form-check pt-1">
+                                                                    <input type="checkbox" class="form-check-input"
+                                                                        id="auto_click_fast_skip_processing" name="auto_click_fast_skip_processing">
+                                                                    <label class="form-check-label small" for="auto_click_fast_skip_processing">
+                                                                        点击后跳过后续处理（更快，但不转发/下载）
+                                                                    </label>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                                <div id="auto_click_download_hint"
-                                                    class="alert alert-warning small py-1 mb-0 mt-1 d-none">
-                                                    未填写下载目录且启用红包/自动点击时，将自动切换为“文本”监控（不下载媒体）。
-                                                </div>
-                                            </div>
-                                            <div class="col-md-12 mb-2">
-                                                <label for="auto_click_keywords" class="form-label small">自动点击关键词 <span
-                                                        class="badge bg-light text-dark fw-normal border"
-                                                        style="font-size: 0.65rem;">匹配消息文本</span>:</label>
-                                                <input type="text" class="form-control form-control-sm"
-                                                    id="auto_click_keywords" name="auto_click_keywords"
-                                                    placeholder="发了一个红包 (逗号分隔)">
-                                            </div>
-                                            <div class="col-md-12 mb-2">
-                                                <label for="auto_click_button_texts" class="form-label small">按钮文本关键词 <span
-                                                        class="badge bg-light text-dark fw-normal border"
-                                                        style="font-size: 0.65rem;">可选</span>:</label>
-                                                <input type="text" class="form-control form-control-sm"
-                                                    id="auto_click_button_texts" name="auto_click_button_texts"
-                                                    placeholder="领取红包,打开 (逗号分隔)">
-                                            </div>
-                                            <div class="col-md-12 mb-2">
-                                                <label for="auto_click_notify_targets" class="form-label small">点击后通知目标:</label>
-                                                <input type="text" class="form-control form-control-sm"
-                                                    id="auto_click_notify_targets" name="auto_click_notify_targets"
-                                                    placeholder="@your_bot, 123456 (逗号分隔)">
                                             </div>
                                         </div>
                                     </div>
@@ -464,6 +578,15 @@
                                         name="keep_video_message">
                                     <label class="form-check-label small" for="keep_video_message">直接转发消息</label>
                                 </div>
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <div class="form-check pt-2">
+                                    <input type="checkbox" class="form-check-input" id="force_forward_all"
+                                        name="force_forward_all">
+                                    <label class="form-check-label small" for="force_forward_all">强制转发全部消息</label>
+                                </div>
+                                <div class="form-text small">开启后忽略黑白名单与类型过滤，始终转发该频道消息。</div>
                             </div>
 
                             <div class="col-md-6 mb-2">
@@ -494,58 +617,87 @@
 
             <div class="col-lg-5">
                 <div class="card mb-3 shadow-sm">
-                    <div class="card-header bg-secondary text-white">
-                        <h5 class="mb-0 small"><i class="bi bi-filter-square me-2"></i>文件名清理规则 (全局)</h5>
-                    </div>
-                    <div class="card-body p-3">
-                        <form action="{{ url_for('manage_config') }}" method="POST">
-                            <input type="hidden" name="action" value="update_filename_blacklist">
-                            <div class="mb-2">
-                                <textarea class="form-control form-control-sm" id="filename_blacklist_keywords"
-                                    name="filename_blacklist_keywords" rows="3"
-                                    placeholder="剔除词汇 (逗号分隔)">{{ config.get('filename_blacklist', []) | join(', ') }}</textarea>
-                            </div>
-                            <button type="submit" class="btn btn-secondary btn-sm w-100">保存规则</button>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="card mb-3 shadow-sm">
-                    <div class="card-header bg-danger text-white">
-                        <h5 class="mb-0 small"><i class="bi bi-ban me-2"></i>全局黑名单关键词</h5>
-                    </div>
-                    <div class="card-body p-3">
-                        <form action="{{ url_for('manage_config') }}" method="POST">
-                            <input type="hidden" name="action" value="update_global_blacklist">
-                            <div class="mb-2">
-                                <label class="form-label small">黑名单关键词 <span class="badge bg-light text-dark fw-normal border" style="font-size: 0.65rem;">支持正则</span>:</label>
-                                <textarea class="form-control form-control-sm" id="global_blacklist_keywords"
-                                    name="global_blacklist_keywords" rows="3"
-                                    placeholder="广告,赌场,^垃圾内容.* (逗号分隔)">{{ config.get('global_blacklist_keywords', []) | join(', ') }}</textarea>
-                                <div class="form-text">匹配到的消息将被全局过滤，不会下载或转发</div>
-                            </div>
-                            <button type="submit" class="btn btn-danger btn-sm w-100">保存黑名单</button>
-                        </form>
-                    </div>
-                </div>
-
-                <div class="card mb-3 shadow-sm">
-                    <div class="card-header bg-primary text-white">
-                        <h5 class="mb-0 small"><i class="bi bi-cookie me-2"></i>HDHive Open API / Cookies (影巢链接转换)</h5>
-                    </div>
-                    <div class="card-body p-3">
-                        <form action="{{ url_for('manage_config') }}" method="POST">
-                            <input type="hidden" name="action" value="update_hdhive_cookie">
-                            <div class="row g-2 mb-2">
-                                <div class="col-12">
-                                    <label for="hdhive_auto_unlock_points_threshold" class="form-label small">自动解锁阈值(积分):</label>
-                                    <input type="number" class="form-control form-control-sm" id="hdhive_auto_unlock_points_threshold"
-                                        name="hdhive_auto_unlock_points_threshold" min="0" step="1"
-                                        value="{{ config.get('hdhive_auto_unlock_points_threshold', 0) }}"
-                                        placeholder="0 = 仅自动解锁 0 积分资源">
-                                    <div class="form-text">当资源需要的解锁积分 ≤ 该阈值时自动解锁；0 表示只自动解锁 0 积分资源。</div>
+                    <div class="card-body p-2">
+                        <div class="accordion compact-accordion" id="tgRulesAccordion">
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="filenameRulesHeading">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                        data-bs-target="#filenameRulesCollapse" aria-expanded="false"
+                                        aria-controls="filenameRulesCollapse">
+                                        <i class="bi bi-filter-square me-2"></i>🧹 文件名清理规则 (全局)
+                                    </button>
+                                </h2>
+                                <div id="filenameRulesCollapse" class="accordion-collapse collapse"
+                                    aria-labelledby="filenameRulesHeading" data-bs-parent="#tgRulesAccordion">
+                                    <div class="accordion-body p-2">
+                                        <form action="{{ url_for('manage_config') }}" method="POST">
+                                            <input type="hidden" name="action" value="update_filename_blacklist">
+                                            <div class="mb-2">
+                                                <textarea class="form-control form-control-sm" id="filename_blacklist_keywords"
+                                                    name="filename_blacklist_keywords" rows="3"
+                                                    placeholder="剔除词汇 (逗号分隔)">{{ config.get('filename_blacklist', []) | join(', ') }}</textarea>
+                                            </div>
+                                            <button type="submit" class="btn btn-secondary btn-sm w-100">保存规则</button>
+                                        </form>
+                                    </div>
                                 </div>
                             </div>
+
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="globalBlacklistHeading">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                        data-bs-target="#globalBlacklistCollapse" aria-expanded="false"
+                                        aria-controls="globalBlacklistCollapse">
+                                        <i class="bi bi-ban me-2"></i>⛔ 全局黑名单关键词
+                                    </button>
+                                </h2>
+                                <div id="globalBlacklistCollapse" class="accordion-collapse collapse"
+                                    aria-labelledby="globalBlacklistHeading" data-bs-parent="#tgRulesAccordion">
+                                    <div class="accordion-body p-2">
+                                        <form action="{{ url_for('manage_config') }}" method="POST">
+                                            <input type="hidden" name="action" value="update_global_blacklist">
+                                            <div class="mb-2">
+                                                <label class="form-label small">黑名单关键词 <span class="badge bg-light text-dark fw-normal border" style="font-size: 0.65rem;">支持正则</span>:</label>
+                                                <textarea class="form-control form-control-sm" id="global_blacklist_keywords"
+                                                    name="global_blacklist_keywords" rows="3"
+                                                    placeholder="广告,赌场,^垃圾内容.* (逗号分隔)">{{ config.get('global_blacklist_keywords', []) | join(', ') }}</textarea>
+                                                <div class="form-text">匹配到的消息将被全局过滤，不会下载或转发</div>
+                                            </div>
+                                            <button type="submit" class="btn btn-danger btn-sm w-100">保存黑名单</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="card mb-3 shadow-sm">
+                    <div class="card-body p-2">
+                        <div class="accordion compact-accordion" id="tgAdvancedAccordion">
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="hdhiveSettingsHeading">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                        data-bs-target="#hdhiveSettingsCollapse" aria-expanded="false"
+                                        aria-controls="hdhiveSettingsCollapse">
+                                        <i class="bi bi-cookie me-2"></i>🍪 HDHive Open API / Cookies (影巢链接转换)
+                                    </button>
+                                </h2>
+                                <div id="hdhiveSettingsCollapse" class="accordion-collapse collapse"
+                                    aria-labelledby="hdhiveSettingsHeading" data-bs-parent="#tgAdvancedAccordion">
+                                    <div class="accordion-body p-2">
+                                        <form action="{{ url_for('manage_config') }}" method="POST">
+                                            <input type="hidden" name="action" value="update_hdhive_cookie">
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-12">
+                                                    <label for="hdhive_auto_unlock_points_threshold" class="form-label small">自动解锁阈值(积分):</label>
+                                                    <input type="number" class="form-control form-control-sm" id="hdhive_auto_unlock_points_threshold"
+                                                        name="hdhive_auto_unlock_points_threshold" min="0" step="1"
+                                                        value="{{ config.get('hdhive_auto_unlock_points_threshold', 0) }}"
+                                                        placeholder="0 = 仅自动解锁 0 积分资源">
+                                                    <div class="form-text">当资源需要的解锁积分 ≤ 该阈值时自动解锁；0 表示只自动解锁 0 积分资源。</div>
+                                                </div>
+                                            </div>
                             <div class="mb-2">
                                 <textarea class="form-control form-control-sm" id="hdhive_cookie" name="hdhive_cookie"
                                     rows="3" placeholder="粘贴 Cookie（key=value; key2=value2）。留空=清除"></textarea>
@@ -557,127 +709,219 @@
                                     {% endif %}
                                 </div>
                             </div>
-                            <div class="mb-2">
-                                <label for="hdhive_base_url" class="form-label small">HDHive 地址:</label>
-                                <input type="text" class="form-control form-control-sm" id="hdhive_base_url"
-                                    name="hdhive_base_url" value="{{ config.get('hdhive_base_url', 'https://hdhive.com') }}"
-                                    placeholder="https://hdhive.com">
-                                <div class="form-text">如遇备用网址或域名变更，可在此调整。</div>
+                            <div class="form-check form-switch mb-2">
+                                <input class="form-check-input" type="checkbox" id="hdhive_cookie_clear"
+                                    name="hdhive_cookie_clear">
+                                <label class="form-check-label small" for="hdhive_cookie_clear">清除 Cookie</label>
+                                <div class="form-text">勾选后将清空已保存的 Cookie。</div>
                             </div>
-                            <div class="mb-2">
-                                <label for="hdhive_open_api_key" class="form-label small">Open API Key:</label>
-                                <input type="password" class="form-control form-control-sm" id="hdhive_open_api_key"
-                                    name="hdhive_open_api_key" value="{{ config.get('hdhive_open_api_key', '') }}"
-                                    placeholder="X-API-Key">
-                                <div class="form-text">用于 /api/open 访问，可用于影巢链接转换与自助观影申请。</div>
-                            </div>
+                                            <div class="mb-2">
+                                                <label for="hdhive_base_url" class="form-label small">HDHive 地址:</label>
+                                                <input type="text" class="form-control form-control-sm" id="hdhive_base_url"
+                                                    name="hdhive_base_url" value="{{ config.get('hdhive_base_url', 'https://hdhive.com') }}"
+                                                    placeholder="https://hdhive.com">
+                                                <div class="form-text">如遇备用网址或域名变更，可在此调整。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="hdhive_cookie_test_resource" class="form-label small">Cookie 测试资源链接/slug:</label>
+                                                <input type="text" class="form-control form-control-sm" id="hdhive_cookie_test_resource"
+                                                    name="hdhive_cookie_test_resource" value="{{ config.get('hdhive_cookie_test_resource', '') }}"
+                                                    placeholder="https://hdhive.com/resource/115/xxxx 或 slug">
+                                                <div class="form-text">用于状态检测放宽：能解析出积分即判 Cookie 可用。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="hdhive_open_api_key" class="form-label small">Open API Key:</label>
+                                                <input type="password" class="form-control form-control-sm" id="hdhive_open_api_key"
+                                                    name="hdhive_open_api_key" value="{{ config.get('hdhive_open_api_key', '') }}"
+                                                    placeholder="X-API-Key">
+                                                <div class="form-text">用于 /api/open 访问，可用于影巢链接转换与自助观影申请。</div>
+                                            </div>
                             <div class="form-check form-switch mb-2">
                                 <input class="form-check-input" type="checkbox" id="hdhive_open_api_direct_unlock"
                                     name="hdhive_open_api_direct_unlock" {% if config.get('hdhive_open_api_direct_unlock', False) %}checked{% endif %}>
                                 <label class="form-check-label small" for="hdhive_open_api_direct_unlock">允许 Open API 直链解锁</label>
-                                <div class="form-text">开启后将直接解锁直链资源（无法应用积分阈值）。</div>
+                                <div class="form-text">开启后会优先查询积分再决定是否解锁；若无法获取积分信息，将跳过解锁。</div>
                             </div>
-                            <div class="d-flex gap-2">
-                                <button type="submit" class="btn btn-primary btn-sm flex-grow-1">保存 HDHive Cookie</button>
-                                <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestBtn">测试</button>
+                            {% set hdhive_monitor = config.get('hdhive_cookie_monitor', {}) %}
+                            <div class="card border-light-subtle mb-2">
+                                <div class="card-body p-2">
+                                    <div class="form-check form-switch mb-2">
+                                        <input class="form-check-input" type="checkbox" id="hdhive_cookie_monitor_enabled"
+                                            name="hdhive_cookie_monitor_enabled" {% if hdhive_monitor.get('enabled', False) %}checked{% endif %}>
+                                        <label class="form-check-label small" for="hdhive_cookie_monitor_enabled">启用 Cookie 失效监测</label>
+                                    </div>
+                                    <div class="form-check form-switch mb-2">
+                                        <input class="form-check-input" type="checkbox" id="hdhive_cookie_monitor_force_cookie_test"
+                                            name="hdhive_cookie_monitor_force_cookie_test" {% if hdhive_monitor.get('force_cookie_test', True) %}checked{% endif %}>
+                                        <label class="form-check-label small" for="hdhive_cookie_monitor_force_cookie_test">强制 Cookie 测试</label>
+                                        <div class="form-text">开启：监测只测 Cookie（含积分解析）；关闭：若配置了 Open API Key，则优先检测 Open API。</div>
+                                    </div>
+                                    <div class="row g-2 mb-2">
+                                        <div class="col-md-6">
+                                            <label for="hdhive_cookie_monitor_interval_minutes" class="form-label small">检测间隔（分钟）</label>
+                                            <input type="number" class="form-control form-control-sm" id="hdhive_cookie_monitor_interval_minutes"
+                                                name="hdhive_cookie_monitor_interval_minutes" min="1" step="1"
+                                                value="{{ hdhive_monitor.get('interval_minutes', 60) }}">
+                                        </div>
+                                        <div class="col-md-6">
+                                            <label for="hdhive_cookie_monitor_on_invalid" class="form-label small">失效后动作</label>
+                                            <select class="form-select form-select-sm" id="hdhive_cookie_monitor_on_invalid" name="hdhive_cookie_monitor_on_invalid">
+                                                {% set on_invalid = hdhive_monitor.get('on_invalid', 'notify') %}
+                                                <option value="notify" {% if on_invalid == 'notify' %}selected{% endif %}>仅通知</option>
+                                                <option value="switch_open_api" {% if on_invalid == 'switch_open_api' %}selected{% endif %}>切换到 Open API</option>
+                                                <option value="clear_cookie" {% if on_invalid == 'clear_cookie' %}selected{% endif %}>清空 Cookie</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div class="mb-2">
+                                        <label for="hdhive_cookie_monitor_notify_user_ids" class="form-label small">通知用户 ID（可选）</label>
+                                        <input type="text" class="form-control form-control-sm" id="hdhive_cookie_monitor_notify_user_ids"
+                                            name="hdhive_cookie_monitor_notify_user_ids"
+                                            value="{{ hdhive_monitor.get('notify_user_ids', '') }}"
+                                            placeholder="123, @admin (逗号分隔)">
+                                        <div class="form-text">留空则使用自助观影的通知用户。</div>
+                                    </div>
+                                    {% set monitor_state = hdhive_cookie_monitor_state or {} %}
+                                    <div class="form-text mb-0">
+                                        状态：<span class="{% if monitor_state.get('last_status') == 'ok' %}text-success{% elif monitor_state.get('last_status') %}text-danger{% else %}text-muted{% endif %}">
+                                            {{ monitor_state.get('last_message') or '未检测' }}
+                                        </span>
+                                        {% if monitor_state.get('last_check_at') %}
+                                        （{{ monitor_state.get('last_check_at') }}）
+                                        {% endif %}
+                                    </div>
+                                </div>
                             </div>
-                            <div class="form-text mt-2">如已配置 Open API Key，测试会优先验证 API Key。</div>
-                            <div class="form-text mt-2" id="hdhiveTestResult"></div>
-                        </form>
-                    </div>
-                </div>
+                                            <div class="d-flex gap-2">
+                                                <button type="submit" class="btn btn-primary btn-sm flex-grow-1">保存 HDHive Cookie</button>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestBtn">测试(API优先)</button>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestCookieBtn">测试 Cookie</button>
+                                            </div>
+                                            <div class="form-text mt-2">如已配置 Open API Key，“测试(API优先)”会优先验证 API Key；“测试 Cookie”强制验证 Cookie。</div>
+                                            <div class="form-text mt-2" id="hdhiveTestResult"></div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
 
-                <div class="card mb-3 shadow-sm">
-                    <div class="card-header bg-info text-white">
-                        <h5 class="mb-0 small"><i class="bi bi-ticket-perforated me-2"></i>自助观影申请</h5>
-                    </div>
-                    <div class="card-body p-3">
-                        <form action="{{ url_for('manage_config') }}" method="POST">
-                            <input type="hidden" name="action" value="update_self_service">
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="self_service_enabled"
-                                    name="self_service_enabled" {% if config.get('self_service_enabled', False) %}checked{% endif %}>
-                                <label class="form-check-label small" for="self_service_enabled">启用自助观影申请</label>
-                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="self_service_public_enabled"
-                                    name="self_service_public_enabled" {% if config.get('self_service_public_enabled', False) %}checked{% endif %}>
-                                <label class="form-check-label small" for="self_service_public_enabled">启用公共提交页面</label>
-                                <div class="form-text">公共入口：<code>/self_service_public</code></div>
-                            </div>
-                            <div class="mb-2">
-                                <label for="self_service_public_access_key" class="form-label small">公共访问口令（可选）:</label>
-                                <input type="password" class="form-control form-control-sm" id="self_service_public_access_key"
-                                    name="self_service_public_access_key"
-                                    value="{{ config.get('self_service_public_access_key', '') }}"
-                                    placeholder="留空则不需要口令">
-                                <div class="form-text">设置后，非登录用户提交必须输入口令。</div>
-                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="self_service_public_rate_limit_enabled"
-                                    name="self_service_public_rate_limit_enabled"
-                                    {% if config.get('self_service_public_rate_limit', {}).get('enabled', True) %}checked{% endif %}>
-                                <label class="form-check-label small" for="self_service_public_rate_limit_enabled">启用公共入口防刷（按 IP）</label>
-                            </div>
-                            <div class="row g-2 mb-2">
-                                <div class="col-md-6">
-                                    <label for="self_service_public_rate_limit_window_seconds" class="form-label small">时间窗口(秒):</label>
-                                    <input type="number" class="form-control form-control-sm" id="self_service_public_rate_limit_window_seconds"
-                                        name="self_service_public_rate_limit_window_seconds" min="10" step="1"
-                                        value="{{ config.get('self_service_public_rate_limit', {}).get('window_seconds', 300) }}">
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="selfServiceSettingsHeading">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                        data-bs-target="#selfServiceSettingsCollapse" aria-expanded="false"
+                                        aria-controls="selfServiceSettingsCollapse">
+                                        <i class="bi bi-ticket-perforated me-2"></i>🎬 自助观影申请
+                                    </button>
+                                </h2>
+                                <div id="selfServiceSettingsCollapse" class="accordion-collapse collapse"
+                                    aria-labelledby="selfServiceSettingsHeading" data-bs-parent="#tgAdvancedAccordion">
+                                    <div class="accordion-body p-2">
+                                        <form action="{{ url_for('manage_config') }}" method="POST">
+                                            <input type="hidden" name="action" value="update_self_service">
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox" id="self_service_enabled"
+                                                    name="self_service_enabled" {% if config.get('self_service_enabled', False) %}checked{% endif %}>
+                                                <label class="form-check-label small" for="self_service_enabled">启用自助观影申请</label>
+                                            </div>
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox" id="self_service_public_enabled"
+                                                    name="self_service_public_enabled" {% if config.get('self_service_public_enabled', False) %}checked{% endif %}>
+                                                <label class="form-check-label small" for="self_service_public_enabled">启用公共提交页面</label>
+                                                <div class="form-text">公共入口：<code>/self_service_public</code></div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_public_access_key" class="form-label small">公共访问口令（可选）:</label>
+                                                <input type="password" class="form-control form-control-sm" id="self_service_public_access_key"
+                                                    name="self_service_public_access_key"
+                                                    value="{{ config.get('self_service_public_access_key', '') }}"
+                                                    placeholder="留空则不需要口令">
+                                                <div class="form-text">设置后，非登录用户提交必须输入口令。</div>
+                                            </div>
+                                            <div class="form-check form-switch mb-2">
+                                                <input class="form-check-input" type="checkbox" id="self_service_public_rate_limit_enabled"
+                                                    name="self_service_public_rate_limit_enabled"
+                                                    {% if config.get('self_service_public_rate_limit', {}).get('enabled', True) %}checked{% endif %}>
+                                                <label class="form-check-label small" for="self_service_public_rate_limit_enabled">启用公共入口防刷（按 IP）</label>
+                                            </div>
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-md-6">
+                                                    <label for="self_service_public_rate_limit_window_seconds" class="form-label small">时间窗口(秒):</label>
+                                                    <input type="number" class="form-control form-control-sm" id="self_service_public_rate_limit_window_seconds"
+                                                        name="self_service_public_rate_limit_window_seconds" min="10" step="1"
+                                                        value="{{ config.get('self_service_public_rate_limit', {}).get('window_seconds', 300) }}">
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label for="self_service_public_rate_limit_max_requests" class="form-label small">窗口内最大请求数:</label>
+                                                    <input type="number" class="form-control form-control-sm" id="self_service_public_rate_limit_max_requests"
+                                                        name="self_service_public_rate_limit_max_requests" min="1" step="1"
+                                                        value="{{ config.get('self_service_public_rate_limit', {}).get('max_requests', 3) }}">
+                                                </div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_target_user_ids" class="form-label small">接收用户 ID:</label>
+                                                <input type="text" class="form-control form-control-sm" id="self_service_target_user_ids"
+                                                    name="self_service_target_user_ids"
+                                                    value="{{ config.get('self_service_target_user_ids', '') }}"
+                                                    placeholder="123, @user (逗号分隔)">
+                                                <div class="form-text">默认接收用户（通知用户未配置时使用）。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_notify_user_ids" class="form-label small">通知用户 ID（可选）:</label>
+                                                <input type="text" class="form-control form-control-sm" id="self_service_notify_user_ids"
+                                                    name="self_service_notify_user_ids"
+                                                    value="{{ config.get('self_service_notify_user_ids', '') }}"
+                                                    placeholder="123, @admin (逗号分隔)">
+                                                <div class="form-text">填写后，自助观影提交/结果通知优先发送到此处；留空则使用接收用户 ID。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_notify_sender" class="form-label small">通知发送方式:</label>
+                                                {% set notify_sender = config.get('self_service_notify_sender', 'telegram_monitor') %}
+                                                <select class="form-select form-select-sm" id="self_service_notify_sender" name="self_service_notify_sender">
+                                                    <option value="telegram_monitor" {% if notify_sender in ['telegram_monitor', 'userbot'] %}selected{% endif %}>Telegram Monitor（用户态）</option>
+                                                    <option value="bot_monitor" {% if notify_sender in ['bot_monitor', 'bot'] %}selected{% endif %}>Bot Monitor（机器人）</option>
+                                                </select>
+                                                <div class="form-text">选择由哪个进程发送通知；使用 Bot 时请确保机器人已加入目标群或可私聊。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_storage_mode" class="form-label small">网盘筛选:</label>
+                                                <select class="form-select form-select-sm" id="self_service_storage_mode" name="self_service_storage_mode">
+                                                    {% set storage_mode = config.get('self_service_storage_mode', 'any') %}
+                                                    <option value="any" {% if storage_mode == 'any' %}selected{% endif %}>不限</option>
+                                                    <option value="115" {% if storage_mode == '115' %}selected{% endif %}>仅 115</option>
+                                                    <option value="123" {% if storage_mode == '123' %}selected{% endif %}>仅 123</option>
+                                                    <option value="115_123" {% if storage_mode == '115_123' %}selected{% endif %}>115/123</option>
+                                                </select>
+                                                <div class="form-text">只返回选定网盘类型的链接。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_search_max_results" class="form-label small">搜索候选数:</label>
+                                                <input type="number" class="form-control form-control-sm" id="self_service_search_max_results"
+                                                    name="self_service_search_max_results" min="1" max="20" step="1"
+                                                    value="{{ config.get('self_service_search_max_results', 5) }}">
+                                                <div class="form-text">用于搜索候选资源的最大数量，默认 5。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_use_open_api" class="form-label small">使用 Open API:</label>
+                                                <select class="form-select form-select-sm" id="self_service_use_open_api" name="self_service_use_open_api">
+                                                    <option value="off" {% if not config.get('self_service_use_open_api', False) %}selected{% endif %}>关闭</option>
+                                                    <option value="on" {% if config.get('self_service_use_open_api', False) %}selected{% endif %}>开启</option>
+                                                </select>
+                                                <div class="form-text">开启后将优先使用 HDHive Open API（需配置 API Key）。</div>
+                                            </div>
+                                            <div class="mb-2">
+                                                <label for="self_service_cookie_check_mode" class="form-label small">Cookie 校验:</label>
+                                                <select class="form-select form-select-sm" id="self_service_cookie_check_mode" name="self_service_cookie_check_mode">
+                                                    <option value="warn" {% if config.get('self_service_cookie_check_mode', 'warn') == 'warn' %}selected{% endif %}>提示但继续</option>
+                                                    <option value="strict" {% if config.get('self_service_cookie_check_mode', 'warn') == 'strict' %}selected{% endif %}>严格拦截</option>
+                                                    <option value="off" {% if config.get('self_service_cookie_check_mode', 'warn') == 'off' %}selected{% endif %}>不检测</option>
+                                                </select>
+                                                <div class="form-text">若你确认 Cookie 可用但测试不通过，可选择“提示但继续”。</div>
+                                            </div>
+                                            <button type="submit" class="btn btn-info btn-sm w-100">保存自助观影配置</button>
+                                        </form>
+                                    </div>
                                 </div>
-                                <div class="col-md-6">
-                                    <label for="self_service_public_rate_limit_max_requests" class="form-label small">窗口内最大请求数:</label>
-                                    <input type="number" class="form-control form-control-sm" id="self_service_public_rate_limit_max_requests"
-                                        name="self_service_public_rate_limit_max_requests" min="1" step="1"
-                                        value="{{ config.get('self_service_public_rate_limit', {}).get('max_requests', 3) }}">
-                                </div>
                             </div>
-                            <div class="mb-2">
-                                <label for="self_service_target_user_ids" class="form-label small">接收用户 ID:</label>
-                                <input type="text" class="form-control form-control-sm" id="self_service_target_user_ids"
-                                    name="self_service_target_user_ids"
-                                    value="{{ config.get('self_service_target_user_ids', '') }}"
-                                    placeholder="123, @user (逗号分隔)">
-                                <div class="form-text">提交申请后的解析结果将发送到这些用户/群。</div>
-                            </div>
-                            <div class="mb-2">
-                                <label for="self_service_storage_mode" class="form-label small">网盘筛选:</label>
-                                <select class="form-select form-select-sm" id="self_service_storage_mode" name="self_service_storage_mode">
-                                    {% set storage_mode = config.get('self_service_storage_mode', 'any') %}
-                                    <option value="any" {% if storage_mode == 'any' %}selected{% endif %}>不限</option>
-                                    <option value="115" {% if storage_mode == '115' %}selected{% endif %}>仅 115</option>
-                                    <option value="123" {% if storage_mode == '123' %}selected{% endif %}>仅 123</option>
-                                    <option value="115_123" {% if storage_mode == '115_123' %}selected{% endif %}>115/123</option>
-                                </select>
-                                <div class="form-text">只返回选定网盘类型的链接。</div>
-                            </div>
-                            <div class="mb-2">
-                                <label for="self_service_search_max_results" class="form-label small">搜索候选数:</label>
-                                <input type="number" class="form-control form-control-sm" id="self_service_search_max_results"
-                                    name="self_service_search_max_results" min="1" max="20" step="1"
-                                    value="{{ config.get('self_service_search_max_results', 5) }}">
-                                <div class="form-text">用于搜索候选资源的最大数量，默认 5。</div>
-                            </div>
-                            <div class="mb-2">
-                                <label for="self_service_use_open_api" class="form-label small">使用 Open API:</label>
-                                <select class="form-select form-select-sm" id="self_service_use_open_api" name="self_service_use_open_api">
-                                    <option value="off" {% if not config.get('self_service_use_open_api', False) %}selected{% endif %}>关闭</option>
-                                    <option value="on" {% if config.get('self_service_use_open_api', False) %}selected{% endif %}>开启</option>
-                                </select>
-                                <div class="form-text">开启后将优先使用 HDHive Open API（需配置 API Key）。</div>
-                            </div>
-                            <div class="mb-2">
-                                <label for="self_service_cookie_check_mode" class="form-label small">Cookie 校验:</label>
-                                <select class="form-select form-select-sm" id="self_service_cookie_check_mode" name="self_service_cookie_check_mode">
-                                    <option value="warn" {% if config.get('self_service_cookie_check_mode', 'warn') == 'warn' %}selected{% endif %}>提示但继续</option>
-                                    <option value="strict" {% if config.get('self_service_cookie_check_mode', 'warn') == 'strict' %}selected{% endif %}>严格拦截</option>
-                                    <option value="off" {% if config.get('self_service_cookie_check_mode', 'warn') == 'off' %}selected{% endif %}>不检测</option>
-                                </select>
-                                <div class="form-text">若你确认 Cookie 可用但测试不通过，可选择“提示但继续”。</div>
-                            </div>
-                            <button type="submit" class="btn btn-info btn-sm w-100">保存自助观影配置</button>
-                        </form>
+                        </div>
                     </div>
                 </div>
 
@@ -706,6 +950,7 @@
                     class="bi bi-house-door me-1"></i>返回主页</a>
         </div>
     </div>
+</div>
 </div>
 
 <!-- Directory Browser Modal -->
@@ -854,6 +1099,7 @@
         const autoClickKeywordsEl = document.getElementById('auto_click_keywords');
         const downloadDirEl = document.getElementById('download_directory');
         const keepVideoEl = document.getElementById('keep_video_message');
+        const forceForwardEl = document.getElementById('force_forward_all');
 
         const monitorVideoEl = document.getElementById('monitor_video');
         const monitorPhotoEl = document.getElementById('monitor_photo');
@@ -863,7 +1109,7 @@
         const autoClickEnabled = (redpacketEl && redpacketEl.checked)
             || (autoClickKeywordsEl && autoClickKeywordsEl.value.trim().length > 0);
         const hasDownloadDir = downloadDirEl && downloadDirEl.value.trim().length > 0;
-        const keepVideo = keepVideoEl && keepVideoEl.checked;
+        const keepVideo = (keepVideoEl && keepVideoEl.checked) || (forceForwardEl && forceForwardEl.checked);
 
         const selectedTypes = [];
         if (monitorVideoEl && monitorVideoEl.checked) selectedTypes.push('video');
@@ -879,6 +1125,28 @@
             downloadDirEl.classList.toggle('border', showHint);
             downloadDirEl.classList.toggle('border-warning', showHint);
         }
+    }
+
+    function updateForwardOnlyHint() {
+        const hintEl = document.getElementById('forward_only_hint');
+        if (!hintEl) return;
+
+        const keepVideoEl = document.getElementById('keep_video_message');
+        const forceForwardEl = document.getElementById('force_forward_all');
+        const monitorVideoEl = document.getElementById('monitor_video');
+        const monitorPhotoEl = document.getElementById('monitor_photo');
+        const monitorAudioEl = document.getElementById('monitor_audio');
+        const monitorTextEl = document.getElementById('monitor_text');
+
+        const keepVideo = (keepVideoEl && keepVideoEl.checked) || (forceForwardEl && forceForwardEl.checked);
+        const selectedTypes = [];
+        if (monitorVideoEl && monitorVideoEl.checked) selectedTypes.push('video');
+        if (monitorPhotoEl && monitorPhotoEl.checked) selectedTypes.push('photo');
+        if (monitorAudioEl && monitorAudioEl.checked) selectedTypes.push('audio');
+        if (monitorTextEl && monitorTextEl.checked) selectedTypes.push('text');
+
+        const showHint = keepVideo && selectedTypes.length === 0;
+        hintEl.classList.toggle('d-none', !showHint);
     }
 
     function editRestricted(data) {
@@ -909,11 +1177,14 @@
         safeSetValue('auto_click_keywords', (data.auto_click_keywords || []).join(', '));
         safeSetValue('auto_click_button_texts', (data.auto_click_button_texts || []).join(', '));
         safeSetValue('auto_click_notify_targets', (data.auto_click_notify_targets || []).join(', '));
+        safeSetChecked('auto_click_fast', data.auto_click_fast);
+        safeSetChecked('auto_click_fast_skip_processing', data.auto_click_fast_skip_processing);
         safeSetValue('target_user_ids_restricted', (data.target_user_ids || []).join(', '));
         safeSetChecked('use_tvchannel_filters', data.use_tvchannel_filters);
 
         safeSetChecked('download_video', data.download_video);
         safeSetChecked('keep_video_message', data.keep_video_message);
+        safeSetChecked('force_forward_all', data.force_forward_all);
         safeSetChecked('convert_hdhive', data.convert_hdhive);
 
         // 处理下载类型复选框
@@ -947,6 +1218,7 @@
         }
 
         updateAutoClickHint();
+        updateForwardOnlyHint();
     }
 
     function cancelEdit() {
@@ -973,10 +1245,13 @@
         safeReset('auto_click_keywords');
         safeReset('auto_click_button_texts');
         safeReset('auto_click_notify_targets');
+        safeReset('auto_click_fast');
+        safeReset('auto_click_fast_skip_processing');
         safeReset('target_user_ids_restricted');
         safeReset('use_tvchannel_filters');
         safeReset('download_video');
         safeReset('keep_video_message');
+        safeReset('force_forward_all');
         safeReset('convert_hdhive');
 
         // 重置分组名称为默认值
@@ -1012,6 +1287,7 @@
         }
 
         updateAutoClickHint();
+        updateForwardOnlyHint();
     }
 
     // Initialize Sortable for group drag-and-drop
@@ -1231,6 +1507,7 @@
             'auto_click_keywords',
             'download_directory',
             'keep_video_message',
+            'force_forward_all',
             'monitor_video',
             'monitor_photo',
             'monitor_audio',
@@ -1240,7 +1517,10 @@
             const el = document.getElementById(id);
             if (!el) return;
             const evt = (el.type === 'text') ? 'input' : 'change';
-            el.addEventListener(evt, updateAutoClickHint);
+            el.addEventListener(evt, () => {
+                updateAutoClickHint();
+                updateForwardOnlyHint();
+            });
         });
         updateAutoClickHint();
 
@@ -1248,35 +1528,52 @@
         console.log('页面初始化完成');
 
         const hdhiveTestBtn = document.getElementById('hdhiveTestBtn');
+        const hdhiveTestCookieBtn = document.getElementById('hdhiveTestCookieBtn');
         const hdhiveTestResult = document.getElementById('hdhiveTestResult');
+
+        const setHdhiveTestButtons = (disabled) => {
+            if (hdhiveTestBtn) hdhiveTestBtn.disabled = disabled;
+            if (hdhiveTestCookieBtn) hdhiveTestCookieBtn.disabled = disabled;
+        };
+
+        const runHdhiveTest = async (mode) => {
+            if (!hdhiveTestResult) return;
+            setHdhiveTestButtons(true);
+            hdhiveTestResult.textContent = '正在测试...';
+            hdhiveTestResult.className = 'form-text text-muted';
+            try {
+                const response = await fetch("{{ url_for('api_hdhive_test_cookie') }}", {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    hdhiveTestResult.textContent = data.message || 'Cookie 可用';
+                    hdhiveTestResult.className = 'form-text text-success';
+                } else {
+                    hdhiveTestResult.textContent = data.message || 'Cookie 无效';
+                    hdhiveTestResult.className = 'form-text text-danger';
+                }
+                if (data.details && Array.isArray(data.details) && data.details.length > 0) {
+                    hdhiveTestResult.textContent += ' | ' + data.details.slice(0, 3).join(' ; ');
+                }
+            } catch (err) {
+                hdhiveTestResult.textContent = '测试失败: ' + err.message;
+                hdhiveTestResult.className = 'form-text text-danger';
+            } finally {
+                setHdhiveTestButtons(false);
+            }
+        };
+
         if (hdhiveTestBtn && hdhiveTestResult) {
             hdhiveTestBtn.addEventListener('click', async function () {
-                hdhiveTestBtn.disabled = true;
-                hdhiveTestResult.textContent = '正在测试...';
-                hdhiveTestResult.className = 'form-text text-muted';
-                try {
-                    const response = await fetch("{{ url_for('api_hdhive_test_cookie') }}", {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({})
-                    });
-                    const data = await response.json();
-                    if (data.success) {
-                        hdhiveTestResult.textContent = data.message || 'Cookie 可用';
-                        hdhiveTestResult.className = 'form-text text-success';
-                    } else {
-                        hdhiveTestResult.textContent = data.message || 'Cookie 无效';
-                        hdhiveTestResult.className = 'form-text text-danger';
-                    }
-                    if (data.details && Array.isArray(data.details) && data.details.length > 0) {
-                        hdhiveTestResult.textContent += ' | ' + data.details.slice(0, 3).join(' ; ');
-                    }
-                } catch (err) {
-                    hdhiveTestResult.textContent = '测试失败: ' + err.message;
-                    hdhiveTestResult.className = 'form-text text-danger';
-                } finally {
-                    hdhiveTestBtn.disabled = false;
-                }
+                await runHdhiveTest('auto');
+            });
+        }
+        if (hdhiveTestCookieBtn && hdhiveTestResult) {
+            hdhiveTestCookieBtn.addEventListener('click', async function () {
+                await runHdhiveTest('cookie');
             });
         }
     });

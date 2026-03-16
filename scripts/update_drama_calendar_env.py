@@ -24,6 +24,7 @@ DOUBAN_DOMESTIC_TV_URL = "https://m.douban.com/subject_collection/tv_domestic"
 DOUBAN_VARIETY_SHOW_URL = "https://m.douban.com/subject_collection/tv_variety_show"
 DOUBAN_ANIMATION_URL = "https://m.douban.com/subject_collection/tv_animation"
 DEFAULT_STATE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "drama_calendar_state.json")
+TV_FILTERS_STATE_KEY = "tvchannel_filters.json"
 DEFAULT_TMDB_CACHE_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "config", "tmdb_tv_status_cache.json")
 FINISH_KEYWORDS = ("完结", "收官", "大结局")
 FINISH_EXCLUDE_KEYWORDS = (
@@ -1842,6 +1843,7 @@ def main() -> int:
     parser.add_argument("--allow-create-env", action="store_true", help="允许自动创建不存在的 .env 文件（默认禁止）")
     parser.add_argument("--dry-run", action="store_true", help="仅打印结果，不落盘")
     parser.add_argument("--tv-filters-file", default="", help="将结果写入 tvchannel_filters.json（内部配置文件）")
+    parser.add_argument("--dump-source-titles", default="", help="输出按来源拆分的剧名 JSON（用于回填分类）")
     args = parser.parse_args()
     try:
         args.source = _normalize_sources(args.source)
@@ -2383,6 +2385,16 @@ def main() -> int:
                 seen_norm.add(norm)
                 source_title_map.setdefault(name, []).append(title)
 
+        dump_path = (args.dump_source_titles or "").strip()
+        if dump_path:
+            try:
+                os.makedirs(os.path.dirname(dump_path) or ".", exist_ok=True)
+                with open(dump_path, "w", encoding="utf-8") as f:
+                    json.dump(source_title_map, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"[ERROR] 写入来源映射失败: {e}", file=sys.stderr)
+                return 1
+
         titles = []
         for name in merge_order:
             titles.extend(source_title_map.get(name, []))
@@ -2405,14 +2417,22 @@ def main() -> int:
 
         regex = build_regex_from_titles(titles)
 
-        if (not args.dry_run) and (not tv_filters_file):
-            for env_key in env_keys:
+        if not args.dry_run:
+            if tv_filters_file:
                 _update_state_source_titles(
                     args.state_file or DEFAULT_STATE_FILE,
-                    env_files,
-                    env_key,
+                    [tv_filters_file],
+                    TV_FILTERS_STATE_KEY,
                     source_title_map,
                 )
+            else:
+                for env_key in env_keys:
+                    _update_state_source_titles(
+                        args.state_file or DEFAULT_STATE_FILE,
+                        env_files,
+                        env_key,
+                        source_title_map,
+                    )
 
         source_label = ",".join(args.source)
         print(f"[INFO] 数据源: {source_label}")
@@ -2510,7 +2530,10 @@ def main() -> int:
                 append_mode=bool(args.append),
                 dry_run=bool(args.dry_run),
             )
-            print(f"[INFO] 已写入 tvchannel_filters.json: {tv_filters_file}")
+            if args.dry_run:
+                print(f"[DRY-RUN] 将写入 tvchannel_filters.json: {tv_filters_file}")
+            else:
+                print(f"[INFO] 已写入 tvchannel_filters.json: {tv_filters_file}")
         else:
             for env_path in env_files:
                 for env_key in env_keys:

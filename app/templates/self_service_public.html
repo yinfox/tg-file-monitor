@@ -45,7 +45,7 @@
                     <div class="p-3 rounded border border-primary-subtle bg-light mb-3">
                         <div class="d-flex align-items-center mb-2">
                             <span class="badge bg-primary me-2">关键项</span>
-                            <span class="small text-muted">请尽量填写完整，命中率更高</span>
+                            <span class="small text-danger fw-bold"><i class="bi bi-stars me-1"></i>请尽量填写完整，命中率更高</span>
                         </div>
                         <div class="mb-3">
                             <label class="form-label fw-semibold">影片/剧集名称 <span class="text-danger">*</span></label>
@@ -68,15 +68,27 @@
                                 <label class="form-label fw-semibold">年份</label>
                                 <input type="text" class="form-control" name="year" placeholder="如 2024">
                             </div>
+                        </div>
+                        <div class="row g-2 mt-1">
                             <div class="col-md-4">
-                                <label class="form-label">候选数</label>
-                                <input type="text" class="form-control" value="{{ max_results }}" disabled>
+                                <label class="form-label fw-semibold">杜比偏好</label>
+                                <select class="form-select" name="dolby_preference">
+                                    <option value="any" selected>不指定</option>
+                                    <option value="prefer">首选杜比</option>
+                                    <option value="exclude">排除杜比</option>
+                                </select>
                             </div>
                         </div>
                     </div>
 
                     <div class="alert alert-info small">
                         提交后若入库成功，将提示“资源已入库，请等待3-5分钟后进入服务器观看”；未找到则提示“资源未找到，请联系管理员”。
+                    </div>
+
+                    <div id="selfServiceResultBox" class="alert alert-secondary small" style="display: none;">
+                        <div class="fw-semibold mb-1" id="selfServiceResultTitle">处理中</div>
+                        <div class="text-muted mb-2" id="selfServiceResultTime"></div>
+                        <pre class="mb-0" id="selfServiceResultDetail" style="white-space: pre-wrap;"></pre>
                     </div>
 
                     <div class="mb-3">
@@ -91,4 +103,109 @@
         </div>
     </div>
 </div>
+
+<script>
+const storageKey = 'self_service_public_last_rid';
+const resultStorageKey = 'self_service_public_last_result';
+let requestId = "{{ request_id }}";
+const initialResult = {{ request_result|tojson if request_result else 'null' }};
+const resultBox = document.getElementById('selfServiceResultBox');
+const resultTitle = document.getElementById('selfServiceResultTitle');
+const resultTime = document.getElementById('selfServiceResultTime');
+const resultDetail = document.getElementById('selfServiceResultDetail');
+let pollTimer = null;
+let pollCount = 0;
+
+if (requestId) {
+    try {
+        const storedId = localStorage.getItem(storageKey);
+        if (storedId && storedId !== requestId) {
+            localStorage.removeItem(resultStorageKey);
+        }
+        localStorage.setItem(storageKey, requestId);
+    } catch (e) {}
+} else {
+    try {
+        const storedId = localStorage.getItem(storageKey);
+        if (storedId) {
+            requestId = storedId;
+        }
+    } catch (e) {}
+}
+
+function formatTime(ts) {
+    if (!ts) return '';
+    const date = new Date(ts * 1000);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleString();
+}
+
+function setBoxClass(status) {
+    resultBox.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-danger', 'alert-secondary');
+    if (status === 'success') resultBox.classList.add('alert-success');
+    else if (status === 'partial') resultBox.classList.add('alert-warning');
+    else if (status === 'error') resultBox.classList.add('alert-danger');
+    else if (status === 'processing') resultBox.classList.add('alert-info');
+    else resultBox.classList.add('alert-secondary');
+}
+
+function renderResult(data) {
+    if (!data) return;
+    resultBox.style.display = '';
+    setBoxClass(data.status);
+    resultTitle.textContent = data.message || '处理中...';
+    resultTime.textContent = data.updated_at ? `更新时间: ${formatTime(data.updated_at)}` : '';
+    if (data.detail) {
+        resultDetail.style.display = '';
+        resultDetail.textContent = data.detail;
+    } else {
+        resultDetail.style.display = 'none';
+        resultDetail.textContent = '';
+    }
+    try {
+        localStorage.setItem(resultStorageKey, JSON.stringify({
+            rid: requestId,
+            data: data,
+        }));
+    } catch (e) {}
+}
+
+function pollResult() {
+    if (!requestId) return;
+    fetch(`/self_service_result?rid=${encodeURIComponent(requestId)}`)
+        .then(r => r.json())
+        .then(data => {
+            if (!data || !data.found) return;
+            renderResult(data);
+            if (data.status && data.status !== 'processing' && pollTimer) {
+                clearInterval(pollTimer);
+                pollTimer = null;
+            }
+        })
+        .catch(() => {});
+    pollCount += 1;
+    if (pollCount >= 60 && pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+}
+
+if (initialResult) {
+    renderResult(initialResult);
+} else {
+    try {
+        const storedRaw = localStorage.getItem(resultStorageKey);
+        if (storedRaw) {
+            const stored = JSON.parse(storedRaw);
+            if (stored && stored.data && (!requestId || stored.rid === requestId)) {
+                renderResult(stored.data);
+            }
+        }
+    } catch (e) {}
+}
+if (requestId) {
+    pollResult();
+    pollTimer = setInterval(pollResult, 3000);
+}
+</script>
 {% endblock %}
