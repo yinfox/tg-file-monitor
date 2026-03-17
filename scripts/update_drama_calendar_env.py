@@ -949,6 +949,68 @@ def _build_maoyan_web_heat_candidate_urls(url: str) -> List[str]:
     return unique
 
 
+def _build_maoyan_web_movie_api_url(url: str) -> str:
+    if not url:
+        return "https://piaofang.maoyan.com/dashboard/webMaoYanHotData"
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return "https://piaofang.maoyan.com/dashboard/webMaoYanHotData"
+    scheme = parsed.scheme or "https"
+    netloc = parsed.netloc or "piaofang.maoyan.com"
+    base = f"{scheme}://{netloc}"
+    return urljoin(base, "/dashboard/webMaoYanHotData")
+
+
+def fetch_maoyan_web_movie_entries(url: str, top_n: int = 0) -> Tuple[List[Tuple[str, Optional[int]]], str]:
+    api_url = _build_maoyan_web_movie_api_url(url)
+    params = {
+        "seriesType": 0,
+        "platform": 20,
+        "date": datetime.date.today().strftime("%Y-%m-%d"),
+        "networkHot": 3,
+    }
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
+        "Accept": "application/json,text/plain,*/*",
+        "Referer": "https://piaofang.maoyan.com/web-heat",
+    }
+    try:
+        resp = requests.get(api_url, params=params, headers=headers, timeout=20)
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception:
+        return [], api_url
+
+    raw_list = []
+    if isinstance(payload, dict):
+        raw_list = payload.get("data", {}).get("list") or []
+
+    entries: List[Tuple[str, Optional[int]]] = []
+    seen: Set[str] = set()
+    for item in raw_list:
+        if not isinstance(item, dict):
+            continue
+        name = _clean_extracted_title(str(item.get("name") or ""))
+        if not name or name in seen:
+            continue
+        if len(name) <= 1:
+            continue
+        if re.fullmatch(r"\d+", name):
+            continue
+        seen.add(name)
+        raw_days = item.get("daysAfterReleased")
+        try:
+            days = int(raw_days)
+        except Exception:
+            days = None
+        entries.append((name, days))
+
+    if int(top_n or 0) > 0:
+        entries = entries[: int(top_n or 0)]
+    return entries, getattr(resp, "url", api_url)
+
+
 def extract_maoyan_web_heat_names(raw_html: str, required_type: Optional[int] = None) -> List[str]:
     names: List[str] = []
     seen: Set[str] = set()
@@ -1868,6 +1930,7 @@ def main() -> int:
     parser.add_argument("--maoyan-web-movie-top-n", type=int, default=0, help="猫眼网播热度-网络电影仅提取前N名，0表示不限制")
     parser.add_argument("--maoyan-web-movie-whitelist-keywords", default="", help="猫眼网播-网络电影白名单关键词，逗号或换行分隔")
     parser.add_argument("--maoyan-web-movie-blacklist-keywords", default="", help="猫眼网播-网络电影黑名单关键词，逗号或换行分隔")
+    parser.add_argument("--remove-web-movie-after-days", type=int, default=-1, help="仅猫眼网播-网络电影生效：上线超过多少天后移除；-1表示不移除，默认-1")
     parser.add_argument("--maoyan-whitelist-keywords", default="", help="猫眼来源白名单关键词，逗号或换行分隔")
     parser.add_argument("--maoyan-blacklist-keywords", default="", help="猫眼来源黑名单关键词，逗号或换行分隔")
     parser.add_argument("--douban-url", default=DOUBAN_AMERICAN_TV_URL, help="豆瓣热播美剧 URL")
@@ -2212,10 +2275,33 @@ def main() -> int:
 
         if "maoyan_web_movie" in selected_sources or include_all_sources:
             web_movie_url = (args.maoyan_web_movie_url or MAOYAN_WEB_MOVIE_URL).strip()
-            web_movie_titles, web_movie_used_url = fetch_maoyan_web_heat_titles(
+            web_movie_entries, web_movie_used_url = fetch_maoyan_web_movie_entries(
                 web_movie_url,
                 top_n=int(args.maoyan_web_movie_top_n or 0),
             )
+            if not web_movie_entries:
+                print("[WARN] 未获取到网络电影数据，可能是接口变更或网络受限")
+            web_movie_remove_days = int(args.remove_web_movie_after_days if args.remove_web_movie_after_days is not None else -1)
+            removed_web_movie_by_days: List[Tuple[str, int]] = []
+            if web_movie_remove_days >= 0 and web_movie_entries:
+                kept_entries = []
+                for name, days in web_movie_entries:
+                    if days is None:
+                        kept_entries.append((name, days))
+                        continue
+                    if days > web_movie_remove_days:
+                        removed_web_movie_by_days.append((name, days))
+                        continue
+                    kept_entries.append((name, days))
+                web_movie_entries = kept_entries
+                if removed_web_movie_by_days:
+                    print(f"[INFO] 网络电影上线超期移除: {len(removed_web_movie_by_days)} (阈值={web_movie_remove_days}天)")
+                    for name, days in removed_web_movie_by_days[:30]:
+                        print(f"  - {name} (上线已 {days} 天)")
+            elif web_movie_remove_days < 0 and web_movie_entries:
+                print("[INFO] 已关闭网络电影上线天数剔除(remove_web_movie_after_days=-1)")
+
+            web_movie_titles = [name for name, _ in web_movie_entries]
 
             remove_days = int(args.remove_finished_after_days or -1)
             if remove_days >= 0 and web_movie_titles:
@@ -2523,16 +2609,10 @@ def main() -> int:
             source_url = "; ".join(source_url_parts)
 
         # Keep all selected sources in the map so the UI can show empty groups if needed.
-        source_title_map: Dict[str, List[str]] = {name: [] for name in merge_order}
-        seen_norm: Set[str] = set()
+        # Do not de-duplicate across sources here; we only dedupe within each source.
+        source_title_map: Dict[str, List[str]] = {}
         for name in merge_order:
-            part_titles = dedupe_titles_normalized(source_results[name][0])
-            for title in part_titles:
-                norm = _normalize_title_for_match(title)
-                if not norm or norm in seen_norm:
-                    continue
-                seen_norm.add(norm)
-                source_title_map[name].append(title)
+            source_title_map[name] = dedupe_titles_normalized(source_results[name][0])
 
         dump_path = (args.dump_source_titles or "").strip()
         if dump_path:
@@ -2545,9 +2625,14 @@ def main() -> int:
                 return 1
 
         titles = []
+        seen_norm = set()
         for name in merge_order:
-            titles.extend(source_title_map.get(name, []))
-        titles = dedupe_titles_normalized(titles)
+            for title in source_title_map.get(name, []):
+                norm = _normalize_title_for_match(title)
+                if not norm or norm in seen_norm:
+                    continue
+                seen_norm.add(norm)
+                titles.append(title)
         titles_before_append = len(titles)
 
         skipped_existing_titles: List[str] = []
@@ -2606,6 +2691,7 @@ def main() -> int:
         if "maoyan_web_movie" in selected_sources or include_all_sources:
             print(f"[INFO] 猫眼网播-网络电影链接: {(args.maoyan_web_movie_url or MAOYAN_WEB_MOVIE_URL).strip()}")
             print(f"[INFO] 猫眼网播-网络电影前N: {int(args.maoyan_web_movie_top_n or 0) if int(args.maoyan_web_movie_top_n or 0) > 0 else '不限制'}")
+            print(f"[INFO] 网络电影上线超期移除天数: {int(args.remove_web_movie_after_days if args.remove_web_movie_after_days is not None else -1)}")
         if "douban" in selected_sources or include_all_sources:
             print(f"[INFO] 豆瓣链接: {(args.douban_url or DOUBAN_AMERICAN_TV_URL).strip()}")
             print(f"[INFO] 豆瓣前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")

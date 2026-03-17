@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.18"
+VERSION = "0.5.19"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -170,6 +170,7 @@ def load_config():
             "maoyan_blacklist_keywords": "",
             "maoyan_web_movie_whitelist_keywords": "",
             "maoyan_web_movie_blacklist_keywords": "",
+            "remove_web_movie_after_days": -1,
             "douban_url": "https://m.douban.com/subject_collection/tv_american",
             "douban_top_n": 0,
             "douban_asia_top_n": 0,
@@ -1485,19 +1486,21 @@ def _build_tv_filters_edit_view() -> tuple:
             if normalized:
                 expected_tags.add(normalized)
 
-    used_norms = set()
+    grouped_norms = set()
     source_titles_map = {}
     if source_map_for_env:
         for source_tag, source_titles in source_map_for_env.items():
             if not isinstance(source_titles, list):
                 continue
             cleaned = []
+            seen_tag = set()
             for t in source_titles:
                 norm = _normalize_title_for_match(t)
-                if not norm or norm in used_norms or norm not in current_norms:
+                if not norm or norm not in current_norms or norm in seen_tag:
                     continue
-                used_norms.add(norm)
+                seen_tag.add(norm)
                 cleaned.append(t)
+                grouped_norms.add(norm)
             if cleaned:
                 source_titles_map.setdefault(source_tag, []).extend(cleaned)
 
@@ -1510,7 +1513,7 @@ def _build_tv_filters_edit_view() -> tuple:
     untracked = []
     for t in titles:
         norm = _normalize_title_for_match(t)
-        if norm and norm not in used_norms:
+        if norm and norm not in grouped_norms:
             untracked.append(t)
     if untracked:
         source_titles_map.setdefault('manual', []).extend(untracked)
@@ -2221,6 +2224,7 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         '--douban-animation-whitelist-keywords', (drama_cfg.get('douban_animation_whitelist_keywords') or '').strip(),
         '--douban-animation-blacklist-keywords', (drama_cfg.get('douban_animation_blacklist_keywords') or '').strip(),
         '--remove-movie-premiere-after-days', str(int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)),
+        '--remove-web-movie-after-days', str(int(drama_cfg.get('remove_web_movie_after_days', -1) if drama_cfg.get('remove_web_movie_after_days', -1) is not None else -1)),
         '--remove-finished-after-days', str(int(drama_cfg.get('remove_finished_after_days', -1) if drama_cfg.get('remove_finished_after_days', -1) is not None else -1)),
         '--finish-detect-mode', (drama_cfg.get('finish_detect_mode') or 'hybrid').strip(),
         '--line-keywords', (drama_cfg.get('line_keywords') or '上线,开播').strip(),
@@ -2353,6 +2357,7 @@ def _run_drama_calendar_source_map(drama_cfg: dict) -> tuple:
         '--douban-animation-whitelist-keywords', (drama_cfg.get('douban_animation_whitelist_keywords') or '').strip(),
         '--douban-animation-blacklist-keywords', (drama_cfg.get('douban_animation_blacklist_keywords') or '').strip(),
         '--remove-movie-premiere-after-days', str(int(drama_cfg.get('remove_movie_premiere_after_days', 365) if drama_cfg.get('remove_movie_premiere_after_days', 365) is not None else 365)),
+        '--remove-web-movie-after-days', str(int(drama_cfg.get('remove_web_movie_after_days', -1) if drama_cfg.get('remove_web_movie_after_days', -1) is not None else -1)),
         '--remove-finished-after-days', str(int(drama_cfg.get('remove_finished_after_days', -1) if drama_cfg.get('remove_finished_after_days', -1) is not None else -1)),
         '--finish-detect-mode', (drama_cfg.get('finish_detect_mode') or 'hybrid').strip(),
         '--line-keywords', (drama_cfg.get('line_keywords') or '上线,开播').strip(),
@@ -5798,6 +5803,10 @@ def drama_calendar_settings():
             except Exception:
                 drama['remove_movie_premiere_after_days'] = 365
             try:
+                drama['remove_web_movie_after_days'] = int((request.form.get('drama_remove_web_movie_after_days') or '-1').strip() or -1)
+            except Exception:
+                drama['remove_web_movie_after_days'] = -1
+            try:
                 drama['remove_finished_after_days'] = int((request.form.get('drama_remove_finished_after_days') or '-1').strip() or -1)
             except Exception:
                 drama['remove_finished_after_days'] = -1
@@ -6165,11 +6174,10 @@ def drama_calendar_settings():
                             if not norm or norm in tag_seen:
                                 continue
                             tag_seen.add(norm)
-                            if norm in seen_norm:
-                                continue
-                            seen_norm.add(norm)
-                            titles.append(value)
                             cleaned.append(value)
+                            if norm not in seen_norm:
+                                seen_norm.add(norm)
+                                titles.append(value)
                         if cleaned or (tag == 'manual' and raw_entries):
                             per_source_titles[tag] = cleaned
 

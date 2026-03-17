@@ -1427,6 +1427,14 @@
                                             placeholder="0 表示不限制">
                                     </div>
 
+                                    <div>
+                                        <label class="form-label small" for="drama_remove_web_movie_after_days">网络电影上线超期移除天数</label>
+                                        <input type="number" min="-1" step="1" class="form-control form-control-sm" id="drama_remove_web_movie_after_days" name="drama_remove_web_movie_after_days"
+                                            value="{{ config.get('drama_calendar', {}).get('remove_web_movie_after_days', -1) }}"
+                                            placeholder="-1 表示不移除">
+                                        <div class="form-text">仅对网络电影生效。-1 不移除；0 立即移除；30 表示上线满 30 天后剔除。</div>
+                                    </div>
+
                                     <div class="full source-filter-block">
                                         <button class="source-filter-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#maoyan_web_movie_filter_panel" aria-expanded="{{ 'true' if (maoyan_web_movie_whitelist or maoyan_web_movie_blacklist) else 'false' }}" aria-controls="maoyan_web_movie_filter_panel">
                                             <span>
