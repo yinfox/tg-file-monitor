@@ -273,6 +273,19 @@ Try:
 - Self-service UI: recent list on the right, details collapsed, limit display count
 - Drama scheduler log now keeps only the latest run
 
+### v0.5.14 (2026-03-17) - Current
+- ✅ Self-service form hint: leave season empty = all seasons
+
+### v0.5.13 (2026-03-17)
+- ✅ Multi-season input supported (e.g. `1,2` / `1-2` / `S01,S02`)
+- ✅ Strict multi-season matching to avoid unlocking the wrong season
+
+### v0.5.12 (2026-03-17)
+- ✅ Season matching now scans nested fields/filenames to identify S01/S02
+
+### v0.5.11 (2026-03-17)
+- ✅ Improved season hints and clearer failure message when season info is missing
+
 ### v0.4.90 (2026-03-15)
 - Channel monitor uses built-in `tvchannel_filters.json` (regex allow/deny)
 - Drama regex no longer depends on external `.env`
