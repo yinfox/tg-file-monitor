@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.17"
+VERSION = "0.5.18"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -1478,6 +1478,13 @@ def _build_tv_filters_edit_view() -> tuple:
     if not source_map_for_env and titles:
         source_map_for_env = _backfill_tv_filters_source_titles(state, titles, raw_entries)
 
+    expected_tags = set()
+    if source_map_for_env:
+        for tag in source_map_for_env.keys():
+            normalized = str(tag or '').strip() or 'manual'
+            if normalized:
+                expected_tags.add(normalized)
+
     used_norms = set()
     source_titles_map = {}
     if source_map_for_env:
@@ -1493,6 +1500,12 @@ def _build_tv_filters_edit_view() -> tuple:
                 cleaned.append(t)
             if cleaned:
                 source_titles_map.setdefault(source_tag, []).extend(cleaned)
+
+    if expected_tags:
+        for tag in sorted(expected_tags):
+            if tag == 'manual':
+                continue
+            source_titles_map.setdefault(tag, [])
 
     untracked = []
     for t in titles:
@@ -1519,7 +1532,8 @@ def _build_tv_filters_edit_view() -> tuple:
     if source_titles_map:
         for tag, group_titles in source_titles_map.items():
             if not group_titles and not (tag == 'manual' and raw_entries):
-                continue
+                if tag not in expected_tags:
+                    continue
             group_index += 1
             source_entry = _ensure_source(tag)
             group = {

@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.17`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.18`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.17
+y1nf0x/tg-file-monitor:0.5.18
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -394,7 +394,10 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.17 (2026-03-17) - 当前版本
+### v0.5.18 (2026-03-17) - 当前版本
+- ✅ 追剧白名单编辑支持“猫眼网播·网络电影”单独分组与维护
+
+### v0.5.17 (2026-03-17)
 - ✅ 新增追剧数据源：猫眼网播·网络电影（web-heat#4）
 
 ### v0.5.16 (2026-03-17)

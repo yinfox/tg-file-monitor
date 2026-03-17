@@ -2522,7 +2522,8 @@ def main() -> int:
                 source_url_parts.append(f"{name}={source_results[name][1]}")
             source_url = "; ".join(source_url_parts)
 
-        source_title_map: Dict[str, List[str]] = {}
+        # Keep all selected sources in the map so the UI can show empty groups if needed.
+        source_title_map: Dict[str, List[str]] = {name: [] for name in merge_order}
         seen_norm: Set[str] = set()
         for name in merge_order:
             part_titles = dedupe_titles_normalized(source_results[name][0])
@@ -2531,7 +2532,7 @@ def main() -> int:
                 if not norm or norm in seen_norm:
                     continue
                 seen_norm.add(norm)
-                source_title_map.setdefault(name, []).append(title)
+                source_title_map[name].append(title)
 
         dump_path = (args.dump_source_titles or "").strip()
         if dump_path:

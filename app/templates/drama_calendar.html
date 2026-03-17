@@ -851,8 +851,8 @@
         {% set write_advanced_open = not drama_cfg.get('managed_scope_source_only', True) %}
         {% set env_files_count = env_files_raw.splitlines()|length if '\n' in env_files_raw else (env_files_raw.split(',')|select|list|length if env_files_raw else 0) %}
         {% if 'all' in selected_sources %}
-            {% set effective_source_count = 7 %}
-            {% set source_summary_label = '追剧日历 / 猫眼票房 / 豆瓣美剧 / 日韩 / 国产 / 综艺 / 动漫' %}
+            {% set effective_source_count = 8 %}
+            {% set source_summary_label = '追剧日历 / 猫眼票房 / 猫眼网播·网络电影 / 豆瓣美剧 / 日韩 / 国产 / 综艺 / 动漫' %}
         {% else %}
             {% set effective_source_count = selected_sources|length %}
             {% set source_summary_label = [] %}
@@ -896,6 +896,7 @@
                                     {% set labels = [] %}
                                     {% if 'calendar' in selected_sources %}{% set _ = labels.append('追剧日历') %}{% endif %}
                                     {% if 'maoyan' in selected_sources %}{% set _ = labels.append('猫眼票房') %}{% endif %}
+                                    {% if 'maoyan_web_movie' in selected_sources %}{% set _ = labels.append('猫眼网播·网络电影') %}{% endif %}
                                     {% if 'douban' in selected_sources %}{% set _ = labels.append('豆瓣美剧') %}{% endif %}
                                     {% if 'douban_asia' in selected_sources %}{% set _ = labels.append('豆瓣日韩') %}{% endif %}
                                     {% if 'douban_domestic' in selected_sources %}{% set _ = labels.append('豆瓣国产剧') %}{% endif %}
