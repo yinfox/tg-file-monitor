@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.16`
+Latest image: `y1nf0x/tg-file-monitor:0.5.17`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.16
+y1nf0x/tg-file-monitor:0.5.17
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,10 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.16 (2026-03-17) - Current
+### v0.5.17 (2026-03-17) - Current
+- ✅ Added drama source: Maoyan web heat (web movies)
+
+### v0.5.16 (2026-03-17)
 - ✅ Custom category layout polish in drama whitelist editor
 
 ### v0.5.15 (2026-03-17)

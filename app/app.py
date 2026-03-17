@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.16"
+VERSION = "0.5.17"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -164,8 +164,12 @@ def load_config():
             "include_maoyan_web_heat": True,
             "maoyan_web_heat_url": "https://piaofang.maoyan.com/web-heat",
             "maoyan_web_heat_top_n": 0,
+            "maoyan_web_movie_url": "https://piaofang.maoyan.com/web-heat#4",
+            "maoyan_web_movie_top_n": 0,
             "maoyan_whitelist_keywords": "",
             "maoyan_blacklist_keywords": "",
+            "maoyan_web_movie_whitelist_keywords": "",
+            "maoyan_web_movie_blacklist_keywords": "",
             "douban_url": "https://m.douban.com/subject_collection/tv_american",
             "douban_top_n": 0,
             "douban_asia_top_n": 0,
@@ -383,6 +387,7 @@ def _parse_env_keys(raw_env_key: str):
 DRAMA_SOURCE_CHOICES = (
     'calendar',
     'maoyan',
+    'maoyan_web_movie',
     'douban',
     'douban_asia',
     'douban_domestic',
@@ -1056,6 +1061,7 @@ def _label_for_source_tag(source_tag: str) -> str:
     base_labels = {
         'calendar': '追剧日历',
         'maoyan': '猫眼',
+        'maoyan_web_movie': '猫眼网播·网络电影',
         'douban': '豆瓣美剧',
         'douban_asia': '豆瓣日韩',
         'douban_domestic': '豆瓣国产剧',
@@ -1081,6 +1087,7 @@ def _is_builtin_source_tag(tag: str) -> bool:
     return tag in {
         'calendar',
         'maoyan',
+        'maoyan_web_movie',
         'douban',
         'douban_asia',
         'douban_domestic',
@@ -1256,6 +1263,7 @@ def _build_env_edit_source_view(drama_cfg: dict) -> tuple:
     order = [
         'calendar',
         'maoyan',
+        'maoyan_web_movie',
         'douban',
         'douban_asia',
         'douban_domestic',
@@ -1340,6 +1348,7 @@ def _apply_tv_filters_source_norms(state: dict, titles: list, raw_entries: list,
     base_order = [
         'calendar',
         'maoyan',
+        'maoyan_web_movie',
         'douban',
         'douban_asia',
         'douban_domestic',
@@ -1542,6 +1551,7 @@ def _build_tv_filters_edit_view() -> tuple:
     order = [
         'calendar',
         'maoyan',
+        'maoyan_web_movie',
         'douban',
         'douban_asia',
         'douban_domestic',
@@ -2173,6 +2183,10 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         '--maoyan-web-heat-top-n', str(int(drama_cfg.get('maoyan_web_heat_top_n', 0) or 0)),
         '--maoyan-whitelist-keywords', (drama_cfg.get('maoyan_whitelist_keywords') or '').strip(),
         '--maoyan-blacklist-keywords', (drama_cfg.get('maoyan_blacklist_keywords') or '').strip(),
+        '--maoyan-web-movie-url', (drama_cfg.get('maoyan_web_movie_url') or 'https://piaofang.maoyan.com/web-heat#4').strip(),
+        '--maoyan-web-movie-top-n', str(int(drama_cfg.get('maoyan_web_movie_top_n', 0) or 0)),
+        '--maoyan-web-movie-whitelist-keywords', (drama_cfg.get('maoyan_web_movie_whitelist_keywords') or '').strip(),
+        '--maoyan-web-movie-blacklist-keywords', (drama_cfg.get('maoyan_web_movie_blacklist_keywords') or '').strip(),
         '--douban-url', _normalize_douban_collection_url(
             str(drama_cfg.get('douban_url') or ''),
             fallback_url='https://m.douban.com/subject_collection/tv_american',
@@ -2301,6 +2315,10 @@ def _run_drama_calendar_source_map(drama_cfg: dict) -> tuple:
         '--maoyan-web-heat-top-n', str(int(drama_cfg.get('maoyan_web_heat_top_n', 0) or 0)),
         '--maoyan-whitelist-keywords', (drama_cfg.get('maoyan_whitelist_keywords') or '').strip(),
         '--maoyan-blacklist-keywords', (drama_cfg.get('maoyan_blacklist_keywords') or '').strip(),
+        '--maoyan-web-movie-url', (drama_cfg.get('maoyan_web_movie_url') or 'https://piaofang.maoyan.com/web-heat#4').strip(),
+        '--maoyan-web-movie-top-n', str(int(drama_cfg.get('maoyan_web_movie_top_n', 0) or 0)),
+        '--maoyan-web-movie-whitelist-keywords', (drama_cfg.get('maoyan_web_movie_whitelist_keywords') or '').strip(),
+        '--maoyan-web-movie-blacklist-keywords', (drama_cfg.get('maoyan_web_movie_blacklist_keywords') or '').strip(),
         '--douban-url', _normalize_douban_collection_url(
             str(drama_cfg.get('douban_url') or ''),
             fallback_url='https://m.douban.com/subject_collection/tv_american',
@@ -5718,8 +5736,15 @@ def drama_calendar_settings():
                 drama['maoyan_web_heat_top_n'] = max(0, int((request.form.get('drama_maoyan_web_heat_top_n') or '0').strip() or 0))
             except Exception:
                 drama['maoyan_web_heat_top_n'] = 0
+            drama['maoyan_web_movie_url'] = (request.form.get('drama_maoyan_web_movie_url') or '').strip() or 'https://piaofang.maoyan.com/web-heat#4'
+            try:
+                drama['maoyan_web_movie_top_n'] = max(0, int((request.form.get('drama_maoyan_web_movie_top_n') or '0').strip() or 0))
+            except Exception:
+                drama['maoyan_web_movie_top_n'] = 0
             drama['maoyan_whitelist_keywords'] = (request.form.get('drama_maoyan_whitelist_keywords') or '').strip()
             drama['maoyan_blacklist_keywords'] = (request.form.get('drama_maoyan_blacklist_keywords') or '').strip()
+            drama['maoyan_web_movie_whitelist_keywords'] = (request.form.get('drama_maoyan_web_movie_whitelist_keywords') or '').strip()
+            drama['maoyan_web_movie_blacklist_keywords'] = (request.form.get('drama_maoyan_web_movie_blacklist_keywords') or '').strip()
             drama['douban_url'] = _normalize_douban_collection_url(
                 (request.form.get('drama_douban_url') or '').strip(),
                 fallback_url='https://m.douban.com/subject_collection/tv_american',
@@ -6099,6 +6124,7 @@ def drama_calendar_settings():
                     order = [
                         'calendar',
                         'maoyan',
+                        'maoyan_web_movie',
                         'douban',
                         'douban_asia',
                         'douban_domestic',

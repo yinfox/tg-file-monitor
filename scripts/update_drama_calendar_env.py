@@ -10,13 +10,14 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
 
 import requests
 
 HOME_URL = "https://blog.922928.de/"
 MAOYAN_BOX_OFFICE_URL = "https://piaofang.maoyan.com/box-office?ver=normal"
 MAOYAN_WEB_HEAT_URL = "https://piaofang.maoyan.com/web-heat"
+MAOYAN_WEB_MOVIE_URL = "https://piaofang.maoyan.com/web-heat#4"
 DOUBAN_AMERICAN_TV_URL = "https://m.douban.com/subject_collection/tv_american"
 DOUBAN_KOREAN_TV_URL = "https://m.douban.com/subject_collection/tv_korean"
 DOUBAN_JAPANESE_TV_URL = "https://m.douban.com/subject_collection/tv_japanese"
@@ -39,7 +40,17 @@ FINISH_EXCLUDE_KEYWORDS = (
 TMDB_FINISHED_STATUSES = {"ended", "canceled", "cancelled"}
 TMDB_MIN_CONFIDENCE_SCORE = 70
 TMDB_MAX_WORKERS_DEFAULT = max(1, min(8, int(os.environ.get("DRAMA_TMDB_MAX_WORKERS", "6") or 6)))
-SOURCE_CHOICES = ("calendar", "maoyan", "douban", "douban_asia", "douban_domestic", "douban_variety", "douban_animation", "all")
+SOURCE_CHOICES = (
+    "calendar",
+    "maoyan",
+    "maoyan_web_movie",
+    "douban",
+    "douban_asia",
+    "douban_domestic",
+    "douban_variety",
+    "douban_animation",
+    "all",
+)
 _TMDB_CACHE_LOCK = threading.Lock()
 
 
@@ -893,7 +904,52 @@ def extract_maoyan_movie_names(raw_html: str) -> List[str]:
     return names
 
 
-def extract_maoyan_web_heat_names(raw_html: str) -> List[str]:
+def _extract_maoyan_web_heat_type_from_url(url: str) -> Optional[int]:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    if parsed.fragment and parsed.fragment.isdigit():
+        return int(parsed.fragment)
+    qs = parse_qs(parsed.query or "")
+    for key in ("showType", "type"):
+        if key in qs and qs[key]:
+            try:
+                return int(qs[key][0])
+            except Exception:
+                pass
+    return None
+
+
+def _build_maoyan_web_heat_candidate_urls(url: str) -> List[str]:
+    if not url:
+        return []
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return [url]
+    base = urlunparse(parsed._replace(fragment=""))
+    qs = parse_qs(parsed.query or "")
+    candidates: List[str] = []
+    type_hint = _extract_maoyan_web_heat_type_from_url(url)
+    if type_hint is not None and "showType" not in qs and "type" not in qs:
+        for key in ("showType", "type"):
+            new_qs = dict(qs)
+            new_qs[key] = [str(type_hint)]
+            new_query = urlencode(new_qs, doseq=True)
+            candidates.append(urlunparse(parsed._replace(query=new_query, fragment="")))
+    candidates.append(base)
+    seen: Set[str] = set()
+    unique = []
+    for item in candidates:
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
+def extract_maoyan_web_heat_names(raw_html: str, required_type: Optional[int] = None) -> List[str]:
     names: List[str] = []
     seen: Set[str] = set()
 
@@ -901,6 +957,29 @@ def extract_maoyan_web_heat_names(raw_html: str) -> List[str]:
         "网播热度", "电视剧", "热播", "电影", "综艺", "动漫", "纪录片",
         "今日", "昨日", "排名", "热度", "趋势", "全部", "更多",
     }
+
+    if required_type is not None:
+        pattern_a = re.compile(
+            rf'"name"\s*:\s*"(.*?)".{{0,120}}?"(?:showType|type)"\s*:\s*{required_type}',
+            re.IGNORECASE,
+        )
+        pattern_b = re.compile(
+            rf'"(?:showType|type)"\s*:\s*{required_type}.{{0,120}}?"name"\s*:\s*"(.*?)"',
+            re.IGNORECASE,
+        )
+        for pattern in (pattern_a, pattern_b):
+            for m in pattern.finditer(raw_html):
+                name = _clean_extracted_title(html.unescape(m.group(1)))
+                if not name or name in seen or name in blocked_names:
+                    continue
+                if len(name) <= 1:
+                    continue
+                if re.fullmatch(r"\d+", name):
+                    continue
+                seen.add(name)
+                names.append(name)
+        if names:
+            return names
 
     for m in re.findall(r'"name"\s*:\s*"(.*?)"', raw_html, flags=re.IGNORECASE):
         name = _clean_extracted_title(html.unescape(m))
@@ -914,6 +993,25 @@ def extract_maoyan_web_heat_names(raw_html: str) -> List[str]:
         names.append(name)
 
     return names
+
+
+def fetch_maoyan_web_heat_titles(url: str, top_n: int = 0) -> Tuple[List[str], str]:
+    type_hint = _extract_maoyan_web_heat_type_from_url(url)
+    candidates = _build_maoyan_web_heat_candidate_urls(url)
+    last_url = url
+    for candidate in candidates or [url]:
+        if not candidate:
+            continue
+        last_url = candidate
+        try:
+            html_text = fetch_text(candidate)
+        except Exception:
+            continue
+        titles = extract_maoyan_web_heat_names(html_text, required_type=type_hint)
+        if titles:
+            titles = apply_top_n(titles, int(top_n or 0))
+            return titles, candidate
+    return [], last_url
 
 
 def extract_douban_collection_titles(raw_html: str) -> List[str]:
@@ -1766,6 +1864,10 @@ def main() -> int:
     parser.add_argument("--include-maoyan-web-heat", action="store_true", help="猫眼来源时同时抓取网播热度榜")
     parser.add_argument("--maoyan-web-heat-url", default=MAOYAN_WEB_HEAT_URL, help="猫眼网播热度 URL")
     parser.add_argument("--maoyan-web-heat-top-n", type=int, default=0, help="猫眼网播热度仅提取前N名，0表示不限制")
+    parser.add_argument("--maoyan-web-movie-url", default=MAOYAN_WEB_MOVIE_URL, help="猫眼网播热度-网络电影 URL")
+    parser.add_argument("--maoyan-web-movie-top-n", type=int, default=0, help="猫眼网播热度-网络电影仅提取前N名，0表示不限制")
+    parser.add_argument("--maoyan-web-movie-whitelist-keywords", default="", help="猫眼网播-网络电影白名单关键词，逗号或换行分隔")
+    parser.add_argument("--maoyan-web-movie-blacklist-keywords", default="", help="猫眼网播-网络电影黑名单关键词，逗号或换行分隔")
     parser.add_argument("--maoyan-whitelist-keywords", default="", help="猫眼来源白名单关键词，逗号或换行分隔")
     parser.add_argument("--maoyan-blacklist-keywords", default="", help="猫眼来源黑名单关键词，逗号或换行分隔")
     parser.add_argument("--douban-url", default=DOUBAN_AMERICAN_TV_URL, help="豆瓣热播美剧 URL")
@@ -1882,6 +1984,7 @@ def main() -> int:
         tmdb_marked_finished_titles: List[str] = []
         calendar_titles: List[str] = []
         maoyan_titles: List[str] = []
+        maoyan_web_movie_titles: List[str] = []
         douban_titles: List[str] = []
         douban_asia_titles: List[str] = []
         douban_domestic_titles: List[str] = []
@@ -1889,6 +1992,7 @@ def main() -> int:
         douban_animation_titles: List[str] = []
         calendar_source_url = ""
         maoyan_source_url = ""
+        maoyan_web_movie_source_url = ""
         douban_source_url = ""
         douban_asia_source_url = ""
         douban_domestic_source_url = ""
@@ -2039,9 +2143,7 @@ def main() -> int:
             web_heat_titles: List[str] = []
             if bool(args.include_maoyan_web_heat):
                 web_heat_url = (args.maoyan_web_heat_url or MAOYAN_WEB_HEAT_URL).strip()
-                web_heat_html = fetch_text(web_heat_url)
-                web_heat_titles = extract_maoyan_web_heat_names(web_heat_html)
-                web_heat_titles = apply_top_n(web_heat_titles, int(args.maoyan_web_heat_top_n or 0))
+                web_heat_titles, web_heat_url = fetch_maoyan_web_heat_titles(web_heat_url, top_n=int(args.maoyan_web_heat_top_n or 0))
 
             remove_days = int(args.remove_finished_after_days or -1)
             if remove_days >= 0 and web_heat_titles:
@@ -2107,6 +2209,51 @@ def main() -> int:
                 if alias_count:
                     print(f"[INFO] 识别词替换(猫眼): {alias_count}")
             maoyan_source_url = maoyan_url
+
+        if "maoyan_web_movie" in selected_sources or include_all_sources:
+            web_movie_url = (args.maoyan_web_movie_url or MAOYAN_WEB_MOVIE_URL).strip()
+            web_movie_titles, web_movie_used_url = fetch_maoyan_web_heat_titles(
+                web_movie_url,
+                top_n=int(args.maoyan_web_movie_top_n or 0),
+            )
+
+            remove_days = int(args.remove_finished_after_days or -1)
+            if remove_days >= 0 and web_movie_titles:
+                web_movie_titles, removed_from_web_movie, maoyan_web_movie_cache_dirty = _remove_finished_titles_by_tmdb(
+                    web_movie_titles,
+                    remove_days=remove_days,
+                    tmdb_enabled=tmdb_enabled,
+                    finish_detect_mode=finish_detect_mode,
+                    tmdb_api_key=tmdb_api_key,
+                    tmdb_language=tmdb_language,
+                    tmdb_region=tmdb_region,
+                    tmdb_timeout=tmdb_timeout,
+                    tmdb_cache=tmdb_cache,
+                    tmdb_cache_ttl_hours=int(args.tmdb_cache_ttl_hours or 24),
+                    tmdb_year_tolerance=tmdb_year_tolerance,
+                    tmdb_min_score=tmdb_min_score,
+                    tmdb_marked_finished_titles=tmdb_marked_finished_titles,
+                    tmdb_max_workers=tmdb_max_workers,
+                )
+                if maoyan_web_movie_cache_dirty:
+                    tmdb_cache_dirty = True
+                if removed_from_web_movie:
+                    removed_finished_titles.extend(removed_from_web_movie)
+            else:
+                if finish_detect_mode in ("tmdb", "hybrid") and web_movie_titles:
+                    print("[INFO] 猫眼网播-网络电影未开启完结移除(remove_finished_after_days=-1)，本次不会触发 TMDB 完结检查")
+
+            maoyan_web_movie_titles, _, _ = _apply_source_keyword_filters(
+                web_movie_titles,
+                source_name="猫眼网播-网络电影",
+                whitelist_keywords=_parse_keyword_filters(args.maoyan_web_movie_whitelist_keywords),
+                blacklist_keywords=_parse_keyword_filters(args.maoyan_web_movie_blacklist_keywords),
+            )
+            if title_alias_map:
+                maoyan_web_movie_titles, alias_count = _apply_title_aliases(maoyan_web_movie_titles, title_alias_map)
+                if alias_count:
+                    print(f"[INFO] 识别词替换(猫眼网播-网络电影): {alias_count}")
+            maoyan_web_movie_source_url = web_movie_used_url or web_movie_url
 
         if "douban" in selected_sources or include_all_sources:
             douban_url = _normalize_douban_collection_url((args.douban_url or DOUBAN_AMERICAN_TV_URL).strip(), fallback_url=DOUBAN_AMERICAN_TV_URL)
@@ -2354,6 +2501,7 @@ def main() -> int:
         source_results = {
             "calendar": (calendar_titles, calendar_source_url),
             "maoyan": (maoyan_titles, maoyan_source_url),
+            "maoyan_web_movie": (maoyan_web_movie_titles, maoyan_web_movie_source_url),
             "douban": (douban_titles, douban_source_url),
             "douban_asia": (douban_asia_titles, douban_asia_source_url),
             "douban_domestic": (douban_domestic_titles, douban_domestic_source_url),
@@ -2454,6 +2602,9 @@ def main() -> int:
             if bool(args.include_maoyan_web_heat):
                 print(f"[INFO] 网播热度链接: {(args.maoyan_web_heat_url or MAOYAN_WEB_HEAT_URL).strip()}")
                 print(f"[INFO] 网播热度前N: {int(args.maoyan_web_heat_top_n or 0) if int(args.maoyan_web_heat_top_n or 0) > 0 else '不限制'}")
+        if "maoyan_web_movie" in selected_sources or include_all_sources:
+            print(f"[INFO] 猫眼网播-网络电影链接: {(args.maoyan_web_movie_url or MAOYAN_WEB_MOVIE_URL).strip()}")
+            print(f"[INFO] 猫眼网播-网络电影前N: {int(args.maoyan_web_movie_top_n or 0) if int(args.maoyan_web_movie_top_n or 0) > 0 else '不限制'}")
         if "douban" in selected_sources or include_all_sources:
             print(f"[INFO] 豆瓣链接: {(args.douban_url or DOUBAN_AMERICAN_TV_URL).strip()}")
             print(f"[INFO] 豆瓣前N: {int(args.douban_top_n or 0) if int(args.douban_top_n or 0) > 0 else '不限制'}")

@@ -1194,6 +1194,13 @@
                                 </label>
                             </div>
                             <div class="source-option">
+                                <input type="checkbox" id="drama_source_maoyan_web_movie" name="drama_source" value="maoyan_web_movie" {% if 'maoyan_web_movie' in selected_sources %}checked{% endif %}>
+                                <label class="source-card" for="drama_source_maoyan_web_movie">
+                                    <span class="source-card-title">猫眼网播·网络电影 <span class="badge bg-info">WEB</span></span>
+                                    <span class="source-card-desc">抓取猫眼网播热度榜（网络电影）。</span>
+                                </label>
+                            </div>
+                            <div class="source-option">
                                 <input type="checkbox" id="drama_source_douban" name="drama_source" value="douban" {% if 'douban' in selected_sources %}checked{% endif %}>
                                 <label class="source-card" for="drama_source_douban">
                                     <span class="source-card-title">豆瓣美剧 <span class="badge bg-success">TV</span></span>
@@ -1256,6 +1263,9 @@
                             </li>
                             <li class="nav-item" role="presentation" data-source-tab-scope="maoyan">
                                 <button class="nav-link" id="drama_source_tab_maoyan" data-source-pane="drama_source_pane_maoyan" type="button" role="tab" aria-controls="drama_source_pane_maoyan" aria-selected="false">猫眼</button>
+                            </li>
+                            <li class="nav-item" role="presentation" data-source-tab-scope="maoyan_web_movie">
+                                <button class="nav-link" id="drama_source_tab_maoyan_web_movie" data-source-pane="drama_source_pane_maoyan_web_movie" type="button" role="tab" aria-controls="drama_source_pane_maoyan_web_movie" aria-selected="false">网络电影</button>
                             </li>
                             <li class="nav-item" role="presentation" data-source-tab-scope="douban">
                                 <button class="nav-link" id="drama_source_tab_douban" data-source-pane="drama_source_pane_douban" type="button" role="tab" aria-controls="drama_source_pane_douban" aria-selected="false">豆瓣美剧</button>
@@ -1391,6 +1401,48 @@
                                                 <div>
                                                     <label class="form-label small" for="drama_maoyan_blacklist_keywords">黑名单</label>
                                                     <textarea class="form-control form-control-sm" id="drama_maoyan_blacklist_keywords" name="drama_maoyan_blacklist_keywords" rows="2" placeholder="命中任一关键词就剔除，逗号或换行分隔">{{ maoyan_blacklist }}</textarea>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="tab-pane fade" id="drama_source_pane_maoyan_web_movie" role="tabpanel" aria-labelledby="drama_source_tab_maoyan_web_movie" tabindex="0" data-source-scope="maoyan_web_movie">
+                                {% set maoyan_web_movie_whitelist = config.get('drama_calendar', {}).get('maoyan_web_movie_whitelist_keywords', '') %}
+                                {% set maoyan_web_movie_blacklist = config.get('drama_calendar', {}).get('maoyan_web_movie_blacklist_keywords', '') %}
+                                <div class="dense-grid">
+                                    <div class="full">
+                                        <label class="form-label small" for="drama_maoyan_web_movie_url">网播热度·网络电影 URL</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_maoyan_web_movie_url" name="drama_maoyan_web_movie_url"
+                                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_movie_url', 'https://piaofang.maoyan.com/web-heat#4') }}"
+                                            placeholder="https://piaofang.maoyan.com/web-heat#4">
+                                    </div>
+
+                                    <div>
+                                        <label class="form-label small" for="drama_maoyan_web_movie_top_n">网络电影前N名</label>
+                                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_maoyan_web_movie_top_n" name="drama_maoyan_web_movie_top_n"
+                                            value="{{ config.get('drama_calendar', {}).get('maoyan_web_movie_top_n', 0) }}"
+                                            placeholder="0 表示不限制">
+                                    </div>
+
+                                    <div class="full source-filter-block">
+                                        <button class="source-filter-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#maoyan_web_movie_filter_panel" aria-expanded="{{ 'true' if (maoyan_web_movie_whitelist or maoyan_web_movie_blacklist) else 'false' }}" aria-controls="maoyan_web_movie_filter_panel">
+                                            <span>
+                                                <div class="source-filter-block-title">网络电影过滤</div>
+                                                <div class="source-filter-block-meta">白名单 / 黑名单关键词</div>
+                                            </span>
+                                            <i class="bi bi-chevron-down source-filter-toggle-icon"></i>
+                                        </button>
+                                        <div id="maoyan_web_movie_filter_panel" class="collapse{% if maoyan_web_movie_whitelist or maoyan_web_movie_blacklist %} show{% endif %}">
+                                            <div class="dense-grid source-filter-body">
+                                                <div>
+                                                    <label class="form-label small" for="drama_maoyan_web_movie_whitelist_keywords">白名单</label>
+                                                    <textarea class="form-control form-control-sm" id="drama_maoyan_web_movie_whitelist_keywords" name="drama_maoyan_web_movie_whitelist_keywords" rows="2" placeholder="命中任一关键词才保留，逗号或换行分隔">{{ maoyan_web_movie_whitelist }}</textarea>
+                                                </div>
+                                                <div>
+                                                    <label class="form-label small" for="drama_maoyan_web_movie_blacklist_keywords">黑名单</label>
+                                                    <textarea class="form-control form-control-sm" id="drama_maoyan_web_movie_blacklist_keywords" name="drama_maoyan_web_movie_blacklist_keywords" rows="2" placeholder="命中任一关键词就剔除，逗号或换行分隔">{{ maoyan_web_movie_blacklist }}</textarea>
                                                 </div>
                                             </div>
                                         </div>
