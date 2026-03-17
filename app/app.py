@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.12"
+VERSION = "0.5.13"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -519,6 +519,8 @@ _SEASON_RANGE_RE = re.compile(
     r'|(?:第\s*([一二三四五六七八九十百零两0-9]{1,3})\s*[-~–—〜～至到]\s*([一二三四五六七八九十百零两0-9]{1,3})\s*季)',
     re.IGNORECASE,
 )
+_SEASON_PLAIN_RANGE_RE = re.compile(r'(?<![0-9Ee])(\d{1,2})\s*[-~–—〜～至到]\s*(\d{1,2})(?!\d)')
+_SEASON_PLAIN_TOKEN_RE = re.compile(r'(?<![0-9Ee])(\d{1,2})(?!\d)')
 _SEASON_RELAXED_RE = re.compile(
     r'(?<![A-Za-z])S(?:eason)?\s*0*(\d{1,2})(?=[^0-9]|$)',
     re.IGNORECASE,
@@ -623,6 +625,65 @@ def _extract_season_candidates(text: str) -> list:
     return found
 
 
+def _parse_season_input(raw) -> list:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        raw_str = " ".join([str(x) for x in raw if x is not None])
+    else:
+        raw_str = str(raw)
+    raw_str = raw_str.strip()
+    if not raw_str:
+        return []
+    found = []
+    seen = set()
+
+    def _add(val) -> None:
+        val = _coerce_season_int(val)
+        if not val:
+            return
+        if val in seen:
+            return
+        seen.add(val)
+        found.append(val)
+
+    for match in _SEASON_PLAIN_RANGE_RE.finditer(raw_str):
+        start = _coerce_season_int(match.group(1))
+        end = _coerce_season_int(match.group(2))
+        if not start or not end:
+            continue
+        low, high = (start, end) if start <= end else (end, start)
+        for val in range(low, high + 1):
+            _add(val)
+
+    for val in _extract_season_candidates(raw_str):
+        _add(val)
+
+    for match in _SEASON_PLAIN_TOKEN_RE.finditer(raw_str):
+        _add(match.group(1))
+
+    return found
+
+
+def _format_season_label(seasons: list) -> str:
+    if not seasons:
+        return ""
+    seen = set()
+    labels = []
+    for val in seasons:
+        try:
+            num = int(val)
+        except Exception:
+            continue
+        if num <= 0:
+            continue
+        if num in seen:
+            continue
+        seen.add(num)
+        labels.append(f"S{num:02d}")
+    return "/".join(labels)
+
+
 def _extract_season_request(text: str) -> Optional[int]:
     raw = (text or '').strip()
     if not raw:
@@ -723,6 +784,24 @@ def _resource_match_season(item: dict, season: int) -> Optional[bool]:
     return season in season_values
 
 
+def _resource_match_seasons(item: dict, seasons: list) -> Optional[bool]:
+    if not seasons:
+        return None
+    season_list = [s for s in seasons if isinstance(s, int) and s > 0]
+    if not season_list:
+        return None
+    saw_false = False
+    for season in season_list:
+        res = _resource_match_season(item, season)
+        if res is True:
+            return True
+        if res is False:
+            saw_false = True
+    if saw_false:
+        return False
+    return None
+
+
 def _resource_has_season_info(item: dict) -> bool:
     if not isinstance(item, dict):
         return False
@@ -779,8 +858,18 @@ def _resource_has_season_info(item: dict) -> bool:
     return False
 
 
-def _build_season_miss_reason(season: int, items: Optional[list] = None) -> tuple:
-    reason = f"说明: 未找到所选季 (S{season:02d})"
+def _build_season_miss_reason(seasons, items: Optional[list] = None) -> tuple:
+    season_list = []
+    if isinstance(seasons, int):
+        season_list = [seasons]
+    elif isinstance(seasons, (list, tuple, set)):
+        for s in seasons:
+            try:
+                season_list.append(int(s))
+            except Exception:
+                continue
+    label = _format_season_label(season_list)
+    reason = f"说明: 未找到所选季 ({label})" if label else "说明: 未找到所选季"
     hint = ""
     if isinstance(items, list):
         has_info = any(_resource_has_season_info(item) for item in items if isinstance(item, dict))
@@ -2936,6 +3025,17 @@ def _prioritize_hdhive_candidates(
         uniq.append(item)
     candidates = uniq
 
+    season_list = []
+    if isinstance(season, int):
+        season_list = [season]
+    elif isinstance(season, (list, tuple, set)):
+        for s in season:
+            try:
+                s_val = int(s)
+            except Exception:
+                continue
+            if s_val > 0:
+                season_list.append(s_val)
     scored = []
     limit = min(len(candidates), max(1, int(max_items)))
     for idx, cand in enumerate(candidates):
@@ -2957,8 +3057,8 @@ def _prioritize_hdhive_candidates(
                         official = bool(data.get("is_official", False))
                         unlocked = bool(data.get("already_owned") or data.get("is_unlocked"))
                         points = _hdhive_open_api_extract_unlock_points(data)
-                        if season:
-                            season_match = _resource_match_season(data, season)
+                        if season_list:
+                            season_match = _resource_match_seasons(data, season_list)
                         if resolution_preference:
                             resolution_match = _resource_match_resolution(data, resolution_preference)
                 if points is None and cookie:
@@ -2979,7 +3079,7 @@ def _prioritize_hdhive_candidates(
         points_rank = points if isinstance(points, int) else 999999
         return (unlocked_rank, season_rank, resolution_rank, official_rank, points_rank, idx)
 
-    if season is not None:
+    if season_list:
         matched = [item for item in scored if item[5] is True]
         if matched:
             scored = matched
@@ -3671,14 +3771,11 @@ def _run_self_service_request(payload: dict) -> None:
     dolby_label = _dolby_preference_label(dolby_preference)
     resolution_preference = _normalize_resolution_pref(payload.get("resolution", "") or "")
     resolution_label = _resolution_preference_label(resolution_preference)
-    explicit_season = payload.get("season")
-    try:
-        explicit_season = int(explicit_season) if str(explicit_season).strip() else None
-    except Exception:
-        explicit_season = None
-    requested_season = explicit_season or _extract_season_request(title) or _extract_season_request(query)
-    season_strict = explicit_season is not None
-    title_for_search = _strip_season_tokens(title) if requested_season else title
+    explicit_seasons = _parse_season_input(payload.get("season"))
+    requested_seasons = explicit_seasons or _extract_season_candidates(title) or _extract_season_candidates(query)
+    season_strict = bool(explicit_seasons)
+    season_label = _format_season_label(requested_seasons)
+    title_for_search = _strip_season_tokens(title) if requested_seasons else title
 
     def _record_result(success: bool, detail: str = "", resolved: bool = False) -> None:
         if success:
@@ -3692,7 +3789,7 @@ def _run_self_service_request(payload: dict) -> None:
                 f"片名: {title}" if title else "",
                 f"年份: {request_year}" if request_year else "",
                 f"杜比: {dolby_label}" if dolby_preference != "any" else "",
-                f"季: S{requested_season:02d}" if isinstance(requested_season, int) and requested_season > 0 else "",
+                f"季: {season_label}" if season_label else "",
                 f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
         if request_id:
@@ -3753,17 +3850,18 @@ def _run_self_service_request(payload: dict) -> None:
             unlock_points = None
             already_owned = False
             if isinstance(detail_data, dict):
-                if requested_season is not None:
-                    season_match = _resource_match_season(detail_data, requested_season)
+                if requested_seasons:
+                    season_match = _resource_match_seasons(detail_data, requested_seasons)
                     if season_match is False:
+                        season_note = season_label or "所选季"
                         detail = _build_self_service_detail([
                             f"片名: {title}" if title else "",
                             f"网盘: {storage_label}" if storage_label != "不限" else "",
                             "来源: Open API 直链",
-                            f"说明: 资源不匹配所需季 ({requested_season})",
+                            f"说明: 资源不匹配所需季 ({season_note})",
                         ])
                         _record_result(False, detail=detail, resolved=False)
-                        _append_self_service_log([f"[{ts}] [WARN] open_api direct season_mismatch slug={slug} season={requested_season}"])
+                        _append_self_service_log([f"[{ts}] [WARN] open_api direct season_mismatch slug={slug} season={season_note}"])
                         return
                 unlock_points = _hdhive_open_api_extract_unlock_points(detail_data)
                 already_owned = bool(detail_data.get("already_owned") or detail_data.get("is_unlocked"))
@@ -3910,10 +4008,10 @@ def _run_self_service_request(payload: dict) -> None:
             _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
             return
 
-        if requested_season is not None:
-            season_matched = [item for item in collected_resources if _resource_match_season(item, requested_season)]
+        if requested_seasons:
+            season_matched = [item for item in collected_resources if _resource_match_seasons(item, requested_seasons)]
             if season_strict and not season_matched:
-                reason, hint = _build_season_miss_reason(requested_season, collected_resources)
+                reason, hint = _build_season_miss_reason(requested_seasons, collected_resources)
                 detail = _build_self_service_detail([
                     f"片名: {title}" if title else "",
                     f"网盘: {storage_label}" if storage_label != "不限" else "",
@@ -3922,7 +4020,7 @@ def _run_self_service_request(payload: dict) -> None:
                     f"分辨率: {resolution_label}" if resolution_preference else "",
                 ])
                 _record_result(False, detail=detail, resolved=False)
-                _append_self_service_log([f"[{ts}] [WARN] open_api no season match query={query} season={requested_season}"])
+                _append_self_service_log([f"[{ts}] [WARN] open_api no season match query={query} season={season_label or ''}"])
                 return
             if season_matched:
                 collected_resources = season_matched
@@ -4065,10 +4163,11 @@ def _run_self_service_request(payload: dict) -> None:
             if request_type:
                 combos.append(f"{title} {request_type}")
             combos.append(title)
-            if requested_season and title_for_search and title_for_search != title:
+            if requested_seasons and title_for_search and title_for_search != title:
                 combos.insert(0, title_for_search)
-                combos.insert(0, f"{title_for_search} S{requested_season:02d}")
-                combos.insert(0, f"{title_for_search} 第{requested_season}季")
+                for season in reversed(requested_seasons[:5]):
+                    combos.insert(0, f"{title_for_search} S{season:02d}")
+                    combos.insert(0, f"{title_for_search} 第{season}季")
             for item in combos:
                 if item and item not in query_candidates:
                     query_candidates.append(item)
@@ -4138,14 +4237,14 @@ def _run_self_service_request(payload: dict) -> None:
                 base_url=base_url,
                 open_api_key=open_api_key,
                 cookie=hdhive_cookie,
-                season=requested_season,
+                season=requested_seasons,
                 season_strict=season_strict,
                 resolution_preference=resolution_preference,
                 max_items=max_results,
             )
     if not candidates:
-        if season_strict and isinstance(requested_season, int):
-            reason, hint = _build_season_miss_reason(requested_season)
+        if season_strict and requested_seasons:
+            reason, hint = _build_season_miss_reason(requested_seasons)
             if hint:
                 reason = f"{reason}，{hint}"
         else:
@@ -6563,10 +6662,7 @@ def self_service_request():
         season_raw = (request.form.get('season') or '').strip()
         season_val = None
         if season_raw:
-            try:
-                season_val = int(season_raw)
-            except Exception:
-                season_val = None
+            season_val = season_raw
         resolution_pref = _normalize_resolution_pref(request.form.get('resolution') or '')
 
         query_parts = [title]
@@ -6734,10 +6830,7 @@ def self_service_public():
         season_raw = (request.form.get('season') or '').strip()
         season_val = None
         if season_raw:
-            try:
-                season_val = int(season_raw)
-            except Exception:
-                season_val = None
+            season_val = season_raw
         resolution_pref = _normalize_resolution_pref(request.form.get('resolution') or '')
 
         query_parts = [title]
