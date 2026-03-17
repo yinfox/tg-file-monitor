@@ -12,6 +12,7 @@ from functools import lru_cache
 from collections import deque
 from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
+from types import SimpleNamespace
 import html
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
@@ -47,6 +48,9 @@ _CHANNEL_FILTERS_CACHE = None
 _CHANNEL_FILTERS_MTIME = None
 _CHANNEL_FILTERS_LAST_CHECK = 0.0
 _CHANNEL_FILTERS_CHECK_INTERVAL = 2.0
+_LAST_GOOD_CONFIG = None
+_HANDLER_CLIENT = None
+STARTUP_TV_WHITELIST_SCAN_LIMIT = 20
 
 
 def log_message(message: str, level: str = "INFO"):
@@ -190,6 +194,7 @@ def create_progress_callback(file_path: str, media_type: str):
 
 
 def load_config() -> dict:
+    global _LAST_GOOD_CONFIG
     default_config = {
         "telegram": {
             "api_id": None,
@@ -197,6 +202,7 @@ def load_config() -> dict:
             "session_name": "telegram_monitor",
         },
         "download_concurrency": 2,
+        "startup_tv_whitelist_scan_limit": STARTUP_TV_WHITELIST_SCAN_LIMIT,
         "restricted_channels": [],
         "proxy": {},
         "debug_mode": False,
@@ -221,16 +227,20 @@ def load_config() -> dict:
     }
 
     if not os.path.exists(CONFIG_FILE):
+        _LAST_GOOD_CONFIG = default_config
         return default_config
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
             config = json.load(f)
         if not isinstance(config, dict):
+            _LAST_GOOD_CONFIG = default_config
             return default_config
         if 'telegram' not in config:
             config['telegram'] = default_config['telegram']
         if 'download_concurrency' not in config:
             config['download_concurrency'] = default_config['download_concurrency']
+        if 'startup_tv_whitelist_scan_limit' not in config:
+            config['startup_tv_whitelist_scan_limit'] = default_config['startup_tv_whitelist_scan_limit']
         if 'restricted_channels' not in config:
             config['restricted_channels'] = []
         if 'proxy' not in config:
@@ -255,15 +265,33 @@ def load_config() -> dict:
             merged_risk = default_config['download_risk_control'].copy()
             merged_risk.update(config.get('download_risk_control') or {})
             config['download_risk_control'] = merged_risk
+        _LAST_GOOD_CONFIG = config
         return config
-    except Exception:
+    except Exception as e:
+        if _LAST_GOOD_CONFIG is not None:
+            log_message(f"读取 config.json 失败，使用上次有效配置: {e}")
+            return _LAST_GOOD_CONFIG
+        _LAST_GOOD_CONFIG = default_config
         return default_config
 
 
+def _atomic_write_json(path: str, data: dict, *, indent: int = 4) -> None:
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=indent)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
 def save_config(config: dict):
-    os.makedirs(CONFIG_DIR, exist_ok=True)
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=4)
+    _atomic_write_json(CONFIG_FILE, config, indent=4)
 
 
 def _default_channel_filters():
@@ -313,6 +341,8 @@ def load_channel_filters():
             raise ValueError("invalid channel_filters format")
     except Exception as e:
         debug_log(f"读取 tvchannel_filters.json 失败: {e}")
+        if _CHANNEL_FILTERS_CACHE is not None:
+            return _CHANNEL_FILTERS_CACHE
         data = _default_channel_filters()
 
     if "global" not in data or not isinstance(data.get("global"), dict):
@@ -1861,6 +1891,19 @@ def _apply_download_concurrency(cfg: dict, *, announce: bool = False) -> None:
     if announce:
         log_message(f"下载并发已更新: {DOWNLOAD_CONCURRENCY}")
 
+
+def _resolve_startup_tv_whitelist_scan_limit(cfg: dict) -> int:
+    raw = None
+    if isinstance(cfg, dict):
+        raw = cfg.get('startup_tv_whitelist_scan_limit')
+    if raw is None:
+        raw = os.environ.get('STARTUP_TV_WHITELIST_SCAN_LIMIT') or os.environ.get('TG_STARTUP_TV_WHITELIST_SCAN_LIMIT')
+    try:
+        val = int(raw)
+    except Exception:
+        val = STARTUP_TV_WHITELIST_SCAN_LIMIT
+    return max(0, min(val, 200))
+
 async def ensure_client_connected():
     """Ensures the Telethon client is connected and authenticated."""
     global client, current_config
@@ -1957,6 +2000,34 @@ async def ensure_client_connected():
         if client and client.is_connected():
             await client.disconnect()
         return False
+
+def _register_event_handlers():
+    global _HANDLER_CLIENT
+    if client is None:
+        return
+    if _HANDLER_CLIENT is client:
+        return
+    try:
+        if _HANDLER_CLIENT is not None:
+            _HANDLER_CLIENT.remove_event_handler(new_message_handler)
+    except Exception:
+        pass
+    client.add_event_handler(new_message_handler, events.NewMessage())
+    _HANDLER_CLIENT = client
+
+
+async def keep_client_connected():
+    while True:
+        try:
+            if client is None or not client.is_connected():
+                log_message("检测到 Telegram 断开，尝试重连...")
+                ok = await ensure_client_connected()
+                if ok:
+                    _register_event_handlers()
+                    log_message("Telegram 已重连并恢复监控。")
+        except Exception as e:
+            log_message(f"重连检查失败: {e}")
+        await asyncio.sleep(10)
 
 async def reliable_action(action_name, coro_func, *args, **kwargs):
     """
@@ -2204,6 +2275,87 @@ def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, List[str]]:
     }
 
 
+async def _extract_message_text_for_filter(msg, chat_id: int) -> str:
+    message_text_for_filter = msg.message or ""
+    if message_text_for_filter:
+        return message_text_for_filter
+    if not msg.grouped_id:
+        return ""
+    try:
+        nearby_msgs = await client.get_messages(
+            chat_id,
+            limit=50,
+            min_id=max(msg.id - 20, 0),
+            max_id=msg.id + 20
+        )
+        nearby_msgs = list(nearby_msgs) if nearby_msgs else []
+        for m in nearby_msgs:
+            if m.grouped_id == msg.grouped_id and m.message:
+                return m.message or ""
+    except Exception:
+        pass
+    return ""
+
+
+def _build_tv_whitelist_for_channel(channel_id: int, channel_filters_cfg: dict) -> List[str]:
+    if not isinstance(channel_filters_cfg, dict):
+        return []
+    channel_filters = channel_filters_cfg.get('channels', {}) if isinstance(channel_filters_cfg, dict) else {}
+    channel_rule = channel_filters.get(str(channel_id), {}) if isinstance(channel_filters, dict) else {}
+    global_rule = channel_filters_cfg.get('global', {}) if isinstance(channel_filters_cfg, dict) else {}
+    drama_rule = channel_filters_cfg.get('drama', {}) if isinstance(channel_filters_cfg, dict) else {}
+    return (
+        _normalize_keyword_list(global_rule.get('whitelist'))
+        + _normalize_keyword_list(channel_rule.get('whitelist'))
+        + _normalize_keyword_list(drama_rule.get('whitelist'))
+    )
+
+
+async def _startup_scan_tv_whitelist(limit: int = STARTUP_TV_WHITELIST_SCAN_LIMIT) -> None:
+    if client is None:
+        return
+    restricted_channels = current_config.get('restricted_channels', [])
+    if not restricted_channels:
+        return
+    channel_filters_cfg = load_channel_filters()
+
+    for restricted_entry in restricted_channels:
+        if not restricted_entry.get('use_tvchannel_filters'):
+            continue
+        restricted_channel_id = restricted_entry.get('channel_id')
+        try:
+            restricted_channel_id = int(restricted_channel_id)
+        except (ValueError, TypeError):
+            continue
+
+        tv_whitelist = _build_tv_whitelist_for_channel(restricted_channel_id, channel_filters_cfg)
+        if not tv_whitelist:
+            continue
+
+        try:
+            recent_msgs = await client.get_messages(restricted_channel_id, limit=limit)
+        except Exception as e:
+            log_message(f"获取频道 {restricted_channel_id} 最近消息失败: {e}")
+            continue
+
+        if not recent_msgs:
+            continue
+        for msg in reversed(list(recent_msgs)):
+            if not msg:
+                continue
+            message_text_for_filter = await _extract_message_text_for_filter(msg, restricted_channel_id)
+            if not message_text_for_filter:
+                continue
+            message_text_lower = message_text_for_filter.lower()
+            if not any(match_keyword(keyword, message_text_for_filter, message_text_lower) for keyword in tv_whitelist):
+                continue
+            event = SimpleNamespace(chat_id=restricted_channel_id, message=msg, chat=getattr(msg, 'chat', None))
+            try:
+                await new_message_handler(event, backfill=True)
+            except Exception as e:
+                log_message(f"回溯处理消息失败: ch={restricted_channel_id} msg={getattr(msg, 'id', '-')}, err={e}")
+
+
 def _auto_click_recently(chat_id: int, msg_id: int) -> bool:
     now = time.time()
     # purge old entries
@@ -2378,7 +2530,7 @@ async def _maybe_auto_click_buttons(
     return False
 
 # --- Message Handler ---
-async def new_message_handler(event):
+async def new_message_handler(event, *, backfill: bool = False):
     try:
         chat_title = "Unknown"
         if hasattr(event, 'chat') and hasattr(event.chat, 'title'):
@@ -2438,7 +2590,7 @@ async def new_message_handler(event):
             auto_click_fast = bool(restricted_entry.get('auto_click_fast', False))
             auto_click_fast_skip = bool(restricted_entry.get('auto_click_fast_skip_processing', False))
             auto_click_clicked = False
-            if auto_click_fast:
+            if auto_click_fast and not backfill:
                 try:
                     auto_click_clicked = await _maybe_auto_click_buttons(
                         event,
@@ -2472,10 +2624,11 @@ async def new_message_handler(event):
             message_text_lower = message_text_for_filter.lower() if message_text_for_filter else ""
 
             # --- Auto Click Buttons (e.g., 红包) ---
-            try:
-                await _maybe_auto_click_buttons(event, msg, restricted_entry, message_text_for_filter)
-            except Exception as e:
-                debug_log(f" 自动点击处理异常: {e}")
+            if not backfill:
+                try:
+                    await _maybe_auto_click_buttons(event, msg, restricted_entry, message_text_for_filter)
+                except Exception as e:
+                    debug_log(f" 自动点击处理异常: {e}")
 
             if not force_forward_all:
                 use_tv_filters = bool(restricted_entry.get('use_tvchannel_filters'))
@@ -2982,7 +3135,7 @@ async def main():
         return
 
     # 2. Add event handler after client is connected
-    client.add_event_handler(new_message_handler, events.NewMessage())
+    _register_event_handlers()
     log_message(f"已成功连接并授权 Telegram 客户端。")
     
     # --- DIAGNOSIS: List all available dialogs ---
@@ -3022,14 +3175,21 @@ async def main():
             
     if config_updated:
         try:
-            config_path = 'config/config.json'
-            with open(config_path, 'w', encoding='utf-8') as f:
-                json.dump(current_config, f, indent=4, ensure_ascii=False)
+            save_config(current_config)
             log_message("频道名称已更新并保存到配置。")
         except Exception as e:
             log_message(f"保存更新后的配置失败: {e}")
 
     log_message(f"开始监控 {len(current_config.get('restricted_channels', []))} 个频道。")
+    startup_scan_limit = _resolve_startup_tv_whitelist_scan_limit(current_config)
+    if startup_scan_limit > 0:
+        log_message(f"启动回溯检测：最近 {startup_scan_limit} 条 TV 白名单消息（仅限启用 TV 过滤的频道）")
+        try:
+            await _startup_scan_tv_whitelist(limit=startup_scan_limit)
+        except Exception as e:
+            log_message(f"启动回溯检测失败: {e}")
+    else:
+        log_message("启动回溯检测已关闭。")
 
     try:
         # 3. Run loops
@@ -3037,6 +3197,7 @@ async def main():
             monitor_config_changes(), # Monitors config file for changes
             # periodic_checkin_loop(),   # HDHive 签到功能已移除
             message_queue_loop(),      # Sends messages requested by app.py
+            keep_client_connected(),   # Auto-reconnect on disconnect
             # resource_request_loop(),   # HDHive 功能已移除
             client.run_until_disconnected() # Keeps Telethon client running
         )

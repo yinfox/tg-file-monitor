@@ -5,6 +5,7 @@
     "session_name": "telegram_monitor"
   },
   "download_concurrency": 2,
+  "startup_tv_whitelist_scan_limit": 20,
   "web_auth": {
     "username": "admin",
     "password_hash": null

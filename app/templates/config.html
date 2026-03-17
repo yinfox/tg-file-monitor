@@ -676,6 +676,31 @@
                     <div class="card-body p-2">
                         <div class="accordion compact-accordion" id="tgAdvancedAccordion">
                             <div class="accordion-item">
+                                <h2 class="accordion-header" id="startupScanHeading">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                        data-bs-target="#startupScanCollapse" aria-expanded="false"
+                                        aria-controls="startupScanCollapse">
+                                        <i class="bi bi-clock-history me-2"></i>🕒 启动回溯（TV 白名单）
+                                    </button>
+                                </h2>
+                                <div id="startupScanCollapse" class="accordion-collapse collapse"
+                                    aria-labelledby="startupScanHeading" data-bs-parent="#tgAdvancedAccordion">
+                                    <div class="accordion-body p-2">
+                                        <form action="{{ url_for('manage_config') }}" method="POST">
+                                            <input type="hidden" name="action" value="update_monitor_settings">
+                                            <div class="mb-2">
+                                                <label for="startup_tv_whitelist_scan_limit" class="form-label small">回溯条数:</label>
+                                                <input type="number" class="form-control form-control-sm" id="startup_tv_whitelist_scan_limit"
+                                                    name="startup_tv_whitelist_scan_limit" min="0" max="200" step="1"
+                                                    value="{{ config.get('startup_tv_whitelist_scan_limit', 20) }}">
+                                                <div class="form-text">重启监控或容器后，回溯最近 N 条消息；仅对启用 TV 过滤的频道生效。0 表示关闭。</div>
+                                            </div>
+                                            <button type="submit" class="btn btn-secondary btn-sm w-100">保存监控设置</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="accordion-item">
                                 <h2 class="accordion-header" id="hdhiveSettingsHeading">
                                     <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
                                         data-bs-target="#hdhiveSettingsCollapse" aria-expanded="false"

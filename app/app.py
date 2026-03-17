@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.05"
+VERSION = "0.5.10"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -102,6 +102,7 @@ def load_config():
         "file_monitor_scan_interval": 5,
         "file_monitor_dir_state_check_interval": 0,
         "download_concurrency": 2,
+        "startup_tv_whitelist_scan_limit": 20,
         "log_refresh_interval_seconds": LOG_REFRESH_INTERVAL_DEFAULT,
         "log_auto_refresh_enabled": False,
         "log_tail_lines": LOG_TAIL_LINES,
@@ -215,6 +216,8 @@ def load_config():
                     config["file_monitor_dir_state_check_interval"] = default_config["file_monitor_dir_state_check_interval"]
                 if "download_concurrency" not in config:
                     config["download_concurrency"] = default_config["download_concurrency"]
+                if "startup_tv_whitelist_scan_limit" not in config:
+                    config["startup_tv_whitelist_scan_limit"] = default_config["startup_tv_whitelist_scan_limit"]
                 if "log_refresh_interval_seconds" not in config:
                     config["log_refresh_interval_seconds"] = default_config["log_refresh_interval_seconds"]
                 if "log_auto_refresh_enabled" not in config:
@@ -332,10 +335,24 @@ def load_config():
     
     return config
 
+def _atomic_write_json(path: str, data: dict, *, indent: int = 4) -> None:
+    os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
+    tmp_path = f"{path}.tmp.{os.getpid()}.{int(time.time() * 1000)}"
+    try:
+        with open(tmp_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=indent)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+
+
 def save_config(config):
     """Saves configuration to config.json."""
-    with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-        json.dump(config, f, ensure_ascii=False, indent=4)
+    _atomic_write_json(CONFIG_FILE, config, indent=4)
 
 
 def _parse_env_files(raw_env_files: str):
@@ -491,6 +508,196 @@ def _normalize_title_for_match(title: str) -> str:
     t = (title or '').strip().lower()
     t = re.sub(r'[\s\-_:：·\.\,，。\(\)\[\]【】]+', '', t)
     return t
+
+
+_SEASON_TOKEN_RE = re.compile(
+    r'(?:\bS(?:eason)?\s*0*(\d{1,2})\b)|(?:第\s*([一二三四五六七八九十百零两0-9]{1,3})\s*季)',
+    re.IGNORECASE,
+)
+_SEASON_RANGE_RE = re.compile(
+    r'(?:\bS(?:eason)?\s*0*(\d{1,2})\s*[-~–—〜～至到]\s*0*(\d{1,2})\b)'
+    r'|(?:第\s*([一二三四五六七八九十百零两0-9]{1,3})\s*[-~–—〜～至到]\s*([一二三四五六七八九十百零两0-9]{1,3})\s*季)',
+    re.IGNORECASE,
+)
+_SEASON_RELAXED_RE = re.compile(
+    r'(?<![A-Za-z])S(?:eason)?\s*0*(\d{1,2})(?=[^0-9]|$)',
+    re.IGNORECASE,
+)
+_SEASON_EP_RE = re.compile(
+    r'S(?:eason)?\s*0*(\d{1,2})\s*[^0-9A-Za-z]*\s*E\s*\d{1,3}',
+    re.IGNORECASE,
+)
+
+
+def _chinese_numeral_to_int(text: str) -> Optional[int]:
+    if not text:
+        return None
+    text = str(text).strip()
+    if not text:
+        return None
+    if text.isdigit():
+        try:
+            return int(text)
+        except Exception:
+            return None
+    num_map = {'零': 0, '一': 1, '二': 2, '两': 2, '三': 3, '四': 4, '五': 5, '六': 6, '七': 7, '八': 8, '九': 9}
+    total = 0
+    num = 0
+    for ch in text:
+        if ch in num_map:
+            num = num_map[ch]
+        elif ch == '十':
+            if num == 0:
+                num = 1
+            total += num * 10
+            num = 0
+        elif ch == '百':
+            if num == 0:
+                num = 1
+            total += num * 100
+            num = 0
+    total += num
+    return total if total > 0 else None
+
+
+def _coerce_season_int(value) -> Optional[int]:
+    try:
+        num = int(value)
+    except Exception:
+        return None
+    if 1 <= num <= 99:
+        return num
+    return None
+
+
+def _extract_season_candidates(text: str) -> list:
+    raw = (text or '').strip()
+    if not raw:
+        return []
+    found = []
+    seen = set()
+
+    def _add(val: Optional[int]) -> None:
+        if not isinstance(val, int):
+            return
+        if val <= 0 or val > 99:
+            return
+        if val in seen:
+            return
+        seen.add(val)
+        found.append(val)
+
+    for match in _SEASON_RANGE_RE.finditer(raw):
+        s_start = match.group(1)
+        s_end = match.group(2)
+        zh_start = match.group(3)
+        zh_end = match.group(4)
+        if s_start and s_end:
+            start = _coerce_season_int(s_start)
+            end = _coerce_season_int(s_end)
+        else:
+            start = _coerce_season_int(_chinese_numeral_to_int(zh_start))
+            end = _coerce_season_int(_chinese_numeral_to_int(zh_end))
+        if not start or not end:
+            continue
+        low, high = (start, end) if start <= end else (end, start)
+        for val in range(low, high + 1):
+            _add(val)
+
+    for match in _SEASON_TOKEN_RE.finditer(raw):
+        s_token = match.group(1)
+        zh_token = match.group(2)
+        if s_token:
+            _add(_coerce_season_int(s_token))
+            continue
+        if zh_token:
+            _add(_coerce_season_int(_chinese_numeral_to_int(zh_token)))
+
+    if not found:
+        for match in _SEASON_EP_RE.finditer(raw):
+            _add(_coerce_season_int(match.group(1)))
+    if not found:
+        for match in _SEASON_RELAXED_RE.finditer(raw):
+            _add(_coerce_season_int(match.group(1)))
+
+    return found
+
+
+def _extract_season_request(text: str) -> Optional[int]:
+    raw = (text or '').strip()
+    if not raw:
+        return None
+    for match in _SEASON_TOKEN_RE.finditer(raw):
+        s_token = match.group(1)
+        zh_token = match.group(2)
+        if s_token:
+            try:
+                return int(s_token)
+            except Exception:
+                continue
+        if zh_token:
+            val = _chinese_numeral_to_int(zh_token)
+            if val:
+                return val
+    return None
+
+
+def _strip_season_tokens(text: str) -> str:
+    raw = (text or '').strip()
+    if not raw:
+        return ""
+    cleaned = _SEASON_TOKEN_RE.sub(' ', raw)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+
+def _resource_match_season(item: dict, season: int) -> Optional[bool]:
+    if not isinstance(season, int) or season <= 0:
+        return None
+    if not isinstance(item, dict):
+        return None
+    season_values = set()
+    season_fields = ("season", "season_number", "season_num")
+    for key in season_fields:
+        if key not in item:
+            continue
+        val = item.get(key)
+        if isinstance(val, (list, tuple, set)):
+            for entry in val:
+                entry_season = _coerce_season_int(entry)
+                if entry_season:
+                    season_values.add(entry_season)
+                elif isinstance(entry, str):
+                    season_values.update(_extract_season_candidates(entry))
+        else:
+            entry_season = _coerce_season_int(val)
+            if entry_season:
+                season_values.add(entry_season)
+            elif isinstance(val, str):
+                season_values.update(_extract_season_candidates(val))
+
+    text_bits = []
+    for key in ("title", "name", "resource_title", "resource_name", "subtitle", "release_name", "description"):
+        val = item.get(key)
+        if val:
+            if isinstance(val, (list, tuple, set)):
+                text_bits.extend([str(x) for x in val if x])
+            else:
+                text_bits.append(str(val))
+    if not text_bits:
+        for val in item.values():
+            if isinstance(val, str) and val:
+                text_bits.append(val)
+            elif isinstance(val, (list, tuple, set)):
+                for entry in val:
+                    if isinstance(entry, str) and entry:
+                        text_bits.append(entry)
+    if text_bits:
+        season_values.update(_extract_season_candidates(" ".join(text_bits)))
+
+    if not season_values:
+        return None
+    return season in season_values
 
 
 def _clean_extracted_title(title: str) -> str:
@@ -717,9 +924,7 @@ def _load_tv_channel_filters():
 
 def _save_tv_channel_filters(data: dict) -> bool:
     try:
-        os.makedirs(os.path.dirname(TV_CHANNEL_FILTERS_FILE) or '.', exist_ok=True)
-        with open(TV_CHANNEL_FILTERS_FILE, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        _atomic_write_json(TV_CHANNEL_FILTERS_FILE, data, indent=2)
         return True
     except Exception:
         return False
@@ -2599,7 +2804,7 @@ def _resource_unlock_points(item: dict) -> Optional[int]:
         return None
 
 
-def _sort_hdhive_resources(resources: list) -> list:
+def _sort_hdhive_resources(resources: list, *, resolution_preference: str = "") -> list:
     if not resources:
         return []
 
@@ -2607,8 +2812,11 @@ def _sort_hdhive_resources(resources: list) -> list:
         points = _resource_unlock_points(item)
         unlocked = bool(item.get("is_unlocked", False))
         official = bool(item.get("is_official", False))
+        resolution_match = _resource_match_resolution(item, resolution_preference) if resolution_preference else None
+        resolution_rank = 0 if resolution_match is True else (1 if resolution_match is None else 2)
         return (
             0 if unlocked else 1,
+            resolution_rank,
             0 if official else 1,
             points if points is not None else 999999,
         )
@@ -2622,6 +2830,9 @@ def _prioritize_hdhive_candidates(
     base_url: str,
     open_api_key: str = "",
     cookie: str = "",
+    season: Optional[int] = None,
+    season_strict: bool = False,
+    resolution_preference: str = "",
     max_items: int = 10,
 ) -> list:
     if not candidates:
@@ -2641,6 +2852,8 @@ def _prioritize_hdhive_candidates(
         official = None
         unlocked = None
         points = None
+        season_match = None
+        resolution_match = None
         if idx < limit:
             slug = _normalize_hdhive_test_slug(cand)
             if slug:
@@ -2654,20 +2867,38 @@ def _prioritize_hdhive_candidates(
                         official = bool(data.get("is_official", False))
                         unlocked = bool(data.get("already_owned") or data.get("is_unlocked"))
                         points = _hdhive_open_api_extract_unlock_points(data)
+                        if season:
+                            season_match = _resource_match_season(data, season)
+                        if resolution_preference:
+                            resolution_match = _resource_match_resolution(data, resolution_preference)
                 if points is None and cookie:
                     try:
                         points = _hdhive_cookie_query_unlock_points(slug, cookie)
                     except Exception:
                         points = None
-        scored.append((idx, cand, official, unlocked, points))
+        if resolution_match is None and resolution_preference:
+            resolution_match = _text_match_resolution(cand, resolution_preference)
+        scored.append((idx, cand, official, unlocked, points, season_match, resolution_match))
 
     def _score(item):
-        idx, _cand, official, unlocked, points = item
+        idx, _cand, official, unlocked, points, season_match, resolution_match = item
         official_rank = 0 if official is True else (1 if official is False else 2)
         unlocked_rank = 0 if unlocked is True else (1 if unlocked is False else 2)
+        season_rank = 0 if season_match is True else (1 if season_match is None else 2)
+        resolution_rank = 0 if resolution_match is True else (1 if resolution_match is None else 2)
         points_rank = points if isinstance(points, int) else 999999
-        return (unlocked_rank, official_rank, points_rank, idx)
+        return (unlocked_rank, season_rank, resolution_rank, official_rank, points_rank, idx)
 
+    if season is not None:
+        matched = [item for item in scored if item[5] is True]
+        if matched:
+            scored = matched
+        elif season_strict:
+            return []
+    if resolution_preference:
+        matched = [item for item in scored if item[6] is True]
+        if matched:
+            scored = matched
     scored.sort(key=_score)
     return [item[1] for item in scored]
 
@@ -2810,6 +3041,82 @@ def _dolby_preference_label(pref: str) -> str:
     if pref == "exclude":
         return "排除杜比"
     return "不指定"
+
+
+def _normalize_resolution_pref(raw: str) -> str:
+    s = (raw or "").strip().lower()
+    if not s or s in ("any", "不限", "不指定"):
+        return ""
+    if s in ("4k", "2160", "2160p", "uhd"):
+        return "2160p"
+    if s in ("1080", "1080p", "fhd"):
+        return "1080p"
+    if s in ("720", "720p", "hd"):
+        return "720p"
+    if s in ("480", "480p", "sd"):
+        return "480p"
+    return ""
+
+
+def _resolution_preference_label(pref: str) -> str:
+    pref = _normalize_resolution_pref(pref)
+    if pref == "2160p":
+        return "4K/2160P"
+    if pref == "1080p":
+        return "1080P"
+    if pref == "720p":
+        return "720P"
+    if pref == "480p":
+        return "480P"
+    return "不指定"
+
+
+_RESOLUTION_PATTERNS = {
+    "2160p": re.compile(r'(2160p|4k|uhd)', re.IGNORECASE),
+    "1080p": re.compile(r'(1080p|1080)', re.IGNORECASE),
+    "720p": re.compile(r'(720p|720)', re.IGNORECASE),
+    "480p": re.compile(r'(480p|480)', re.IGNORECASE),
+}
+
+
+def _text_match_resolution(text: str, pref: str) -> Optional[bool]:
+    pref = _normalize_resolution_pref(pref)
+    if not text or not pref:
+        return None
+    hay = str(text)
+    pref_pat = _RESOLUTION_PATTERNS.get(pref)
+    if pref_pat and pref_pat.search(hay):
+        return True
+    for key, pat in _RESOLUTION_PATTERNS.items():
+        if key == pref:
+            continue
+        if pat.search(hay):
+            return False
+    return None
+
+
+def _resource_match_resolution(item: dict, pref: str) -> Optional[bool]:
+    pref = _normalize_resolution_pref(pref)
+    if not pref or not isinstance(item, dict):
+        return None
+    resolutions = item.get("video_resolution")
+    if isinstance(resolutions, (list, tuple)):
+        found_other = False
+        for res in resolutions:
+            res_str = str(res).lower()
+            if pref in res_str:
+                return True
+            if _text_match_resolution(res_str, pref) is False:
+                found_other = True
+        if found_other:
+            return False
+    for key in ("title", "name", "resource_title", "resource_name", "subtitle", "release_name", "description"):
+        val = item.get(key)
+        if val:
+            match = _text_match_resolution(str(val), pref)
+            if match is not None:
+                return match
+    return None
 
 
 def _text_has_dolby(text: str) -> bool:
@@ -3272,6 +3579,16 @@ def _run_self_service_request(payload: dict) -> None:
     if dolby_preference not in ("any", "prefer", "exclude"):
         dolby_preference = "any"
     dolby_label = _dolby_preference_label(dolby_preference)
+    resolution_preference = _normalize_resolution_pref(payload.get("resolution", "") or "")
+    resolution_label = _resolution_preference_label(resolution_preference)
+    explicit_season = payload.get("season")
+    try:
+        explicit_season = int(explicit_season) if str(explicit_season).strip() else None
+    except Exception:
+        explicit_season = None
+    requested_season = explicit_season or _extract_season_request(title) or _extract_season_request(query)
+    season_strict = explicit_season is not None
+    title_for_search = _strip_season_tokens(title) if requested_season else title
 
     def _record_result(success: bool, detail: str = "", resolved: bool = False) -> None:
         if success:
@@ -3285,6 +3602,8 @@ def _run_self_service_request(payload: dict) -> None:
                 f"片名: {title}" if title else "",
                 f"年份: {request_year}" if request_year else "",
                 f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+                f"季: S{requested_season:02d}" if isinstance(requested_season, int) and requested_season > 0 else "",
+                f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
         if request_id:
             status = "success" if success else ("partial" if resolved else "error")
@@ -3344,6 +3663,18 @@ def _run_self_service_request(payload: dict) -> None:
             unlock_points = None
             already_owned = False
             if isinstance(detail_data, dict):
+                if requested_season is not None:
+                    season_match = _resource_match_season(detail_data, requested_season)
+                    if season_match is False:
+                        detail = _build_self_service_detail([
+                            f"片名: {title}" if title else "",
+                            f"网盘: {storage_label}" if storage_label != "不限" else "",
+                            "来源: Open API 直链",
+                            f"说明: 资源不匹配所需季 ({requested_season})",
+                        ])
+                        _record_result(False, detail=detail, resolved=False)
+                        _append_self_service_log([f"[{ts}] [WARN] open_api direct season_mismatch slug={slug} season={requested_season}"])
+                        return
                 unlock_points = _hdhive_open_api_extract_unlock_points(detail_data)
                 already_owned = bool(detail_data.get("already_owned") or detail_data.get("is_unlocked"))
             else:
@@ -3355,6 +3686,7 @@ def _run_self_service_request(payload: dict) -> None:
                         f"网盘: {storage_label}" if storage_label != "不限" else "",
                         "来源: Open API 直链",
                         f"说明: 未获取到积分信息，已跳过解锁（阈值 {unlock_threshold}）",
+                        f"分辨率: {resolution_label}" if resolution_preference else "",
                     ])
                     _record_result(False, detail=detail, resolved=False)
                     _append_self_service_log([f"[{ts}] [WARN] open_api direct points unknown threshold {unlock_threshold} slug={slug}"])
@@ -3365,6 +3697,7 @@ def _run_self_service_request(payload: dict) -> None:
                         f"网盘: {storage_label}" if storage_label != "不限" else "",
                         "来源: Open API 直链",
                         f"说明: 需要 {unlock_points} 积分 > 阈值 {unlock_threshold}，已跳过解锁",
+                        f"分辨率: {resolution_label}" if resolution_preference else "",
                     ])
                     _record_result(False, detail=detail, resolved=False)
                     _append_self_service_log([f"[{ts}] [WARN] open_api direct points {unlock_points} > threshold {unlock_threshold} slug={slug}"])
@@ -3375,6 +3708,7 @@ def _run_self_service_request(payload: dict) -> None:
                     f"片名: {title}" if title else "",
                     f"网盘: {storage_label}" if storage_label != "不限" else "",
                     f"说明: Open API 解锁失败",
+                    f"分辨率: {resolution_label}" if resolution_preference else "",
                 ])
                 _record_result(False, detail=detail, resolved=False)
                 _append_self_service_log([f"[{ts}] [WARN] open_api unlock failed slug={slug}"])
@@ -3387,6 +3721,7 @@ def _run_self_service_request(payload: dict) -> None:
                     f"网盘: {storage_label}" if storage_label != "不限" else "",
                     "来源: Open API 直链",
                     "说明: 杜比资源已排除",
+                    f"分辨率: {resolution_label}" if resolution_preference else "",
                 ])
                 _record_result(False, detail=detail, resolved=False)
                 _append_self_service_log([f"[{ts}] [WARN] open_api direct excluded dolby slug={slug}"])
@@ -3408,6 +3743,7 @@ def _run_self_service_request(payload: dict) -> None:
                     f"网盘: {storage_label}" if storage_label != "不限" else "",
                     "来源: Open API 直链",
                     "说明: 非目标网盘，已过滤",
+                    f"分辨率: {resolution_label}" if resolution_preference else "",
                 ])
                 _record_result(False, detail=detail, resolved=False)
                 _append_self_service_log([f"[{ts}] [WARN] open_api non-115 filtered slug={slug}"])
@@ -3420,6 +3756,7 @@ def _run_self_service_request(payload: dict) -> None:
                 f"链接: {full_url}" if full_url else "",
                 f"入库: {transfer_note}" if transfer_note else "",
                 f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+                f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
             _record_result(transfer_ok, detail=detail, resolved=bool(full_url))
             _append_self_service_log([f"[{ts}] [INFO] open_api direct transfer={transfer_ok} note={transfer_note} slug={slug}"])
@@ -3436,19 +3773,20 @@ def _run_self_service_request(payload: dict) -> None:
             tmdb_ids = [tmdb_id_input]
         else:
             tmdb_key = (payload.get("tmdb_api_key") or "").strip()
-            if tmdb_key and title:
+            if tmdb_key and title_for_search:
                 if media_type:
-                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, media_type)]
+                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, media_type)]
                 else:
-                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, "tv")]
+                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")]
                     if len(tmdb_ids) < 3:
-                        tmdb_ids += [str(x) for x in _tmdb_search_ids(tmdb_key, title, request_year, "movie")]
+                        tmdb_ids += [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")]
 
         if not tmdb_ids:
             detail = _build_self_service_detail([
                 f"片名: {title}" if title else "",
                 f"网盘: {storage_label}" if storage_label != "不限" else "",
                 "说明: 未找到 TMDB 资源",
+                f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
             _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no tmdb id query={query}"])
@@ -3476,13 +3814,33 @@ def _run_self_service_request(payload: dict) -> None:
                 f"片名: {title}" if title else "",
                 f"网盘: {storage_label}" if storage_label != "不限" else "",
                 "说明: Open API 未返回可用资源",
+                f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
             _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
             return
 
+        if requested_season is not None:
+            season_matched = [item for item in collected_resources if _resource_match_season(item, requested_season)]
+            if season_strict and not season_matched:
+                detail = _build_self_service_detail([
+                    f"片名: {title}" if title else "",
+                    f"网盘: {storage_label}" if storage_label != "不限" else "",
+                    f"说明: 未找到所选季 (S{requested_season:02d})",
+                    f"分辨率: {resolution_label}" if resolution_preference else "",
+                ])
+                _record_result(False, detail=detail, resolved=False)
+                _append_self_service_log([f"[{ts}] [WARN] open_api no season match query={query} season={requested_season}"])
+                return
+            if season_matched:
+                collected_resources = season_matched
+        if resolution_preference:
+            res_matched = [item for item in collected_resources if _resource_match_resolution(item, resolution_preference)]
+            if res_matched:
+                collected_resources = res_matched
+
         candidate_pool = []
-        resources_sorted = _sort_hdhive_resources(collected_resources)
+        resources_sorted = _sort_hdhive_resources(collected_resources, resolution_preference=resolution_preference)
         for item in resources_sorted:
             if item.get("is_unlocked"):
                 candidate_pool.append(item)
@@ -3513,6 +3871,7 @@ def _run_self_service_request(payload: dict) -> None:
                 f"网盘: {storage_label}" if storage_label != "不限" else "",
                 "说明: 杜比资源已排除" if filtered_out_by_dolby else "说明: 无可用/可解锁资源",
                 f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+                f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
             _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no affordable resources query={query}"])
@@ -3556,6 +3915,7 @@ def _run_self_service_request(payload: dict) -> None:
                 f"片名: {title}" if title else "",
                 f"网盘: {storage_label}" if storage_label != "不限" else "",
                 "说明: 未找到可用资源或被过滤",
+                f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
             _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no usable resources query={query} filtered={filtered_count}"])
@@ -3570,6 +3930,7 @@ def _run_self_service_request(payload: dict) -> None:
             f"链接: {picked_full_url}" if picked_full_url else "",
             f"入库: {transfer_note}" if transfer_note else "",
             f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+            f"分辨率: {resolution_label}" if resolution_preference else "",
         ])
         _record_result(transfer_ok, detail=detail, resolved=bool(picked_full_url))
         _append_self_service_log([f"[{ts}] [INFO] open_api success slug={picked_slug} transfer={transfer_ok} note={transfer_note}"])
@@ -3594,6 +3955,7 @@ def _run_self_service_request(payload: dict) -> None:
                     f"网盘: {storage_label}" if storage_label != "不限" else "",
                     "说明: 杜比资源已排除",
                     f"杜比: {dolby_label}",
+                    f"分辨率: {resolution_label}" if resolution_preference else "",
                 ])
                 _record_result(False, detail=detail, resolved=False)
                 _append_self_service_log([f"[{ts}] [WARN] direct url excluded dolby"])
@@ -3611,6 +3973,10 @@ def _run_self_service_request(payload: dict) -> None:
             if request_type:
                 combos.append(f"{title} {request_type}")
             combos.append(title)
+            if requested_season and title_for_search and title_for_search != title:
+                combos.insert(0, title_for_search)
+                combos.insert(0, f"{title_for_search} S{requested_season:02d}")
+                combos.insert(0, f"{title_for_search} 第{requested_season}季")
             for item in combos:
                 if item and item not in query_candidates:
                     query_candidates.append(item)
@@ -3642,15 +4008,15 @@ def _run_self_service_request(payload: dict) -> None:
             except Exception:
                 tmdb_key = ""
             tmdb_ids = []
-            if tmdb_key and title:
+            if tmdb_key and title_for_search:
                 if request_type == "电影":
-                    tmdb_ids = _tmdb_search_ids(tmdb_key, title, request_year, "movie")
+                    tmdb_ids = _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")
                 elif request_type == "电视剧":
-                    tmdb_ids = _tmdb_search_ids(tmdb_key, title, request_year, "tv")
+                    tmdb_ids = _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")
                 else:
-                    tmdb_ids = _tmdb_search_ids(tmdb_key, title, request_year, "tv")
+                    tmdb_ids = _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")
                     if len(tmdb_ids) < 3:
-                        tmdb_ids += _tmdb_search_ids(tmdb_key, title, request_year, "movie")
+                        tmdb_ids += _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")
             if tmdb_ids:
                 headers = {
                     "User-Agent": "Mozilla/5.0",
@@ -3680,14 +4046,22 @@ def _run_self_service_request(payload: dict) -> None:
                 base_url=base_url,
                 open_api_key=open_api_key,
                 cookie=hdhive_cookie,
+                season=requested_season,
+                season_strict=season_strict,
+                resolution_preference=resolution_preference,
                 max_items=max_results,
             )
     if not candidates:
+        if season_strict and isinstance(requested_season, int):
+            reason = f"说明: 未找到所选季 (S{requested_season:02d})"
+        else:
+            reason = "说明: 杜比资源已排除" if dolby_filtered_empty else "说明: 未找到可用资源"
         detail = _build_self_service_detail([
             f"片名: {title}" if title else "",
             f"网盘: {storage_label}" if storage_label != "不限" else "",
-            "说明: 杜比资源已排除" if dolby_filtered_empty else "说明: 未找到可用资源",
+            reason,
             f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+            f"分辨率: {resolution_label}" if resolution_preference else "",
         ])
         _record_result(False, detail=detail, resolved=False)
         log_line = f"[{ts}] [WARN] no results for query={query}"
@@ -3766,6 +4140,7 @@ def _run_self_service_request(payload: dict) -> None:
         f"说明: {note}" if note else "",
         f"入库: {transfer_note}" if transfer_note else "",
         f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+        f"分辨率: {resolution_label}" if resolution_preference else "",
     ])
     _record_result(transfer_ok, detail=detail, resolved=bool(real_url))
 
@@ -4919,6 +5294,19 @@ def manage_config():
             config['global_blacklist_keywords'] = global_blacklist
             save_config(config)
             flash("全局黑名单关键词已更新！", "success")
+
+        elif action == 'update_monitor_settings':
+            raw_limit = (request.form.get('startup_tv_whitelist_scan_limit') or '').strip()
+            fallback_limit = int(config.get('startup_tv_whitelist_scan_limit', 20) or 20)
+            try:
+                limit = int(raw_limit) if raw_limit != '' else fallback_limit
+            except Exception:
+                limit = fallback_limit
+                flash("启动回溯条数必须是整数，已保留原值。", "warning")
+            limit = max(0, min(limit, 200))
+            config['startup_tv_whitelist_scan_limit'] = limit
+            save_config(config)
+            flash("监控启动回溯设置已更新！", "success")
 
         elif action == 'bulk_manage_restricted':
             sub_action = request.form.get('sub_action')
@@ -6078,6 +6466,14 @@ def self_service_request():
         dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
         if dolby_preference not in ("any", "prefer", "exclude"):
             dolby_preference = "any"
+        season_raw = (request.form.get('season') or '').strip()
+        season_val = None
+        if season_raw:
+            try:
+                season_val = int(season_raw)
+            except Exception:
+                season_val = None
+        resolution_pref = _normalize_resolution_pref(request.form.get('resolution') or '')
 
         query_parts = [title]
         if request_year:
@@ -6112,6 +6508,8 @@ def self_service_request():
             "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
             "storage_mode": storage_mode,
             "dolby_preference": dolby_preference,
+            "season": season_val,
+            "resolution": resolution_pref,
             "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
             "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }
@@ -6239,6 +6637,14 @@ def self_service_public():
         dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
         if dolby_preference not in ("any", "prefer", "exclude"):
             dolby_preference = "any"
+        season_raw = (request.form.get('season') or '').strip()
+        season_val = None
+        if season_raw:
+            try:
+                season_val = int(season_raw)
+            except Exception:
+                season_val = None
+        resolution_pref = _normalize_resolution_pref(request.form.get('resolution') or '')
 
         query_parts = [title]
         if request_year:
@@ -6273,6 +6679,8 @@ def self_service_public():
             "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
             "storage_mode": storage_mode,
             "dolby_preference": dolby_preference,
+            "season": season_val,
+            "resolution": resolution_pref,
             "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
             "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }

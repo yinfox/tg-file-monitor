@@ -71,6 +71,21 @@
                         </div>
                         <div class="row g-2 mt-1">
                             <div class="col-md-4">
+                                <label class="form-label fw-semibold">季（可选）</label>
+                                <input type="number" class="form-control" name="season" min="1" max="99"
+                                    placeholder="如 1">
+                            </div>
+                            <div class="col-md-4">
+                                <label class="form-label fw-semibold">分辨率（可选）</label>
+                                <select class="form-select" name="resolution">
+                                    <option value="any" selected>不指定</option>
+                                    <option value="2160p">4K / 2160P</option>
+                                    <option value="1080p">1080P</option>
+                                    <option value="720p">720P</option>
+                                    <option value="480p">480P</option>
+                                </select>
+                            </div>
+                            <div class="col-md-4">
                                 <label class="form-label fw-semibold">杜比偏好</label>
                                 <select class="form-select" name="dolby_preference">
                                     <option value="any" selected>不指定</option>
@@ -82,7 +97,7 @@
                     </div>
 
                     <div class="alert alert-info small">
-                        提交后若入库成功，将提示“资源已入库，请等待3-5分钟后进入服务器观看”；未找到则提示“资源未找到，请联系管理员”。
+                        提交后若入库成功，将提示“资源已入库，请等待3-5分钟后进入服务器观看”。未找到则提示“资源未找到，请联系管理员”。
                     </div>
 
                     <div id="selfServiceResultBox" class="alert alert-secondary small" style="display: none;">

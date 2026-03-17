@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.05`
+Latest image: `y1nf0x/tg-file-monitor:0.5.10`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.05
+y1nf0x/tg-file-monitor:0.5.10
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,20 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.05 (2026-03-16) - Current
+### v0.5.10 (2026-03-17) - Current
+- ✅ Auto-reconnect for TG monitor to avoid long-run stalls
+- ✅ More robust config/TV whitelist loading (atomic writes + fallback to last good config)
+- ✅ Startup TV-whitelist backfill (configurable limit, default 20; only for channels using TV filters)
+
+### v0.5.08 (2026-03-16)
+- ✅ Self-service season matching: support titles like `S01+S02`, `S01-02`, `S01E02`
+
+### v0.5.06 (2026-03-16)
+- Self-service adds optional season & resolution inputs
+- Season selection is strict to avoid jumping seasons
+- Resolution preference participates in sorting and filtering
+
+### v0.5.05 (2026-03-16)
 - Self-service resource selection: prefer official items, then lower points
 
 ### v0.5.04 (2026-03-16)
