@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.10`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.11`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.10
+y1nf0x/tg-file-monitor:0.5.11
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -557,6 +557,9 @@ Web 界面 → 配置 → 代理配置
 ### v0.4.30 (2026-03-10)
 - ✅ 修复下载器运行时报错：补充 `shutil` 导入，解决 `name 'shutil' is not defined`
 - ✅ 已通过 `py_compile` 快速语法校验
+
+### v0.5.11 (2026-03-17)
+- ✅ 自助观影季提示与失败说明优化（未标注季给出明确提示）
 
 ### v0.5.10 (2026-03-17)
 - ✅ TG 监控断线自动重连，避免运行一段时间后停止处理
