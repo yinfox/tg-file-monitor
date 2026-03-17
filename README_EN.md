@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.17`
+Latest image: `y1nf0x/tg-file-monitor:0.5.19`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.17
+y1nf0x/tg-file-monitor:0.5.19
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,12 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.17 (2026-03-17) - Current
+### v0.5.19 (2026-03-17) - Current
+- ✅ Maoyan web movies now use the official API (avoid grabbing box-office titles)
+- ✅ Web movies: add “days since release” removal threshold (independent of TMDB finish)
+- ✅ Drama whitelist preserves per-source groups (web movies editable separately)
+
+### v0.5.17 (2026-03-17)
 - ✅ Added drama source: Maoyan web heat (web movies)
 
 ### v0.5.16 (2026-03-17)
