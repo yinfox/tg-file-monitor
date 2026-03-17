@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.15`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.16`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.15
+y1nf0x/tg-file-monitor:0.5.16
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -394,7 +394,10 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.15 (2026-03-17) - 当前版本
+### v0.5.16 (2026-03-17) - 当前版本
+- ✅ 追剧白名单自定义分类区域布局优化
+
+### v0.5.15 (2026-03-17)
 - ✅ 追剧日历白名单编辑新增自定义分类（关键词可维护，刷新不影响）
 
 ### v0.5.14 (2026-03-17)

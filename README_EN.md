@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.15`
+Latest image: `y1nf0x/tg-file-monitor:0.5.16`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.15
+y1nf0x/tg-file-monitor:0.5.16
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,10 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.15 (2026-03-17) - Current
+### v0.5.16 (2026-03-17) - Current
+- ✅ Custom category layout polish in drama whitelist editor
+
+### v0.5.15 (2026-03-17)
 - ✅ Drama whitelist editor: custom categories (manual keywords, unaffected by refresh)
 
 ### v0.5.14 (2026-03-17)
