@@ -1001,6 +1001,28 @@
                     <h5 class="mb-0 small"><i class="bi bi-pencil-square me-2"></i>追剧白名单编辑</h5>
                 </div>
                 <div class="card-body p-3">
+                    <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-2">
+                        <input type="hidden" name="action" value="add_custom_tv_category">
+                        <div class="row g-2 align-items-end">
+                            <div class="col-md-3">
+                                <label class="form-label small">自定义分类名</label>
+                                <input type="text" class="form-control form-control-sm" name="custom_category_name"
+                                    placeholder="如：个人追剧 / 亲友推荐">
+                            </div>
+                            <div class="col-md-7">
+                                <label class="form-label small">关键词（逗号/换行分隔）</label>
+                                <textarea class="form-control form-control-sm" name="custom_category_keywords" rows="2"
+                                    placeholder="剧名1, 剧名2"></textarea>
+                            </div>
+                            <div class="col-md-2 d-grid">
+                                <button type="submit" class="btn btn-outline-success btn-sm">
+                                    <i class="bi bi-plus-circle me-1"></i>新增分类
+                                </button>
+                            </div>
+                        </div>
+                        <div class="form-text mb-0">自定义分类不受榜单刷新影响，除非手动删除或完结清理。</div>
+                    </form>
+
                     {% if env_edit_sources and env_edit_sources|length %}
                         {% if env_edit_errors and env_edit_errors|length %}
                             <div class="form-text text-danger mb-2">
@@ -1069,7 +1091,7 @@
                                                             {% endif %}
                                                         </div>
                                                         <div class="env-edit-empty env-edit-empty-title{% if group.titles %} d-none{% endif %}" data-group-id="{{ group.id }}">暂无标题。</div>
-                                                        {% if group.tag == 'manual' %}
+                                                        {% if group.allow_add %}
                                                         <div class="env-edit-add" data-group-id="{{ group.id }}">
                                                             <div class="input-group input-group-sm">
                                                                 <input type="text" class="form-control" data-role="env-add-input"

@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.14"
+VERSION = "0.5.15"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -1049,6 +1049,10 @@ def _replace_managed_append_value_in_memory(
 
 
 def _label_for_source_tag(source_tag: str) -> str:
+    custom_prefix = "custom:"
+    if isinstance(source_tag, str) and source_tag.startswith(custom_prefix):
+        name = source_tag[len(custom_prefix):].strip()
+        return f'自定义：{name}' if name else '自定义分类'
     base_labels = {
         'calendar': '追剧日历',
         'maoyan': '猫眼',
@@ -1071,6 +1075,33 @@ def _label_for_source_tag(source_tag: str) -> str:
         labels = [base_labels.get(p, p) for p in parts]
         return '合并：' + ' + '.join(labels)
     return f'来源：{tag}'
+
+
+def _is_builtin_source_tag(tag: str) -> bool:
+    return tag in {
+        'calendar',
+        'maoyan',
+        'douban',
+        'douban_asia',
+        'douban_domestic',
+        'douban_variety',
+        'douban_animation',
+        'all',
+        'manual',
+        'key',
+        'unknown',
+    }
+
+
+def _is_custom_source_tag(tag: str) -> bool:
+    return isinstance(tag, str) and tag.startswith('custom:')
+
+
+def _normalize_custom_source_tag(name: str) -> str:
+    cleaned = (name or '').strip()
+    if not cleaned:
+        return ''
+    return f'custom:{cleaned}'
 
 
 def _default_tv_channel_filters():
@@ -1287,10 +1318,26 @@ def _collect_state_source_norms(state: dict) -> dict:
     return norms_by_source
 
 
+def _load_tv_filters_source_map_from_state(state: dict) -> dict:
+    if not isinstance(state, dict):
+        return {}
+    source_titles_state = state.get('source_titles')
+    if not isinstance(source_titles_state, dict):
+        return {}
+    tv_abs = os.path.abspath(TV_CHANNEL_FILTERS_FILE)
+    env_entry = source_titles_state.get(tv_abs)
+    if not isinstance(env_entry, dict):
+        return {}
+    key_entry = env_entry.get(TV_FILTERS_STATE_KEY)
+    if not isinstance(key_entry, dict):
+        return {}
+    return key_entry
+
+
 def _apply_tv_filters_source_norms(state: dict, titles: list, raw_entries: list, source_norms: dict) -> dict:
     if not titles or not source_norms:
         return {}
-    order = [
+    base_order = [
         'calendar',
         'maoyan',
         'douban',
@@ -1300,6 +1347,12 @@ def _apply_tv_filters_source_norms(state: dict, titles: list, raw_entries: list,
         'douban_animation',
         'all',
     ]
+    custom_tags = []
+    for tag in source_norms.keys():
+        if _is_custom_source_tag(tag):
+            custom_tags.append(tag)
+    custom_tags = sorted(custom_tags, key=lambda x: x or '')
+    order = base_order + custom_tags
     per_source_titles = {}
     matched = False
     for title in titles:
@@ -1352,6 +1405,18 @@ def _backfill_tv_filters_source_titles_from_map(state: dict, titles: list, raw_e
             continue
         tag_name = str(tag or '').strip() or 'manual'
         norm_set = norms_by_source.setdefault(tag_name, set())
+        for t in values:
+            norm = _normalize_title_for_match(t)
+            if norm:
+                norm_set.add(norm)
+    # Merge existing custom categories so they won't be overwritten by backfill
+    existing_map = _load_tv_filters_source_map_from_state(state)
+    for tag, values in (existing_map or {}).items():
+        if not _is_custom_source_tag(tag):
+            continue
+        if not isinstance(values, list):
+            continue
+        norm_set = norms_by_source.setdefault(tag, set())
         for t in values:
             norm = _normalize_title_for_match(t)
             if norm:
@@ -1455,6 +1520,7 @@ def _build_tv_filters_edit_view() -> tuple:
                 'env_display': os.path.basename(TV_CHANNEL_FILTERS_FILE),
                 'titles': group_titles,
             }
+            group['allow_add'] = (tag == 'manual' or _is_custom_source_tag(tag))
             if tag == 'manual' and raw_entries:
                 group['raw_entries'] = raw_entries
             source_entry['env_groups'].append(group)
@@ -1469,6 +1535,7 @@ def _build_tv_filters_edit_view() -> tuple:
                 'env_display': os.path.basename(TV_CHANNEL_FILTERS_FILE),
                 'titles': [],
                 'raw_entries': raw_entries,
+                'allow_add': True,
             }
         )
 
@@ -1492,6 +1559,71 @@ def _build_tv_filters_edit_view() -> tuple:
 
     sources = sorted(sources_map.values(), key=_source_sort)
     return sources, errors
+
+
+def _extract_tv_filters_titles(data: dict) -> tuple:
+    drama = data.get('drama') if isinstance(data, dict) else {}
+    if not isinstance(drama, dict):
+        drama = {}
+    whitelist = drama.get('whitelist') if isinstance(drama, dict) else []
+    if not isinstance(whitelist, list):
+        whitelist = []
+    titles = []
+    raw_entries = []
+    seen_norm = set()
+    for entry in whitelist:
+        if not isinstance(entry, str):
+            continue
+        extracted = _extract_titles_from_regex_value(entry)
+        if extracted:
+            for t in extracted:
+                norm = _normalize_title_for_match(t)
+                if not norm or norm in seen_norm:
+                    continue
+                seen_norm.add(norm)
+                titles.append(t)
+        else:
+            raw_entries.append(entry)
+    return titles, raw_entries, whitelist
+
+
+def _ensure_custom_tv_titles_kept() -> None:
+    state = _load_drama_calendar_state()
+    source_map = _load_tv_filters_source_map_from_state(state)
+    if not source_map:
+        return
+    custom_titles = []
+    for tag, values in source_map.items():
+        if not _is_custom_source_tag(tag) or not isinstance(values, list):
+            continue
+        custom_titles.extend([v for v in values if isinstance(v, str) and v.strip()])
+    if not custom_titles:
+        return
+    data = _load_tv_channel_filters()
+    titles, raw_entries, whitelist = _extract_tv_filters_titles(data)
+    current_norms = {_normalize_title_for_match(t) for t in titles if _normalize_title_for_match(t)}
+    added = False
+    for t in custom_titles:
+        norm = _normalize_title_for_match(t)
+        if not norm or norm in current_norms:
+            continue
+        titles.append(t)
+        current_norms.add(norm)
+        added = True
+    if not added:
+        return
+    regex_value = _build_regex_from_titles(titles)
+    new_whitelist = list(raw_entries)
+    if regex_value:
+        new_whitelist.append(regex_value)
+    if new_whitelist == whitelist:
+        return
+    drama = data.get('drama') if isinstance(data, dict) else {}
+    if not isinstance(drama, dict):
+        drama = {}
+    drama['whitelist'] = new_whitelist
+    data['drama'] = drama
+    _save_tv_channel_filters(data)
 
 
 def _clear_drama_calendar_state_records(env_path: str, key: str) -> None:
@@ -2128,6 +2260,11 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         for ln in err_lines[:120]:
             log_lines.append(f"[{finished_at}] [ERROR] [DRAMA][ERR] {ln}")
         _append_drama_calendar_log(log_lines)
+        if proc.returncode == 0 and not dry_run:
+            try:
+                _ensure_custom_tv_titles_kept()
+            except Exception:
+                pass
         return proc.returncode == 0, stdout_text, stderr_text
     except subprocess.TimeoutExpired:
         ts = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -5670,6 +5807,125 @@ def drama_calendar_settings():
             else:
                 plan_tip = f"间隔 {int(drama.get('auto_sync_interval_minutes', 60) or 60)} 分钟"
             flash(f'追剧日历配置已保存。自动抓取：{auto_tip}（{plan_tip}）', 'success')
+
+        elif action == 'add_custom_tv_category':
+            raw_name = (request.form.get('custom_category_name') or '').strip()
+            raw_keywords = (request.form.get('custom_category_keywords') or '').strip()
+            if not raw_name:
+                flash('自定义分类名不能为空。', 'warning')
+                return redirect(url_for('drama_calendar_settings'))
+            tag = _normalize_custom_source_tag(raw_name)
+            if not tag:
+                flash('自定义分类名无效。', 'warning')
+                return redirect(url_for('drama_calendar_settings'))
+
+            keywords = []
+            for part in re.split(r'[\n,，]+', raw_keywords):
+                cleaned = (part or '').strip()
+                if cleaned:
+                    keywords.append(cleaned)
+            if not keywords:
+                flash('请至少填写一个关键词。', 'warning')
+                return redirect(url_for('drama_calendar_settings'))
+
+            data = _load_tv_channel_filters()
+            titles, raw_entries, whitelist = _extract_tv_filters_titles(data)
+
+            current_norms = set()
+            for t in titles:
+                norm = _normalize_title_for_match(t)
+                if norm:
+                    current_norms.add(norm)
+
+            state = _load_drama_calendar_state()
+            source_map_for_env = _load_tv_filters_source_map_from_state(state)
+            if not source_map_for_env and titles:
+                source_map_for_env = _backfill_tv_filters_source_titles(state, titles, raw_entries)
+
+            used_norms = set()
+            source_titles_map = {}
+            if source_map_for_env:
+                for source_tag, source_titles in source_map_for_env.items():
+                    if not isinstance(source_titles, list):
+                        continue
+                    cleaned = []
+                    for t in source_titles:
+                        norm = _normalize_title_for_match(t)
+                        if not norm or norm in used_norms:
+                            continue
+                        if current_norms and norm not in current_norms:
+                            continue
+                        used_norms.add(norm)
+                        cleaned.append(t)
+                    if cleaned:
+                        source_titles_map.setdefault(source_tag, []).extend(cleaned)
+
+            untracked = []
+            for t in titles:
+                norm = _normalize_title_for_match(t)
+                if norm and norm not in used_norms:
+                    untracked.append(t)
+            if untracked:
+                source_titles_map.setdefault('manual', []).extend(untracked)
+            if raw_entries and 'manual' not in source_titles_map:
+                source_titles_map['manual'] = []
+
+            existing = source_titles_map.get(tag, [])
+            seen_norm = set()
+            for t in existing:
+                norm = _normalize_title_for_match(t)
+                if norm:
+                    seen_norm.add(norm)
+            for kw in keywords:
+                norm = _normalize_title_for_match(kw)
+                if not norm or norm in seen_norm:
+                    continue
+                seen_norm.add(norm)
+                existing.append(kw)
+            source_titles_map[tag] = existing
+
+            merged_titles = []
+            seen_norm = set()
+            for tag_name, tag_titles in source_titles_map.items():
+                if not isinstance(tag_titles, list):
+                    continue
+                for t in tag_titles:
+                    norm = _normalize_title_for_match(t)
+                    if not norm or norm in seen_norm:
+                        continue
+                    seen_norm.add(norm)
+                    merged_titles.append(t)
+
+            regex_value = _build_regex_from_titles(merged_titles)
+            new_whitelist = list(raw_entries)
+            if regex_value:
+                new_whitelist.append(regex_value)
+
+            if new_whitelist != whitelist:
+                drama = data.get('drama') if isinstance(data, dict) else {}
+                if not isinstance(drama, dict):
+                    drama = {}
+                drama['whitelist'] = new_whitelist
+                data['drama'] = drama
+                if _save_tv_channel_filters(data):
+                    flash(f'已新增自定义分类：{raw_name}（{len(existing)} 条）', 'success')
+                else:
+                    flash('写入 tvchannel_filters.json 失败。', 'error')
+                    return redirect(url_for('drama_calendar_settings'))
+            else:
+                flash('未检测到需要新增的关键词。', 'info')
+
+            tv_abs = os.path.abspath(TV_CHANNEL_FILTERS_FILE)
+            source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
+            if not isinstance(source_titles_state, dict):
+                source_titles_state = {}
+            env_entry = source_titles_state.get(tv_abs)
+            if not isinstance(env_entry, dict):
+                env_entry = {}
+            env_entry[TV_FILTERS_STATE_KEY] = dict(source_titles_map)
+            source_titles_state[tv_abs] = env_entry
+            state['source_titles'] = source_titles_state
+            _save_drama_calendar_state(state)
 
         elif action == 'update_drama_env_titles':
             group_ids = request.form.getlist('env_group_id')
