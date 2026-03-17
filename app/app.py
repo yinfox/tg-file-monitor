@@ -700,6 +700,58 @@ def _resource_match_season(item: dict, season: int) -> Optional[bool]:
     return season in season_values
 
 
+def _resource_has_season_info(item: dict) -> bool:
+    if not isinstance(item, dict):
+        return False
+    season_fields = ("season", "season_number", "season_num")
+    for key in season_fields:
+        if key not in item:
+            continue
+        val = item.get(key)
+        if isinstance(val, (list, tuple, set)):
+            for entry in val:
+                if _coerce_season_int(entry):
+                    return True
+                if isinstance(entry, str) and _extract_season_candidates(entry):
+                    return True
+        else:
+            if _coerce_season_int(val):
+                return True
+            if isinstance(val, str) and _extract_season_candidates(val):
+                return True
+
+    text_bits = []
+    for key in ("title", "name", "resource_title", "resource_name", "subtitle", "release_name", "description"):
+        val = item.get(key)
+        if val:
+            if isinstance(val, (list, tuple, set)):
+                text_bits.extend([str(x) for x in val if x])
+            else:
+                text_bits.append(str(val))
+    if not text_bits:
+        for val in item.values():
+            if isinstance(val, str) and val:
+                text_bits.append(val)
+            elif isinstance(val, (list, tuple, set)):
+                for entry in val:
+                    if isinstance(entry, str) and entry:
+                        text_bits.append(entry)
+    if text_bits and _extract_season_candidates(" ".join(text_bits)):
+        return True
+    return False
+
+
+def _build_season_miss_reason(season: int, items: Optional[list] = None) -> tuple:
+    reason = f"说明: 未找到所选季 (S{season:02d})"
+    hint = ""
+    if isinstance(items, list):
+        has_info = any(_resource_has_season_info(item) for item in items if isinstance(item, dict))
+        if not has_info:
+            reason += "，资源未标注季"
+            hint = "提示: 资源未标注季时可不填季或改用直链"
+    return reason, hint
+
+
 def _clean_extracted_title(title: str) -> str:
     s = (title or '').strip()
     if not s:
@@ -3823,10 +3875,12 @@ def _run_self_service_request(payload: dict) -> None:
         if requested_season is not None:
             season_matched = [item for item in collected_resources if _resource_match_season(item, requested_season)]
             if season_strict and not season_matched:
+                reason, hint = _build_season_miss_reason(requested_season, collected_resources)
                 detail = _build_self_service_detail([
                     f"片名: {title}" if title else "",
                     f"网盘: {storage_label}" if storage_label != "不限" else "",
-                    f"说明: 未找到所选季 (S{requested_season:02d})",
+                    reason,
+                    hint,
                     f"分辨率: {resolution_label}" if resolution_preference else "",
                 ])
                 _record_result(False, detail=detail, resolved=False)
@@ -4053,7 +4107,9 @@ def _run_self_service_request(payload: dict) -> None:
             )
     if not candidates:
         if season_strict and isinstance(requested_season, int):
-            reason = f"说明: 未找到所选季 (S{requested_season:02d})"
+            reason, hint = _build_season_miss_reason(requested_season)
+            if hint:
+                reason = f"{reason}，{hint}"
         else:
             reason = "说明: 杜比资源已排除" if dolby_filtered_empty else "说明: 未找到可用资源"
         detail = _build_self_service_detail([
