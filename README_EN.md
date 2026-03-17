@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.13`
+Latest image: `y1nf0x/tg-file-monitor:0.5.14`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.13
+y1nf0x/tg-file-monitor:0.5.14
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,10 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.13 (2026-03-17) - Current
+### v0.5.14 (2026-03-17) - Current
+- ✅ Self-service form hint: leave season empty = all seasons
+
+### v0.5.13 (2026-03-17)
 - ✅ Multi-season input supported (e.g. `1,2` / `1-2` / `S01,S02`)
 - ✅ Strict multi-season matching to avoid unlocking the wrong season
 
