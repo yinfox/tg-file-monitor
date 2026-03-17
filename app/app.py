@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.11"
+VERSION = "0.5.12"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -684,14 +684,37 @@ def _resource_match_season(item: dict, season: int) -> Optional[bool]:
                 text_bits.extend([str(x) for x in val if x])
             else:
                 text_bits.append(str(val))
+
+    def _collect_text_strings(obj, out: list, *, max_items: int = 200, depth: int = 3) -> None:
+        if len(out) >= max_items or depth < 0:
+            return
+        if obj is None:
+            return
+        if isinstance(obj, str):
+            if obj:
+                out.append(obj)
+            return
+        if isinstance(obj, (list, tuple, set)):
+            for entry in obj:
+                if len(out) >= max_items:
+                    break
+                _collect_text_strings(entry, out, max_items=max_items, depth=depth - 1)
+            return
+        if isinstance(obj, dict):
+            for entry in obj.values():
+                if len(out) >= max_items:
+                    break
+                _collect_text_strings(entry, out, max_items=max_items, depth=depth - 1)
+            return
+
     if not text_bits:
-        for val in item.values():
-            if isinstance(val, str) and val:
-                text_bits.append(val)
-            elif isinstance(val, (list, tuple, set)):
-                for entry in val:
-                    if isinstance(entry, str) and entry:
-                        text_bits.append(entry)
+        _collect_text_strings(item, text_bits)
+    else:
+        extra_text_bits = []
+        _collect_text_strings(item, extra_text_bits)
+        if extra_text_bits:
+            text_bits.extend(extra_text_bits)
+
     if text_bits:
         season_values.update(_extract_season_candidates(" ".join(text_bits)))
 
@@ -729,13 +752,28 @@ def _resource_has_season_info(item: dict) -> bool:
             else:
                 text_bits.append(str(val))
     if not text_bits:
-        for val in item.values():
-            if isinstance(val, str) and val:
-                text_bits.append(val)
-            elif isinstance(val, (list, tuple, set)):
-                for entry in val:
-                    if isinstance(entry, str) and entry:
-                        text_bits.append(entry)
+        def _collect_text_strings(obj, out: list, *, max_items: int = 200, depth: int = 3) -> None:
+            if len(out) >= max_items or depth < 0:
+                return
+            if obj is None:
+                return
+            if isinstance(obj, str):
+                if obj:
+                    out.append(obj)
+                return
+            if isinstance(obj, (list, tuple, set)):
+                for entry in obj:
+                    if len(out) >= max_items:
+                        break
+                    _collect_text_strings(entry, out, max_items=max_items, depth=depth - 1)
+                return
+            if isinstance(obj, dict):
+                for entry in obj.values():
+                    if len(out) >= max_items:
+                        break
+                    _collect_text_strings(entry, out, max_items=max_items, depth=depth - 1)
+                return
+        _collect_text_strings(item, text_bits)
     if text_bits and _extract_season_candidates(" ".join(text_bits)):
         return True
     return False
