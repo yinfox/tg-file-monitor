@@ -88,3 +88,13 @@ test_output/
 *capture*.json
 *intercept*.js
 *.pyc
+
+# Local runtime/state files
+config/drama_calendar_state.json
+config/self_service_results.json
+config/tmdb_tv_status_cache.json
+user.env
+user.env.*
+conversation_*.md
+web.out
+scripts/fix_drama_calendar_state_split.py
