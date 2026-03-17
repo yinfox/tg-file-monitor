@@ -391,6 +391,9 @@ Web 界面 → 配置 → 代理配置
 
 ## 📊 版本历史
 
+（自动生成：`python scripts/update_version_history.py`）
+
+<!-- AUTO-GEN:VERSION_HISTORY:START -->
 ### v0.5.14 (2026-03-17) - 当前版本
 - ✅ 自助观影表单提示：季留空表示全部季
 
@@ -407,6 +410,7 @@ Web 界面 → 配置 → 代理配置
 ### v0.4.90 (2026-03-15)
 - ✅ 频道监控改用内置 `tvchannel_filters.json`（支持正则黑白名单）
 - ✅ 追剧正则不再依赖外部 `.env`
+<!-- AUTO-GEN:VERSION_HISTORY:END -->
 
 ### v0.4.89 (2026-03-15)
 - ✅ 自助申请页面精简字段并强化关键项展示
