@@ -95,16 +95,26 @@
                                 </select>
                             </div>
                         </div>
+                        <div class="form-check form-switch mt-3">
+                            <input class="form-check-input" type="checkbox" id="advanced_mode" name="advanced_mode">
+                            <label class="form-check-label fw-semibold" for="advanced_mode">高级交互模式</label>
+                            <div class="form-text">不自动挑选、不自动转存，直接列出候选资源供手动转存。当前依赖 Open API，手动转存会跳过积分阈值限制。</div>
+                        </div>
                     </div>
 
                     <div class="alert alert-info small">
-                        提交后若入库成功，将提示“资源已入库，请等待3-5分钟后进入服务器观看”。未找到则提示“资源未找到，请联系管理员”。
+                        普通模式会自动挑选并尝试入库；高级模式会返回候选资源列表，等待手动选择转存。
                     </div>
 
                     <div id="selfServiceResultBox" class="alert alert-secondary small" style="display: none;">
                         <div class="fw-semibold mb-1" id="selfServiceResultTitle">处理中</div>
                         <div class="text-muted mb-2" id="selfServiceResultTime"></div>
                         <pre class="mb-0" id="selfServiceResultDetail" style="white-space: pre-wrap;"></pre>
+                        <div id="selfServiceResourceBox" class="mt-3" style="display: none;">
+                            <div class="fw-semibold mb-2">候选资源</div>
+                            <div class="text-muted mb-2" id="selfServiceResourceHint"></div>
+                            <div id="selfServiceResourceList" class="d-grid gap-2"></div>
+                        </div>
                     </div>
 
                     <div class="mb-3">
@@ -129,6 +139,9 @@ const resultBox = document.getElementById('selfServiceResultBox');
 const resultTitle = document.getElementById('selfServiceResultTitle');
 const resultTime = document.getElementById('selfServiceResultTime');
 const resultDetail = document.getElementById('selfServiceResultDetail');
+const resultResourceBox = document.getElementById('selfServiceResourceBox');
+const resultResourceHint = document.getElementById('selfServiceResourceHint');
+const resultResourceList = document.getElementById('selfServiceResourceList');
 let pollTimer = null;
 let pollCount = 0;
 
@@ -157,12 +170,133 @@ function formatTime(ts) {
 }
 
 function setBoxClass(status) {
-    resultBox.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-danger', 'alert-secondary');
+    resultBox.classList.remove('alert-info', 'alert-success', 'alert-warning', 'alert-danger', 'alert-secondary', 'alert-primary');
     if (status === 'success') resultBox.classList.add('alert-success');
     else if (status === 'partial') resultBox.classList.add('alert-warning');
     else if (status === 'error') resultBox.classList.add('alert-danger');
     else if (status === 'processing') resultBox.classList.add('alert-info');
+    else if (status === 'interactive') resultBox.classList.add('alert-primary');
     else resultBox.classList.add('alert-secondary');
+}
+
+function escapeHtml(value) {
+    return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function matchLabel(value, trueLabel, falseLabel, unknownLabel = '待判断') {
+    if (value === true) return trueLabel;
+    if (value === false) return falseLabel;
+    return unknownLabel;
+}
+
+function renderResources(data) {
+    if (!resultResourceBox || !resultResourceList || !resultResourceHint) return;
+    const resources = Array.isArray(data && data.resources) ? data.resources : [];
+    const meta = (data && data.interactive_meta) || {};
+    if (!data || !data.advanced_mode || !resources.length) {
+        resultResourceBox.style.display = 'none';
+        resultResourceHint.textContent = '';
+        resultResourceList.innerHTML = '';
+        return;
+    }
+
+    const manualSupported = meta.manual_transfer_supported !== false;
+    resultResourceBox.style.display = '';
+    resultResourceHint.textContent = meta.storage_label
+        ? `当前网盘筛选：${meta.storage_label}。高级模式不会自动转存。`
+        : '高级模式不会自动转存。';
+
+    resultResourceList.innerHTML = resources.map((item, index) => {
+        const actionStatus = item.last_action_status || '';
+        let actionBadge = '';
+        if (actionStatus === 'success') actionBadge = '<span class="badge bg-success">已转存</span>';
+        else if (actionStatus === 'partial') actionBadge = '<span class="badge bg-warning text-dark">已解析未入库</span>';
+        else if (actionStatus === 'error') actionBadge = '<span class="badge bg-danger">最近失败</span>';
+        const buttonDisabled = (!item.slug || !manualSupported) ? 'disabled' : '';
+        const buttonLabel = manualSupported ? '手动转存到115' : '当前配置不支持手动转存';
+        const detailHtml = item.detail
+            ? `<pre class="mb-2 mt-2 p-2 bg-light border rounded small" style="white-space: pre-wrap;">${escapeHtml(item.detail)}</pre>`
+            : '';
+        const actionNote = item.last_action_note
+            ? `<div class="small text-muted mt-1">${escapeHtml(item.last_action_note)}</div>`
+            : '';
+        return `
+            <div class="card shadow-sm border-0">
+                <div class="card-body p-3">
+                    <div class="d-flex justify-content-between align-items-start gap-2">
+                        <div>
+                            <div class="fw-semibold">${index + 1}. ${escapeHtml(item.title || '未命名资源')}</div>
+                            <div class="text-muted small mt-1">${escapeHtml(item.summary || '')}</div>
+                        </div>
+                        ${actionBadge}
+                    </div>
+                    <div class="d-flex flex-wrap gap-2 mt-2">
+                        <span class="badge text-bg-light">网盘: ${escapeHtml(item.storage_guess_label || '待解析')}</span>
+                        <span class="badge text-bg-light">官方: ${item.official ? '是' : '否'}</span>
+                        <span class="badge text-bg-light">杜比: ${item.is_dolby ? '是' : '否'}</span>
+                        ${item.unlock_points !== null && item.unlock_points !== undefined ? `<span class="badge text-bg-light">积分: ${escapeHtml(item.unlock_points)}</span>` : ''}
+                        ${item.resolution_text ? `<span class="badge text-bg-light">分辨率: ${escapeHtml(item.resolution_text)}</span>` : ''}
+                        ${item.season_match !== null && item.season_match !== undefined ? `<span class="badge text-bg-light">季匹配: ${escapeHtml(matchLabel(item.season_match, '匹配', '不匹配'))}</span>` : ''}
+                        ${item.resolution_match !== null && item.resolution_match !== undefined ? `<span class="badge text-bg-light">分辨率匹配: ${escapeHtml(matchLabel(item.resolution_match, '匹配', '不匹配'))}</span>` : ''}
+                    </div>
+                    ${detailHtml}
+                    <div class="d-flex flex-wrap align-items-center gap-2">
+                        <button type="button" class="btn btn-outline-primary btn-sm" data-self-service-transfer data-slug="${escapeHtml(item.slug || '')}" ${buttonDisabled}>${buttonLabel}</button>
+                    </div>
+                    ${actionNote}
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function manualTransfer(slug, button) {
+    if (!requestId || !slug) return;
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.textContent = '转存中...';
+    fetch('/self_service_transfer', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ rid: requestId, slug: slug }),
+    })
+        .then(async (response) => {
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok) {
+                throw new Error(data.message || '手动转存失败');
+            }
+            return data;
+        })
+        .then((data) => {
+            if (data.result) {
+                renderResult(data.result);
+            }
+        })
+        .catch((error) => {
+            window.alert(error.message || '手动转存失败');
+        })
+        .finally(() => {
+            if (button.isConnected) {
+                button.disabled = false;
+                button.textContent = originalText;
+            }
+        });
+}
+
+if (resultResourceList) {
+    resultResourceList.addEventListener('click', (event) => {
+        const btn = event.target.closest('[data-self-service-transfer]');
+        if (!btn) return;
+        const slug = btn.getAttribute('data-slug') || '';
+        manualTransfer(slug, btn);
+    });
 }
 
 function renderResult(data) {
@@ -178,6 +312,7 @@ function renderResult(data) {
         resultDetail.style.display = 'none';
         resultDetail.textContent = '';
     }
+    renderResources(data);
     try {
         localStorage.setItem(resultStorageKey, JSON.stringify({
             rid: requestId,

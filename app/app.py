@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.22"
+VERSION = "0.5.24"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -3326,6 +3326,219 @@ def _format_resource_line(item: dict) -> str:
     return f"{title} | {unlocked} | {official} | {resolution}"
 
 
+def _resource_display_text(value, max_len: int = 160) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        text = value.strip()
+    elif isinstance(value, (list, tuple, set)):
+        parts = [_resource_display_text(item, max_len=max_len) for item in value]
+        text = " / ".join([part for part in parts if part])
+    elif isinstance(value, dict):
+        text = ""
+    else:
+        text = str(value).strip()
+    if max_len > 0 and len(text) > max_len:
+        text = text[: max_len - 3] + "..."
+    return text
+
+
+def _resource_title(item: dict) -> str:
+    if not isinstance(item, dict):
+        return ""
+    for key in ("title", "resource_title", "name", "resource_name", "release_name", "subtitle"):
+        text = _resource_display_text(item.get(key), max_len=220)
+        if text:
+            return text
+    return ""
+
+
+def _build_hdhive_full_url(data: dict) -> str:
+    if not isinstance(data, dict):
+        return ""
+    full_url = data.get("full_url") or ""
+    if isinstance(full_url, str) and full_url.startswith("http"):
+        return full_url
+    url = data.get("url") or ""
+    if isinstance(url, str) and url.startswith("http"):
+        access_code = data.get("access_code")
+        if isinstance(access_code, str) and access_code and access_code not in url:
+            sep = "&" if "?" in url else "?"
+            return f"{url}{sep}password={access_code}"
+        return url
+    return ""
+
+
+def _resource_guess_storage_mode(item) -> str:
+    hits = set()
+
+    def _walk(value, key_name: str = "") -> None:
+        if isinstance(value, dict):
+            for child_key, child_value in value.items():
+                _walk(child_value, str(child_key or "").lower())
+            return
+        if isinstance(value, (list, tuple, set)):
+            for child in value:
+                _walk(child, key_name)
+            return
+        if value is None:
+            return
+        text = str(value).strip()
+        if not text:
+            return
+        lower = text.lower()
+        if _is_115_url(lower) or lower in {"115", "115网盘", "115云盘"}:
+            hits.add("115")
+        if _is_123_url(lower) or lower in {"123", "123pan", "123网盘", "123云盘"}:
+            hits.add("123")
+        if key_name in {"storage", "pan", "drive", "provider", "source", "cloud", "netdisk", "storage_type"}:
+            if "115" in lower:
+                hits.add("115")
+            if "123" in lower:
+                hits.add("123")
+
+    _walk(item)
+    if "115" in hits and "123" in hits:
+        return "115_123"
+    if "115" in hits:
+        return "115"
+    if "123" in hits:
+        return "123"
+    return ""
+
+
+def _storage_guess_matches_mode(guess: str, mode: str) -> bool:
+    guess = (guess or "").lower()
+    mode = (mode or "any").lower()
+    if not guess or mode == "any":
+        return True
+    if mode == "115":
+        return guess in {"115", "115_123"}
+    if mode == "123":
+        return guess in {"123", "115_123"}
+    if mode == "115_123":
+        return guess in {"115", "123", "115_123"}
+    return True
+
+
+def _storage_guess_label(guess: str) -> str:
+    guess = (guess or "").lower()
+    if guess == "115":
+        return "115"
+    if guess == "123":
+        return "123"
+    if guess == "115_123":
+        return "115/123"
+    return "待解析"
+
+
+def _match_state_label(value, true_label: str, false_label: str, unknown_label: str = "待判断") -> str:
+    if value is True:
+        return true_label
+    if value is False:
+        return false_label
+    return unknown_label
+
+
+def _build_self_service_interactive_resources(
+    resources: list,
+    *,
+    base_url: str,
+    open_api_key: str,
+    requested_seasons: list,
+    resolution_preference: str,
+    dolby_preference: str,
+    storage_mode: str,
+) -> tuple[list, int, int]:
+    built = []
+    filtered_out = 0
+    unknown_storage_count = 0
+    seen = set()
+
+    for index, raw_item in enumerate(resources or [], start=1):
+        if not isinstance(raw_item, dict):
+            continue
+        base_item = dict(raw_item)
+        slug = str(base_item.get("slug") or "").strip()
+        title = _resource_title(base_item)
+        uniq_key = slug or f"{index}:{title}"
+        if uniq_key in seen:
+            continue
+        seen.add(uniq_key)
+
+        merged = dict(base_item)
+        if slug and open_api_key:
+            try:
+                detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
+            except Exception:
+                detail_resp = None
+            detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
+            if isinstance(detail_data, dict):
+                for key, value in detail_data.items():
+                    if value not in (None, "", [], {}):
+                        merged[key] = value
+
+        storage_guess = _resource_guess_storage_mode(merged)
+        if storage_guess and not _storage_guess_matches_mode(storage_guess, storage_mode):
+            filtered_out += 1
+            continue
+        if not storage_guess and storage_mode != "any":
+            unknown_storage_count += 1
+
+        title = _resource_title(merged) or title or f"资源 {index}"
+        points = _resource_unlock_points(merged)
+        unlocked = bool(merged.get("already_owned") or merged.get("is_unlocked"))
+        official = bool(merged.get("is_official"))
+        resolution_text = _resource_display_text(merged.get("video_resolution"))
+        tags_text = _resource_display_text(merged.get("tags") or merged.get("video_tags"))
+        subtitle_text = _resource_display_text(merged.get("subtitle"))
+        release_name = _resource_display_text(merged.get("release_name"))
+        description = _resource_display_text(merged.get("description"), max_len=220)
+        season_match = _resource_match_seasons(merged, requested_seasons) if requested_seasons else None
+        resolution_match = _resource_match_resolution(merged, resolution_preference) if resolution_preference else None
+        is_dolby = _resource_is_dolby(merged)
+        full_url = _build_hdhive_full_url(merged)
+
+        detail = _build_self_service_detail([
+            f"状态: {'已拥有/已解锁' if unlocked else (f'{points} 积分' if points is not None else '积分未知')}",
+            f"官方: {'是' if official else '否'}",
+            f"网盘: {_storage_guess_label(storage_guess)}",
+            f"分辨率: {resolution_text}" if resolution_text else "",
+            f"标签: {tags_text}" if tags_text else "",
+            f"季匹配: {_match_state_label(season_match, '匹配', '不匹配')}" if requested_seasons else "",
+            f"分辨率匹配: {_match_state_label(resolution_match, '匹配', '不匹配')}" if resolution_preference else "",
+            f"杜比: {'是' if is_dolby else '否'}",
+            f"副标题: {subtitle_text}" if subtitle_text else "",
+            f"发布名: {release_name}" if release_name else "",
+            f"说明: {description}" if description else "",
+            f"链接: {full_url}" if full_url else "",
+            f"Slug: {slug}" if slug else "",
+        ], max_lines=12, max_line_len=220)
+
+        built.append({
+            "slug": slug,
+            "title": title,
+            "summary": _format_resource_line(merged),
+            "detail": detail,
+            "official": official,
+            "unlocked": unlocked,
+            "unlock_points": points,
+            "resolution_text": resolution_text,
+            "tags_text": tags_text,
+            "season_match": season_match,
+            "resolution_match": resolution_match,
+            "is_dolby": is_dolby,
+            "storage_guess": storage_guess,
+            "storage_guess_label": _storage_guess_label(storage_guess),
+            "full_url": full_url,
+            "last_action_status": "",
+            "last_action_note": "",
+            "last_action_at": 0,
+        })
+
+    return built, filtered_out, unknown_storage_count
+
+
 def _is_115_url(url: str) -> bool:
     if not url:
         return False
@@ -3377,6 +3590,22 @@ def _self_service_notify_submit(target_ids: list, detail: str = "") -> None:
     for tid in target_ids:
         _enqueue_message(tid, msg)
     return msg
+
+
+def _self_service_notify_interactive_ready(target_ids: list, detail: str = "") -> None:
+    msg = "🧩 已找到候选资源，请在页面手动选择转存。"
+    detail = (detail or "").strip()
+    if detail:
+        msg = msg + "\n" + detail
+    for tid in target_ids:
+        _enqueue_message(tid, msg)
+    return msg
+
+
+def _get_self_service_notify_targets(config: dict) -> list:
+    targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
+    notify_targets = _parse_target_user_ids(config.get("self_service_notify_user_ids", ""))
+    return notify_targets or targets
 
 
 def _try_115_share_transfer(real_url: str, payload: dict) -> tuple[bool, str]:
@@ -3683,7 +3912,7 @@ def _prune_self_service_results(data: dict) -> dict:
     return data
 
 
-def _set_self_service_result(request_id: str, status: str, message: str, detail: str = "") -> None:
+def _set_self_service_result(request_id: str, status: str, message: str, detail: str = "", extras: Optional[dict] = None) -> None:
     rid = (request_id or "").strip()
     if not rid:
         return
@@ -3700,6 +3929,9 @@ def _set_self_service_result(request_id: str, status: str, message: str, detail:
             "detail": detail,
             "updated_at": now,
         })
+        if isinstance(extras, dict):
+            for key, value in extras.items():
+                entry[key] = value
         data[rid] = entry
         _save_self_service_results(data)
 
@@ -3976,6 +4208,7 @@ def _run_self_service_request(payload: dict) -> None:
     dolby_label = _dolby_preference_label(dolby_preference)
     resolution_preference = _normalize_resolution_pref(payload.get("resolution", "") or "")
     resolution_label = _resolution_preference_label(resolution_preference)
+    advanced_mode = bool(payload.get("advanced_mode"))
     explicit_seasons = _parse_season_input(payload.get("season"))
     requested_seasons = explicit_seasons or _extract_season_candidates(title) or _extract_season_candidates(query)
     season_strict = bool(explicit_seasons)
@@ -4034,6 +4267,16 @@ def _run_self_service_request(payload: dict) -> None:
                 "说明: 未配置通知用户",
             ])
             _set_self_service_result(request_id, "error", "未配置通知用户。", detail)
+        return
+
+    if advanced_mode and not use_open_api:
+        detail = _build_self_service_detail([
+            f"片名: {title}" if title else "",
+            "模式: 高级交互",
+            "说明: 高级交互模式当前仅支持 Open API 搜索",
+        ])
+        _record_result(False, detail=detail, resolved=False)
+        _append_self_service_log([f"[{ts}] [WARN] interactive mode requires open api query={query}"])
         return
 
     if use_open_api:
@@ -4211,6 +4454,76 @@ def _run_self_service_request(payload: dict) -> None:
             ])
             _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
+            return
+
+        if advanced_mode:
+            interactive_resources, filtered_out, unknown_storage_count = _build_self_service_interactive_resources(
+                collected_resources,
+                base_url=base_url,
+                open_api_key=open_api_key,
+                requested_seasons=requested_seasons,
+                resolution_preference=resolution_preference,
+                dolby_preference=dolby_preference,
+                storage_mode=storage_mode,
+            )
+            if not interactive_resources:
+                detail = _build_self_service_detail([
+                    f"片名: {title}" if title else "",
+                    "模式: 高级交互",
+                    f"网盘: {storage_label}" if storage_label != "不限" else "",
+                    "说明: 未找到可展示的候选资源",
+                ])
+                _record_result(False, detail=detail, resolved=False)
+                _append_self_service_log([f"[{ts}] [WARN] interactive mode no resources query={query}"])
+                return
+
+            manual_transfer_supported = bool(
+                (payload.get("115_cookie") or payload.get("web_115_cookie"))
+                and payload.get("115_target_cid")
+                and Client115
+                and storage_mode != "123"
+            )
+            detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                "模式: 高级交互",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                f"候选资源: {len(interactive_resources)} 条",
+                f"已过滤已知非目标网盘: {filtered_out} 条" if filtered_out else "",
+                f"网盘待判定: {unknown_storage_count} 条（手动转存时会再次校验）" if unknown_storage_count and storage_mode != "any" else "",
+                "说明: 已跳过自动优先级筛选与自动转存，请手动选择资源",
+                "说明: 当前仅支持手动转存到 115" if not manual_transfer_supported else "",
+            ], max_lines=10, max_line_len=220)
+            extras = {
+                "advanced_mode": True,
+                "resources": interactive_resources,
+                "interactive_meta": {
+                    "title": title,
+                    "query": query,
+                    "storage_mode": storage_mode,
+                    "storage_label": storage_label,
+                    "request_type": request_type,
+                    "request_year": request_year,
+                    "season_label": season_label,
+                    "resolution_label": resolution_label,
+                    "dolby_label": dolby_label,
+                    "manual_transfer_supported": manual_transfer_supported,
+                },
+            }
+            _set_self_service_result(
+                request_id,
+                "interactive",
+                f"已找到 {len(interactive_resources)} 条候选资源，请手动选择转存。",
+                detail,
+                extras=extras,
+            )
+            ready_detail = _build_self_service_detail([
+                f"片名: {title}" if title else "",
+                f"网盘: {storage_label}" if storage_label != "不限" else "",
+                f"候选资源: {len(interactive_resources)} 条",
+                "说明: 请到页面手动选择转存",
+            ])
+            _self_service_notify_interactive_ready(target_ids, ready_detail)
+            _append_self_service_log([f"[{ts}] [INFO] interactive mode ready query={query} resources={len(interactive_resources)}"])
             return
 
         if requested_seasons:
@@ -7376,6 +7689,7 @@ def self_service_request():
         dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
         if dolby_preference not in ("any", "prefer", "exclude"):
             dolby_preference = "any"
+        advanced_mode = (request.form.get('advanced_mode') or 'off').strip().lower() == 'on'
         season_raw = (request.form.get('season') or '').strip()
         season_val = None
         if season_raw:
@@ -7417,6 +7731,7 @@ def self_service_request():
             "dolby_preference": dolby_preference,
             "season": season_val,
             "resolution": resolution_pref,
+            "advanced_mode": advanced_mode,
             "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
             "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }
@@ -7432,6 +7747,7 @@ def self_service_request():
             f"片名: {title}" if title else "",
             f"类型: {request_type}" if request_type else "",
             f"年份: {request_year}" if request_year else "",
+            f"模式: {'高级交互' if advanced_mode else '自动入库'}",
             f"杜比: {_dolby_preference_label(dolby_preference)}" if dolby_preference != "any" else "",
             f"RID: {request_id}",
         ])
@@ -7462,6 +7778,138 @@ def self_service_result():
     if not result:
         return jsonify({"found": False})
     return jsonify({"found": True, **result})
+
+
+@app.route('/self_service_transfer', methods=['POST'])
+def self_service_transfer():
+    body = request.get_json(silent=True) if request.is_json else request.form
+    rid = str((body or {}).get('rid') or (body or {}).get('request_id') or '').strip()
+    slug = str((body or {}).get('slug') or '').strip()
+    if not rid or not slug:
+        return jsonify({"success": False, "message": "缺少请求 ID 或资源标识。"}), 400
+
+    result = _get_self_service_result(rid)
+    if not result:
+        return jsonify({"success": False, "message": "未找到对应的自助观影记录。"}), 404
+    if not result.get("advanced_mode"):
+        return jsonify({"success": False, "message": "该记录不是高级交互模式，无法手动转存。"}), 400
+
+    resources = result.get("resources") if isinstance(result.get("resources"), list) else []
+    selected = None
+    copied_resources = []
+    for item in resources:
+        if not isinstance(item, dict):
+            continue
+        copied = dict(item)
+        copied_resources.append(copied)
+        if str(copied.get("slug") or "").strip() == slug:
+            selected = copied
+    if not selected:
+        return jsonify({"success": False, "message": "未找到要转存的资源。"}), 404
+
+    config = load_config()
+    open_api_key = (config.get("hdhive_open_api_key") or "").strip()
+    base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip() or "https://hdhive.com"
+    effective_targets = _get_self_service_notify_targets(config)
+    interactive_meta = result.get("interactive_meta") if isinstance(result.get("interactive_meta"), dict) else {}
+    storage_mode = str(interactive_meta.get("storage_mode") or config.get("self_service_storage_mode") or "any").lower()
+    storage_label = _storage_mode_label(storage_mode)
+    title = str(interactive_meta.get("title") or selected.get("title") or "").strip()
+
+    if not open_api_key:
+        return jsonify({"success": False, "message": "未配置 HDHive Open API Key，无法手动解锁转存。"}), 400
+    if interactive_meta.get("manual_transfer_supported") is False:
+        return jsonify({"success": False, "message": "当前配置不支持手动转存。"}), 400
+    if storage_mode == "123":
+        return jsonify({"success": False, "message": "当前仅支持手动转存到 115。"}), 400
+
+    try:
+        unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+    except Exception as e:
+        unlock_resp = {"success": False, "message": f"{type(e).__name__}: {e}"}
+
+    resolved = False
+    transfer_ok = False
+    detail = ""
+    note = ""
+    full_url = ""
+
+    if isinstance(unlock_resp, dict) and unlock_resp.get("success"):
+        data = unlock_resp.get("data") if isinstance(unlock_resp.get("data"), dict) else {}
+        full_url = _build_hdhive_full_url(data)
+        if full_url:
+            resolved = True
+        if full_url and not _match_storage_mode(full_url, storage_mode):
+            note = f"解析结果不是所选网盘（当前要求 {storage_label}）"
+        elif not full_url:
+            note = "已解锁但未返回可转存链接"
+        else:
+            transfer_payload = {
+                "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
+                "115_target_cid": (config.get("115_target_cid") or "").strip(),
+            }
+            transfer_ok, transfer_note = _try_115_share_transfer(full_url, transfer_payload)
+            if transfer_note == "transfer_ok":
+                note = "转存成功"
+            else:
+                note = transfer_note or ""
+            if note == "not_115_url":
+                note = "当前仅支持转存到 115"
+            elif note == "missing_115_config":
+                note = "缺少 115 Cookie 或目标目录配置"
+            elif note == "client_missing":
+                note = "115 转存组件不可用"
+    else:
+        code = str((unlock_resp or {}).get("code") or "")
+        raw_msg = str((unlock_resp or {}).get("message") or (unlock_resp or {}).get("description") or "解锁失败")
+        if code.upper() == "INSUFFICIENT_POINTS" or code == "402":
+            note = f"积分不足，手动解锁失败（{raw_msg}）"
+        else:
+            note = f"手动解锁失败（{raw_msg}）"
+
+    action_status = "success" if transfer_ok else ("partial" if resolved else "error")
+    action_message = (
+        "✅ 资源已入库，请等待3-5分钟后进入服务器观看。"
+        if transfer_ok else
+        ("⚠️ 已解析到资源链接，但入库失败。" if resolved else "❌ 手动转存失败，请重试。")
+    )
+    detail = _build_self_service_detail([
+        f"片名: {title}" if title else "",
+        "模式: 高级交互手动转存",
+        f"网盘: {storage_label}" if storage_label != "不限" else "",
+        f"资源: {selected.get('title') or slug}",
+        f"链接: {full_url}" if full_url else "",
+        f"说明: {note}" if note else "",
+    ], max_lines=10, max_line_len=220)
+
+    now = time.time()
+    for item in copied_resources:
+        if str(item.get("slug") or "").strip() != slug:
+            continue
+        item["last_action_status"] = action_status
+        item["last_action_note"] = note
+        item["last_action_at"] = now
+        if full_url:
+            item["full_url"] = full_url
+        break
+
+    extras = {
+        "advanced_mode": True,
+        "resources": copied_resources,
+        "interactive_meta": interactive_meta,
+    }
+    _set_self_service_result(rid, action_status, action_message, detail, extras=extras)
+    updated_result = _get_self_service_result(rid)
+
+    if transfer_ok or resolved:
+        _self_service_notify_result(effective_targets, transfer_ok, detail=detail, resolved=resolved)
+
+    return jsonify({
+        "success": transfer_ok,
+        "resolved": resolved,
+        "message": action_message,
+        "result": updated_result,
+    })
 
 @app.route('/self_service_public', methods=['GET', 'POST'])
 def self_service_public():
@@ -7544,6 +7992,7 @@ def self_service_public():
         dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
         if dolby_preference not in ("any", "prefer", "exclude"):
             dolby_preference = "any"
+        advanced_mode = (request.form.get('advanced_mode') or 'off').strip().lower() == 'on'
         season_raw = (request.form.get('season') or '').strip()
         season_val = None
         if season_raw:
@@ -7585,6 +8034,7 @@ def self_service_public():
             "dolby_preference": dolby_preference,
             "season": season_val,
             "resolution": resolution_pref,
+            "advanced_mode": advanced_mode,
             "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
             "115_target_cid": (config.get("115_target_cid") or "").strip(),
         }
@@ -7600,6 +8050,7 @@ def self_service_public():
             f"片名: {title}" if title else "",
             f"类型: {request_type}" if request_type else "",
             f"年份: {request_year}" if request_year else "",
+            f"模式: {'高级交互' if advanced_mode else '自动入库'}",
             f"杜比: {_dolby_preference_label(dolby_preference)}" if dolby_preference != "any" else "",
             f"RID: {request_id}",
         ])
