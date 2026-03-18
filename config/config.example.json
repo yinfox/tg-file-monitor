@@ -44,15 +44,6 @@
     "on_invalid": "notify",
     "force_cookie_test": true
   },
-  "hdhive_checkin": {
-    "enabled": false,
-    "mode": "normal",
-    "schedule_time": "09:00",
-    "run_on_start": true,
-    "notify_user_ids": "",
-    "normal_path": "",
-    "gamble_path": ""
-  },
   "restricted_channels": [],
   "proxy": {},
   "115_cookie": "",

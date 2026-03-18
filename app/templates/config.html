@@ -817,82 +817,6 @@
                                     </div>
                                 </div>
                             </div>
-                            {% set hdhive_checkin = config.get('hdhive_checkin', {}) %}
-                            <div class="card border-light-subtle mb-2">
-                                <div class="card-body p-2">
-                                    <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" id="hdhive_checkin_enabled"
-                                            name="hdhive_checkin_enabled" {% if hdhive_checkin.get('enabled', False) %}checked{% endif %}>
-                                        <label class="form-check-label small" for="hdhive_checkin_enabled">启用 HDHive 签到</label>
-                                    </div>
-                                    <div class="row g-2 mb-2">
-                                        <div class="col-md-4">
-                                            <label for="hdhive_checkin_mode" class="form-label small">签到模式</label>
-                                            {% set checkin_mode = hdhive_checkin.get('mode', 'normal') %}
-                                            <select class="form-select form-select-sm" id="hdhive_checkin_mode" name="hdhive_checkin_mode">
-                                                <option value="normal" {% if checkin_mode == 'normal' %}selected{% endif %}>普通签到</option>
-                                                <option value="gamble" {% if checkin_mode == 'gamble' %}selected{% endif %}>赌狗签到</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label for="hdhive_checkin_time" class="form-label small">签到时间</label>
-                                            <input type="time" class="form-control form-control-sm" id="hdhive_checkin_time"
-                                                name="hdhive_checkin_time" value="{{ hdhive_checkin.get('schedule_time', '09:00') }}">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label small">&nbsp;</label>
-                                            <div class="form-check form-switch">
-                                                <input class="form-check-input" type="checkbox" id="hdhive_checkin_run_on_start"
-                                                    name="hdhive_checkin_run_on_start" {% if hdhive_checkin.get('run_on_start', True) %}checked{% endif %}>
-                                                <label class="form-check-label small" for="hdhive_checkin_run_on_start">重启自动签到</label>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label for="hdhive_checkin_notify_user_ids" class="form-label small">通知用户 ID（可选）</label>
-                                        <input type="text" class="form-control form-control-sm" id="hdhive_checkin_notify_user_ids"
-                                            name="hdhive_checkin_notify_user_ids"
-                                            value="{{ hdhive_checkin.get('notify_user_ids', '') }}"
-                                            placeholder="123, @admin (逗号分隔)">
-                                        <div class="form-text">留空则使用自助观影通知用户。</div>
-                                    </div>
-                                    <div class="row g-2 mb-2">
-                                        <div class="col-md-6">
-                                            <label for="hdhive_checkin_normal_path" class="form-label small">普通签到接口(可选)</label>
-                                            <input type="text" class="form-control form-control-sm" id="hdhive_checkin_normal_path"
-                                                name="hdhive_checkin_normal_path"
-                                                value="{{ hdhive_checkin.get('normal_path', '') }}"
-                                                placeholder="/go-api/customer/sign">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label for="hdhive_checkin_gamble_path" class="form-label small">赌狗签到接口(可选)</label>
-                                            <input type="text" class="form-control form-control-sm" id="hdhive_checkin_gamble_path"
-                                                name="hdhive_checkin_gamble_path"
-                                                value="{{ hdhive_checkin.get('gamble_path', '') }}"
-                                                placeholder="/go-api/customer/sign">
-                                        </div>
-                                    </div>
-                                    {% set checkin_state = hdhive_checkin_state or {} %}
-                                    <div class="form-text mb-0">
-                                        状态：<span class="{% if checkin_state.get('last_status') == 'ok' %}text-success{% elif checkin_state.get('last_status') %}text-danger{% else %}text-muted{% endif %}">
-                                            {{ checkin_state.get('last_message') or '未执行' }}
-                                        </span>
-                                        {% if checkin_state.get('last_checkin_at') %}
-                                        （{{ checkin_state.get('last_checkin_at') }}）
-                                        {% endif %}
-                                    </div>
-                                    <div class="form-text">
-                                        当前积分：<span class="fw-bold">{{ checkin_state.get('last_points', '-') or '-' }}</span>
-                                        {% if checkin_state.get('next_run_at') %}
-                                        ，下次执行：{{ checkin_state.get('next_run_at') }}
-                                        {% endif %}
-                                    </div>
-                                    <div class="d-flex gap-2 mt-2">
-                                        <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveCheckinBtn">立即签到</button>
-                                    </div>
-                                    <div class="form-text mt-1" id="hdhiveCheckinResult"></div>
-                                </div>
-                            </div>
                                             <div class="d-flex gap-2">
                                                 <button type="submit" class="btn btn-primary btn-sm flex-grow-1">保存 HDHive Cookie</button>
                                                 <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestBtn">测试(API优先)</button>
@@ -1631,16 +1555,10 @@
         const hdhiveTestBtn = document.getElementById('hdhiveTestBtn');
         const hdhiveTestCookieBtn = document.getElementById('hdhiveTestCookieBtn');
         const hdhiveTestResult = document.getElementById('hdhiveTestResult');
-        const hdhiveCheckinBtn = document.getElementById('hdhiveCheckinBtn');
-        const hdhiveCheckinResult = document.getElementById('hdhiveCheckinResult');
 
         const setHdhiveTestButtons = (disabled) => {
             if (hdhiveTestBtn) hdhiveTestBtn.disabled = disabled;
             if (hdhiveTestCookieBtn) hdhiveTestCookieBtn.disabled = disabled;
-        };
-
-        const setHdhiveCheckinButton = (disabled) => {
-            if (hdhiveCheckinBtn) hdhiveCheckinBtn.disabled = disabled;
         };
 
         const runHdhiveTest = async (mode) => {
@@ -1681,41 +1599,6 @@
         if (hdhiveTestCookieBtn && hdhiveTestResult) {
             hdhiveTestCookieBtn.addEventListener('click', async function () {
                 await runHdhiveTest('cookie');
-            });
-        }
-
-        if (hdhiveCheckinBtn && hdhiveCheckinResult) {
-            hdhiveCheckinBtn.addEventListener('click', async function () {
-                hdhiveCheckinResult.textContent = '正在签到...';
-                hdhiveCheckinResult.className = 'form-text text-muted';
-                setHdhiveCheckinButton(true);
-                try {
-                    const response = await fetch("{{ url_for('api_hdhive_checkin') }}", {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({})
-                    });
-                    const data = await response.json();
-                    if (data && data.success) {
-                        let msg = data.message || '签到成功';
-                        if (data.points !== undefined && data.points !== null && data.points !== "") {
-                            msg += ` | 当前积分: ${data.points}`;
-                        }
-                        if (data.last_checkin_at) {
-                            msg += ` | 时间: ${data.last_checkin_at}`;
-                        }
-                        hdhiveCheckinResult.textContent = msg;
-                        hdhiveCheckinResult.className = 'form-text text-success';
-                    } else {
-                        hdhiveCheckinResult.textContent = (data && data.message) ? data.message : '签到失败';
-                        hdhiveCheckinResult.className = 'form-text text-danger';
-                    }
-                } catch (err) {
-                    hdhiveCheckinResult.textContent = '签到失败: ' + err.message;
-                    hdhiveCheckinResult.className = 'form-text text-danger';
-                } finally {
-                    setHdhiveCheckinButton(false);
-                }
             });
         }
     });

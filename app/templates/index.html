@@ -76,23 +76,6 @@
                     {% endif %}
                 </div>
                 {% endif %}
-                {% if hdhive_checkin_state %}
-                <div class="mb-2 small">
-                    <span class="text-muted">影巢签到:</span>
-                    <span class="fw-bold">{{ hdhive_checkin_state.get('last_message', '未执行') }}</span>
-                </div>
-                <div class="mb-2 small">
-                    <span class="text-muted">签到时间:</span>
-                    <span class="fw-bold">{{ hdhive_checkin_state.get('last_checkin_at', '-') }}</span>
-                </div>
-                <div class="mb-2 small">
-                    <span class="text-muted">当前积分:</span>
-                    <span class="fw-bold">{{ hdhive_checkin_state.get('last_points', '-') or '-' }}</span>
-                    {% if hdhive_checkin_state.get('next_run_at') %}
-                    <span class="text-muted ms-1">下次: {{ hdhive_checkin_state.get('next_run_at') }}</span>
-                    {% endif %}
-                </div>
-                {% endif %}
                 <div class="mb-2 small">
                     <span class="text-muted">最近活动:</span>
                     <span class="fw-bold">{{ (tg_last_log or {}).get('message', '暂无') }}</span>
