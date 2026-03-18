@@ -35,6 +35,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 TV_CHANNEL_FILTERS_FILE = os.path.join(CONFIG_DIR, 'tvchannel_filters.json')
 MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
 DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
+DOWNLOAD_QUEUE_STATS_FILE = os.path.join(CONFIG_DIR, 'download_queue_stats.json')
 
 # Load environment variables (optional)
 try:
@@ -202,6 +203,19 @@ def load_config() -> dict:
             "session_name": "telegram_monitor",
         },
         "download_concurrency": 2,
+        "download_queue_maxsize": 200,
+        "download_queue_alert": {
+            "enabled": False,
+            "threshold": 100,
+            "cooldown_seconds": 600,
+            "notify_user_ids": "",
+        },
+        "download_queue_throttle": {
+            "enabled": True,
+            "threshold": 100,
+            "recover_threshold": 0,
+            "min_concurrency": 1,
+        },
         "startup_tv_whitelist_scan_limit": STARTUP_TV_WHITELIST_SCAN_LIMIT,
         "restricted_channels": [],
         "proxy": {},
@@ -239,6 +253,20 @@ def load_config() -> dict:
             config['telegram'] = default_config['telegram']
         if 'download_concurrency' not in config:
             config['download_concurrency'] = default_config['download_concurrency']
+        if 'download_queue_maxsize' not in config:
+            config['download_queue_maxsize'] = default_config['download_queue_maxsize']
+        if 'download_queue_alert' not in config or not isinstance(config.get('download_queue_alert'), dict):
+            config['download_queue_alert'] = default_config['download_queue_alert']
+        else:
+            merged_alert = default_config['download_queue_alert'].copy()
+            merged_alert.update(config.get('download_queue_alert') or {})
+            config['download_queue_alert'] = merged_alert
+        if 'download_queue_throttle' not in config or not isinstance(config.get('download_queue_throttle'), dict):
+            config['download_queue_throttle'] = default_config['download_queue_throttle']
+        else:
+            merged_throttle = default_config['download_queue_throttle'].copy()
+            merged_throttle.update(config.get('download_queue_throttle') or {})
+            config['download_queue_throttle'] = merged_throttle
         if 'startup_tv_whitelist_scan_limit' not in config:
             config['startup_tv_whitelist_scan_limit'] = default_config['startup_tv_whitelist_scan_limit']
         if 'restricted_channels' not in config:
@@ -625,6 +653,26 @@ _download_risk_stats = {
     'last_blocked_at': '',
 }
 
+_download_queue_stats = {
+    'queue_size': 0,
+    'maxsize': 0,
+    'queued_total': 0,
+    'dropped_total': 0,
+    'last_queued_at': '',
+    'last_dropped_at': '',
+    'last_drop_reason': '',
+    'last_alert_at': '',
+    'config_concurrency': 0,
+    'effective_concurrency': 0,
+    'throttle_active': False,
+    'throttle_target_concurrency': 0,
+    'throttle_threshold': 0,
+    'throttle_recover_threshold': 0,
+    'last_throttle_at': '',
+    'last_throttle_reason': '',
+    'updated_at': '',
+}
+
 
 def _persist_download_risk_stats():
     try:
@@ -643,6 +691,233 @@ def _record_download_risk_block(reason: str):
     _download_risk_stats['last_blocked_reason'] = reason_key
     _download_risk_stats['last_blocked_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
     _persist_download_risk_stats()
+
+
+def _persist_download_queue_stats():
+    try:
+        os.makedirs(CONFIG_DIR, exist_ok=True)
+        with open(DOWNLOAD_QUEUE_STATS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(_download_queue_stats, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+def _update_download_queue_stats(
+    action: str,
+    *,
+    queue_size: Optional[int] = None,
+    reason: str = "",
+    apply_throttle: bool = True,
+) -> None:
+    if queue_size is None:
+        try:
+            queue_size = download_queue.qsize()
+        except Exception:
+            queue_size = 0
+    _download_queue_stats['queue_size'] = int(queue_size or 0)
+    _download_queue_stats['maxsize'] = int(DOWNLOAD_QUEUE_MAXSIZE or 0)
+    now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+    action = (action or '').strip().lower()
+    if action == 'enqueue':
+        _download_queue_stats['queued_total'] = int(_download_queue_stats.get('queued_total', 0)) + 1
+        _download_queue_stats['last_queued_at'] = now_str
+    elif action == 'drop':
+        _download_queue_stats['dropped_total'] = int(_download_queue_stats.get('dropped_total', 0)) + 1
+        _download_queue_stats['last_dropped_at'] = now_str
+        _download_queue_stats['last_drop_reason'] = (reason or '').strip()
+    if apply_throttle:
+        try:
+            _maybe_auto_throttle(int(queue_size or 0))
+        except Exception:
+            pass
+
+    throttle_cfg = _get_download_queue_throttle_config(current_config if isinstance(current_config, dict) else {})
+    _download_queue_stats['config_concurrency'] = int(CONFIG_DOWNLOAD_CONCURRENCY or 0)
+    _download_queue_stats['effective_concurrency'] = int(DOWNLOAD_CONCURRENCY or 0)
+    _download_queue_stats['throttle_active'] = bool(
+        DOWNLOAD_CONCURRENCY_OVERRIDE is not None and DOWNLOAD_CONCURRENCY_OVERRIDE < CONFIG_DOWNLOAD_CONCURRENCY
+    )
+    _download_queue_stats['throttle_target_concurrency'] = int(DOWNLOAD_CONCURRENCY_OVERRIDE or 0)
+    _download_queue_stats['throttle_threshold'] = int(throttle_cfg.get('threshold', 0) or 0)
+    _download_queue_stats['throttle_recover_threshold'] = int(throttle_cfg.get('recover_threshold', 0) or 0)
+    _download_queue_stats['updated_at'] = now_str
+    _persist_download_queue_stats()
+
+
+def _parse_notify_targets(raw: str) -> List:
+    items = []
+    for part in re.split(r'[,\n]+', str(raw or '')):
+        value = (part or '').strip()
+        if not value:
+            continue
+        if value.isdigit():
+            items.append(int(value))
+        else:
+            items.append(value)
+    return items
+
+
+def _get_download_queue_alert_config(cfg: dict) -> dict:
+    alert_cfg = {}
+    if isinstance(cfg, dict):
+        alert_cfg = cfg.get('download_queue_alert') if isinstance(cfg.get('download_queue_alert'), dict) else {}
+    enabled = bool(alert_cfg.get('enabled', False))
+    threshold = int(alert_cfg.get('threshold', 100) or 100)
+    cooldown = int(alert_cfg.get('cooldown_seconds', 600) or 600)
+    notify_ids_raw = (alert_cfg.get('notify_user_ids') or '').strip()
+    if not notify_ids_raw:
+        notify_ids_raw = (cfg.get('self_service_notify_user_ids') or cfg.get('self_service_target_user_ids') or '').strip() if isinstance(cfg, dict) else ''
+    targets = _parse_notify_targets(notify_ids_raw)
+    return {
+        'enabled': enabled,
+        'threshold': max(1, threshold),
+        'cooldown_seconds': max(30, cooldown),
+        'targets': targets,
+    }
+
+
+def _get_download_queue_throttle_config(cfg: dict) -> dict:
+    throttle_cfg = {}
+    if isinstance(cfg, dict):
+        throttle_cfg = cfg.get('download_queue_throttle') if isinstance(cfg.get('download_queue_throttle'), dict) else {}
+
+    enabled = bool(throttle_cfg.get('enabled', True))
+    threshold = int(throttle_cfg.get('threshold', 0) or 0)
+    if threshold <= 0:
+        threshold = int(_get_download_queue_alert_config(cfg).get('threshold', 100) or 100)
+
+    min_concurrency = int(throttle_cfg.get('min_concurrency', 1) or 1)
+    recover_threshold = int(throttle_cfg.get('recover_threshold', 0) or 0)
+    if recover_threshold <= 0 or recover_threshold >= threshold:
+        recover_threshold = max(1, int(threshold * 0.7))
+        if recover_threshold >= threshold:
+            recover_threshold = max(1, threshold - 1)
+
+    return {
+        'enabled': enabled,
+        'threshold': max(1, threshold),
+        'recover_threshold': max(0, recover_threshold),
+        'min_concurrency': max(1, min_concurrency),
+    }
+
+
+def _compute_throttled_concurrency(queue_size: int, base_concurrency: int, threshold: int, min_concurrency: int) -> Optional[int]:
+    if queue_size < threshold:
+        return None
+    if base_concurrency <= 1:
+        return None
+    if threshold <= 0:
+        return None
+    desired = int((base_concurrency * threshold) // max(queue_size, 1))
+    desired = max(min_concurrency, min(base_concurrency, desired))
+    if desired >= base_concurrency:
+        return None
+    return max(1, desired)
+
+
+def _maybe_auto_throttle(queue_size: int) -> None:
+    cfg = _get_download_queue_throttle_config(current_config if isinstance(current_config, dict) else {})
+    if not cfg.get('enabled'):
+        if DOWNLOAD_CONCURRENCY_OVERRIDE is not None:
+            _set_download_concurrency_override(
+                None,
+                queue_size=queue_size,
+                threshold=int(cfg.get('threshold', 0) or 0),
+                announce=False,
+                reason="自动降速已关闭",
+                persist_stats=False,
+            )
+        return
+
+    base = int(CONFIG_DOWNLOAD_CONCURRENCY or 0)
+    threshold = int(cfg.get('threshold', 0) or 0)
+    recover_threshold = int(cfg.get('recover_threshold', 0) or 0)
+    min_concurrency = int(cfg.get('min_concurrency', 1) or 1)
+
+    if base <= 1:
+        if DOWNLOAD_CONCURRENCY_OVERRIDE is not None:
+            _set_download_concurrency_override(
+                None,
+                queue_size=queue_size,
+                threshold=threshold,
+                announce=False,
+                reason="并发已是最低值",
+                persist_stats=False,
+            )
+        return
+
+    if queue_size >= threshold:
+        desired = _compute_throttled_concurrency(queue_size, base, threshold, min_concurrency)
+        if desired is None:
+            if DOWNLOAD_CONCURRENCY_OVERRIDE is not None:
+                _set_download_concurrency_override(
+                    None,
+                    queue_size=queue_size,
+                    threshold=threshold,
+                    announce=False,
+                    reason="无需降速",
+                    persist_stats=False,
+                )
+            return
+        if DOWNLOAD_CONCURRENCY_OVERRIDE != desired:
+            _set_download_concurrency_override(
+                desired,
+                queue_size=queue_size,
+                threshold=threshold,
+                announce=True,
+                reason=f"队列积压 {queue_size}/{DOWNLOAD_QUEUE_MAXSIZE}",
+                persist_stats=False,
+            )
+        return
+
+    if queue_size <= recover_threshold and DOWNLOAD_CONCURRENCY_OVERRIDE is not None:
+        _set_download_concurrency_override(
+            None,
+            queue_size=queue_size,
+            threshold=threshold,
+            announce=True,
+            reason=f"队列回落 {queue_size}/{DOWNLOAD_QUEUE_MAXSIZE}",
+            persist_stats=False,
+        )
+
+
+def _schedule_download_queue_alert(queue_size: int) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    cfg = _get_download_queue_alert_config(current_config if isinstance(current_config, dict) else {})
+    if not cfg.get('enabled'):
+        return
+    if queue_size < cfg.get('threshold', 0):
+        return
+    targets = cfg.get('targets') or []
+    if not targets:
+        return
+    now_ts = time.time()
+    last_alert_ts = float(_download_queue_stats.get('last_alert_ts', 0) or 0)
+    if now_ts - last_alert_ts < cfg.get('cooldown_seconds', 600):
+        return
+    _download_queue_stats['last_alert_ts'] = now_ts
+    _download_queue_stats['last_alert_at'] = time.strftime('%Y-%m-%d %H:%M:%S')
+    _persist_download_queue_stats()
+    message = (
+        f"⚠️ 下载队列积压: {queue_size}/{DOWNLOAD_QUEUE_MAXSIZE}\n"
+        f"时间: {_download_queue_stats.get('last_alert_at')}"
+    )
+    loop.create_task(_send_download_queue_alert(targets, message))
+
+
+async def _send_download_queue_alert(targets: List, message: str) -> None:
+    if not targets:
+        return
+    if not client or not client.is_connected():
+        return
+    for tid in targets:
+        try:
+            await client.send_message(tid, message)
+        except Exception as e:
+            log_message(f"下载队列告警发送失败: target={tid} err={e}")
 
 
 def _get_download_risk_control_config() -> Dict[str, float]:
@@ -1877,19 +2152,156 @@ def _resolve_download_concurrency(cfg: dict) -> int:
     return max(1, min(val, 8))
 
 
-DOWNLOAD_CONCURRENCY = _resolve_download_concurrency(current_config)
+CONFIG_DOWNLOAD_CONCURRENCY = _resolve_download_concurrency(current_config)
+DOWNLOAD_CONCURRENCY = CONFIG_DOWNLOAD_CONCURRENCY
+DOWNLOAD_CONCURRENCY_OVERRIDE: Optional[int] = None
 concurrency_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+download_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
 
 
-def _apply_download_concurrency(cfg: dict, *, announce: bool = False) -> None:
-    global DOWNLOAD_CONCURRENCY, concurrency_semaphore
-    new_val = _resolve_download_concurrency(cfg)
+def _set_effective_download_concurrency(new_val: int, *, announce: bool = False, reason: str = "") -> None:
+    global DOWNLOAD_CONCURRENCY, concurrency_semaphore, download_semaphore
+    try:
+        new_val = int(new_val)
+    except Exception:
+        new_val = 1
+    new_val = max(1, new_val)
     if new_val == DOWNLOAD_CONCURRENCY:
         return
     DOWNLOAD_CONCURRENCY = new_val
     concurrency_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+    download_semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
+    _ensure_download_workers(DOWNLOAD_CONCURRENCY)
     if announce:
-        log_message(f"下载并发已更新: {DOWNLOAD_CONCURRENCY}")
+        suffix = f"{reason}" if reason else ""
+        log_message(f"下载并发已更新: {DOWNLOAD_CONCURRENCY}{suffix}")
+
+
+def _set_download_concurrency_override(
+    new_override: Optional[int],
+    *,
+    queue_size: int = 0,
+    threshold: int = 0,
+    announce: bool = True,
+    reason: str = "",
+    persist_stats: bool = True,
+) -> None:
+    global DOWNLOAD_CONCURRENCY_OVERRIDE
+    prev_override = DOWNLOAD_CONCURRENCY_OVERRIDE
+    prev_effective = DOWNLOAD_CONCURRENCY
+
+    if new_override is not None:
+        try:
+            new_override = int(new_override)
+        except Exception:
+            new_override = None
+    if new_override is not None:
+        new_override = max(1, new_override)
+        if new_override > CONFIG_DOWNLOAD_CONCURRENCY:
+            new_override = CONFIG_DOWNLOAD_CONCURRENCY
+
+    if new_override == prev_override:
+        return
+
+    now_str = time.strftime('%Y-%m-%d %H:%M:%S')
+
+    if new_override is None:
+        DOWNLOAD_CONCURRENCY_OVERRIDE = None
+        _set_effective_download_concurrency(CONFIG_DOWNLOAD_CONCURRENCY, announce=False)
+        _download_queue_stats['last_throttle_at'] = now_str
+        _download_queue_stats['last_throttle_reason'] = reason or "队列恢复"
+        if announce and prev_override is not None:
+            log_message(f"队列恢复，下载并发已恢复: {prev_effective} -> {DOWNLOAD_CONCURRENCY}")
+    else:
+        DOWNLOAD_CONCURRENCY_OVERRIDE = new_override
+        new_effective = min(CONFIG_DOWNLOAD_CONCURRENCY, new_override)
+        _set_effective_download_concurrency(new_effective, announce=False)
+        _download_queue_stats['last_throttle_at'] = now_str
+        if reason:
+            _download_queue_stats['last_throttle_reason'] = reason
+        else:
+            _download_queue_stats['last_throttle_reason'] = f"队列积压 {queue_size}/{DOWNLOAD_QUEUE_MAXSIZE}"
+        if announce:
+            log_message(
+                f"队列积压触发降速: {prev_effective} -> {DOWNLOAD_CONCURRENCY} "
+                f"(queue={queue_size}/{DOWNLOAD_QUEUE_MAXSIZE}, threshold={threshold})"
+            )
+
+    if persist_stats:
+        _update_download_queue_stats('concurrency', apply_throttle=False)
+
+
+def _resolve_download_queue_maxsize(cfg: dict) -> int:
+    raw = None
+    if isinstance(cfg, dict):
+        raw = cfg.get('download_queue_maxsize')
+    if raw is None:
+        raw = os.environ.get('TELEGRAM_DOWNLOAD_QUEUE_MAXSIZE') or os.environ.get('DOWNLOAD_QUEUE_MAXSIZE')
+    try:
+        val = int(raw)
+    except Exception:
+        val = 200
+    return max(10, min(val, 5000))
+
+
+def _apply_download_queue_config(cfg: dict, *, announce: bool = False) -> None:
+    global DOWNLOAD_QUEUE_MAXSIZE, download_queue
+    new_val = _resolve_download_queue_maxsize(cfg)
+    if new_val == DOWNLOAD_QUEUE_MAXSIZE:
+        return
+    DOWNLOAD_QUEUE_MAXSIZE = new_val
+    try:
+        download_queue._maxsize = DOWNLOAD_QUEUE_MAXSIZE
+    except Exception:
+        pass
+    _update_download_queue_stats('resize')
+    if announce:
+        log_message(f"下载队列上限已更新: {DOWNLOAD_QUEUE_MAXSIZE}")
+
+
+DOWNLOAD_QUEUE_MAXSIZE = _resolve_download_queue_maxsize(current_config)
+download_queue: asyncio.Queue = asyncio.Queue(maxsize=DOWNLOAD_QUEUE_MAXSIZE)
+_download_workers: list = []
+_update_download_queue_stats('init', queue_size=0)
+
+
+def _ensure_download_workers(target_count: int) -> None:
+    if target_count <= 0:
+        target_count = 1
+    # Only create/cancel workers when event loop is running.
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    current = len(_download_workers)
+    if current < target_count:
+        for idx in range(current + 1, target_count + 1):
+            task = asyncio.create_task(_download_worker(idx))
+            _download_workers.append(task)
+        log_message(f"下载队列工作线程已扩展为 {target_count} 个")
+    elif current > target_count:
+        for _ in range(current - target_count):
+            task = _download_workers.pop()
+            task.cancel()
+        log_message(f"下载队列工作线程已收缩为 {target_count} 个")
+
+
+def _apply_download_concurrency(cfg: dict, *, announce: bool = False) -> None:
+    global CONFIG_DOWNLOAD_CONCURRENCY, DOWNLOAD_CONCURRENCY_OVERRIDE
+    new_val = _resolve_download_concurrency(cfg)
+    if new_val == CONFIG_DOWNLOAD_CONCURRENCY and DOWNLOAD_CONCURRENCY_OVERRIDE is None:
+        return
+    CONFIG_DOWNLOAD_CONCURRENCY = new_val
+    if DOWNLOAD_CONCURRENCY_OVERRIDE is not None and DOWNLOAD_CONCURRENCY_OVERRIDE > CONFIG_DOWNLOAD_CONCURRENCY:
+        DOWNLOAD_CONCURRENCY_OVERRIDE = CONFIG_DOWNLOAD_CONCURRENCY
+    effective = CONFIG_DOWNLOAD_CONCURRENCY
+    reason = ""
+    if DOWNLOAD_CONCURRENCY_OVERRIDE is not None:
+        effective = min(CONFIG_DOWNLOAD_CONCURRENCY, DOWNLOAD_CONCURRENCY_OVERRIDE)
+        if DOWNLOAD_CONCURRENCY_OVERRIDE < CONFIG_DOWNLOAD_CONCURRENCY:
+            reason = " (队列积压降速中)"
+    _set_effective_download_concurrency(effective, announce=announce, reason=reason)
+    _update_download_queue_stats('concurrency', apply_throttle=False)
 
 
 def _resolve_startup_tv_whitelist_scan_limit(cfg: dict) -> int:
@@ -2062,6 +2474,299 @@ async def reliable_action(action_name, coro_func, *args, **kwargs):
         
         log_message(f"[{action_name}] 超过最大重试次数，放弃操作。")
         return None
+
+
+async def reliable_download_action(action_name, coro_func, *args, **kwargs):
+    """
+    Executes a coroutine with automatic retry on FloodWaitError.
+    Uses a dedicated download semaphore to avoid blocking message forwarding.
+    Includes a timeout mechanism to prevent indefinite hanging.
+    """
+    timeout = kwargs.pop('timeout', 1800)
+    max_retries = 5
+    attempt = 0
+
+    async with download_semaphore:
+        while attempt < max_retries:
+            try:
+                return await asyncio.wait_for(coro_func(*args, **kwargs), timeout=timeout)
+            except FloodWaitError as e:
+                attempt += 1
+                wait_time = e.seconds + 5
+                log_message(f"[{action_name}] 遇到 FloodWaitError。等待 {wait_time} 秒后重试 (尝试次数: {attempt}/{max_retries})...")
+                await asyncio.sleep(wait_time)
+            except asyncio.TimeoutError:
+                log_message(f"[{action_name}] 操作超时 ({timeout}秒)。放弃本次尝试。")
+                return None
+            except Exception as e:
+                log_message(f"[{action_name}] 发生错误: {e}")
+                raise e
+
+        log_message(f"[{action_name}] 超过最大重试次数，放弃操作。")
+        return None
+
+
+def _enqueue_download_task(task: dict) -> tuple[bool, str]:
+    if download_queue is None:
+        return False, "queue_not_ready"
+    try:
+        download_queue.put_nowait(task)
+        _update_download_queue_stats('enqueue')
+        _schedule_download_queue_alert(download_queue.qsize())
+        return True, "queued"
+    except asyncio.QueueFull:
+        _update_download_queue_stats('drop', reason='queue_full')
+        return False, "queue_full"
+
+
+async def _download_worker(worker_id: int):
+    log_message(f"下载队列 Worker#{worker_id} 已启动")
+    while True:
+        try:
+            task = await download_queue.get()
+            _update_download_queue_stats('dequeue')
+            try:
+                await _handle_download_task(task)
+            except Exception as e:
+                log_message(f"下载队列 Worker#{worker_id} 处理异常: {e}")
+            finally:
+                download_queue.task_done()
+        except asyncio.CancelledError:
+            log_message(f"下载队列 Worker#{worker_id} 已停止")
+            break
+        except Exception as e:
+            log_message(f"下载队列 Worker#{worker_id} 循环异常: {e}")
+            await asyncio.sleep(1)
+
+
+async def _handle_download_task(task: dict) -> None:
+    msg = task.get('msg')
+    if not msg:
+        return
+    restricted_entry = task.get('restricted_entry') or {}
+    restricted_channel_id = task.get('restricted_channel_id')
+    media_type_detected = task.get('media_type_detected') or 'unknown'
+    chat_id = task.get('chat_id')
+
+    download_directory = (task.get('download_directory') or restricted_entry.get('download_directory') or '').strip()
+    if not download_directory:
+        log_message(f"跳过下载 {media_type_detected}，因为未配置下载目录。")
+        return
+
+    try:
+        os.makedirs(download_directory, exist_ok=True)
+    except Exception as e:
+        log_message(f"创建下载目录失败: {download_directory} err={e}")
+        return
+
+    # Smart filename generation
+    base_name = str(msg.id)
+    download_target = msg
+    primary_document = _get_primary_document(msg)
+    if isinstance(getattr(msg, 'media', None), MessageMediaWebPage) and primary_document:
+        download_target = primary_document
+    original_ext = ".mp4"
+    original_filename = None
+    expected_size = 0
+
+    if media_type_detected == 'photo':
+        original_ext = ".jpg"
+    elif media_type_detected == 'audio':
+        original_ext = ".mp3"
+
+    if primary_document:
+        expected_size = primary_document.size if hasattr(primary_document, 'size') else 0
+        for attr in getattr(primary_document, 'attributes', []) or []:
+            if hasattr(attr, 'file_name') and attr.file_name:
+                original_filename = attr.file_name
+                if '.' in original_filename:
+                    original_ext = os.path.splitext(original_filename)[1].lower()
+                break
+
+    if not original_filename:
+        if msg.video and hasattr(msg.video, 'mime_type') and msg.video.mime_type:
+            ext = get_extension_from_mime(msg.video.mime_type)
+            if ext:
+                original_ext = ext
+            expected_size = msg.video.size if hasattr(msg.video, 'size') else 0
+        elif primary_document and hasattr(primary_document, 'mime_type') and primary_document.mime_type:
+            ext = get_extension_from_mime(primary_document.mime_type)
+            if ext:
+                original_ext = ext
+
+    final_filename = ""
+    final_folder_path = download_directory
+
+    # Check for Album/Grouped Media
+    if msg.grouped_id:
+        try:
+            search_min_id = msg.id - 10
+            search_max_id = msg.id + 10
+            nearby_msgs = await client.get_messages(
+                chat_id,
+                limit=50,
+                min_id=search_min_id if search_min_id > 0 else 0,
+                max_id=search_max_id
+            )
+            if nearby_msgs is None:
+                nearby_msgs = []
+            else:
+                nearby_msgs = list(nearby_msgs)
+            album_msgs = [m for m in nearby_msgs if m.grouped_id == msg.grouped_id]
+            if not any(m.id == msg.id for m in album_msgs):
+                album_msgs.append(msg)
+            album_msgs.sort(key=lambda m: m.id)
+
+            album_caption = ""
+            for m in album_msgs:
+                if m.message:
+                    album_caption = m.message
+                    break
+
+            grouped_id_key = int(msg.grouped_id)
+            folder_name = _album_folder_cache.get(grouped_id_key, "")
+            if not folder_name:
+                folder_name = str(msg.grouped_id)
+                if album_caption:
+                    keywords = extract_keywords(album_caption, limit=30)
+                    if keywords:
+                        folder_name = keywords
+                _album_folder_cache[grouped_id_key] = folder_name
+
+            final_folder_path = os.path.join(download_directory, folder_name)
+            os.makedirs(final_folder_path, exist_ok=True)
+
+            try:
+                type_sequence = []
+                for m in album_msgs:
+                    m_ext = ".jpg"
+                    if m.video:
+                        m_ext = ".mp4"
+                    elif m.document:
+                        if hasattr(m.document, 'mime_type') and m.document.mime_type:
+                            m_ext = "." + m.document.mime_type.split('/')[-1]
+                    if m_ext == original_ext:
+                        type_sequence.append(m.id)
+
+                if msg.id in type_sequence:
+                    index = type_sequence.index(msg.id) + 1
+                else:
+                    index = len(type_sequence) + 1
+            except ValueError:
+                index = msg.id
+
+            final_filename = f"{folder_name}_{index}{original_ext}"
+            log_message(
+                f"检测到相册消息 (Group: {msg.grouped_id})。按类型编号 - {media_type_detected}: {index}。"
+                f"归档至: '{folder_name}/{final_filename}'"
+            )
+        except Exception as e:
+            final_filename = f"{base_name}{original_ext}"
+    if not final_filename:
+        try:
+            potential_name = msg.message or ""
+            if potential_name:
+                clean_name = sanitize_filename(potential_name, limit=60)
+                if clean_name:
+                    final_filename = f"{clean_name}{original_ext}"
+                else:
+                    final_filename = f"{base_name}{original_ext}"
+            elif original_filename:
+                clean_name = sanitize_filename(os.path.splitext(original_filename)[0], limit=60)
+                if clean_name:
+                    final_filename = f"{clean_name}{original_ext}"
+                else:
+                    final_filename = f"{base_name}{original_ext}"
+            else:
+                final_filename = f"{base_name}{original_ext}"
+        except Exception:
+            final_filename = f"{base_name}{original_ext}"
+
+    file_path = os.path.join(final_folder_path, final_filename)
+    safe_file_path = _resolve_non_conflicting_path(file_path, msg.id)
+    if safe_file_path != file_path:
+        log_message(f"检测到同名文件，改用防覆盖路径: {os.path.basename(safe_file_path)}")
+    file_path = safe_file_path
+
+    size_info = f" (预计 {expected_size / (1024*1024):.1f}MB)" if expected_size > 0 else ""
+    source_url = _extract_first_url_from_text(msg.message or "")
+    source_title = _extract_title_for_download(msg, original_filename or "")
+    source_resolution = _extract_video_resolution_text(msg)
+    details = []
+    if source_url:
+        details.append(f"原链接: {source_url}")
+    if source_title:
+        details.append(f"标题: {source_title}")
+    if source_resolution:
+        details.append(f"分辨率: {source_resolution}")
+    detail_text = f" | {' | '.join(details)}" if details else ""
+    log_message(f"开始下载 {media_type_detected}{size_info} 到 {file_path}...{detail_text}")
+
+    while True:
+        can_download, risk_reason, retry_after = _check_download_risk_controls(
+            restricted_channel_id=restricted_channel_id,
+            download_directory=final_folder_path,
+            msg=msg,
+            expected_size=expected_size,
+        )
+        if can_download:
+            break
+
+        if retry_after > 0:
+            log_message(f"触发下载风控，已进入队列等待 {retry_after}s 后重试: {risk_reason}")
+            await asyncio.sleep(retry_after)
+            continue
+
+        log_message(f"触发下载风控，已跳过下载: {risk_reason}")
+        return
+
+    try:
+        progress_cb = None
+        if expected_size > 50 * 1024 * 1024:
+            progress_cb = create_progress_callback(file_path, media_type_detected)
+        download_timeout = _compute_download_timeout_seconds(expected_size)
+        log_message(
+            f"下载超时设置 [{media_type_detected}]: {download_timeout}s "
+            f"(文件大小: {expected_size / (1024 * 1024):.1f}MB)"
+        )
+
+        downloaded_file = await reliable_download_action(
+            f"下载 {media_type_detected} {msg.id}",
+            client.download_media,
+            download_target,
+            file=file_path,
+            progress_callback=progress_cb,
+            timeout=download_timeout,
+        )
+
+        if downloaded_file:
+            actual_size = os.path.getsize(downloaded_file) if os.path.exists(downloaded_file) else 0
+            completion_details = []
+            if source_url:
+                completion_details.append(f"原链接: {source_url}")
+            if source_title:
+                completion_details.append(f"标题: {source_title}")
+            if source_resolution:
+                completion_details.append(f"分辨率: {source_resolution}")
+            completion_detail_text = f" | {' | '.join(completion_details)}" if completion_details else ""
+            if expected_size > 0 and actual_size > 0:
+                size_diff_percent = abs(actual_size - expected_size) / expected_size * 100
+                if size_diff_percent > 5:
+                    log_message(
+                        f"警告: 下载文件大小异常 - 预期{expected_size/(1024*1024):.1f}MB，"
+                        f"实际{actual_size/(1024*1024):.1f}MB (差异{size_diff_percent:.1f}%)"
+                    )
+                else:
+                    log_message(
+                        f"{media_type_detected} 已成功下载到 {downloaded_file} "
+                        f"({actual_size/(1024*1024):.1f}MB)。{completion_detail_text}"
+                    )
+            else:
+                log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。{completion_detail_text}")
+        else:
+            log_message(f"{media_type_detected} 下载失败。")
+    except Exception as e:
+        log_message(f"{media_type_detected} 下载异常: {e}")
 
 def extract_keywords(text, limit=30):
     """
@@ -2792,227 +3497,26 @@ async def new_message_handler(event, *, backfill: bool = False):
 
             log_message(f"在频道 {restricted_channel_id} 中检测到 {media_type_detected} 消息 (ID: {msg.id})。")
 
-            # --- 1. Execute Download ---
+            # --- 1. Queue Download (non-blocking) ---
             if should_download:
-                if download_directory:
-                    # Ensure the download directory exists
-                    os.makedirs(download_directory, exist_ok=True)
-                    # Smart filename generation
-                    base_name = str(event.message.id)
-                    download_target = msg
-                    primary_document = _get_primary_document(msg)
-                    if isinstance(getattr(msg, 'media', None), MessageMediaWebPage) and primary_document:
-                        download_target = primary_document
-                    original_ext = ".mp4" # Default fallback
-                    original_filename = None  # 保存原始文件名
-                    expected_size = 0  # 预期文件大小
-                    
-                    if media_type_detected == 'photo':
-                        original_ext = ".jpg"
-                    elif media_type_detected == 'audio':
-                        original_ext = ".mp3"
-                    
-                    # 优先从document属性中获取原始文件名和扩展名
-                    if primary_document:
-                        expected_size = primary_document.size if hasattr(primary_document, 'size') else 0
-                        for attr in getattr(primary_document, 'attributes', []) or []:
-                            if hasattr(attr, 'file_name') and attr.file_name:
-                                original_filename = attr.file_name
-                                # 从原始文件名提取扩展名
-                                if '.' in original_filename:
-                                    original_ext = os.path.splitext(original_filename)[1].lower()
-                                break
-                    
-                    # 使用MIME类型识别扩展名（仅在没有原始文件名时）
-                    if not original_filename:
-                        if msg.video and hasattr(msg.video, 'mime_type') and msg.video.mime_type:
-                            ext = get_extension_from_mime(msg.video.mime_type)
-                            if ext:
-                                original_ext = ext
-                            expected_size = msg.video.size if hasattr(msg.video, 'size') else 0
-                        elif primary_document and hasattr(primary_document, 'mime_type') and primary_document.mime_type:
-                            ext = get_extension_from_mime(primary_document.mime_type)
-                            if ext:
-                                original_ext = ext
-
-                    final_filename = ""
-                    final_folder_path = download_directory
-
-                    # Check for Album/Grouped Media
-                    if msg.grouped_id:
-                        try:
-                            search_min_id = msg.id - 10
-                            search_max_id = msg.id + 10
-                            nearby_msgs = await client.get_messages(
-                                event.chat_id, 
-                                limit=50,
-                                min_id=search_min_id if search_min_id > 0 else 0, 
-                                max_id=search_max_id
-                            )
-                            if nearby_msgs is None:
-                                nearby_msgs = []
-                            else:
-                                nearby_msgs = list(nearby_msgs)
-                            album_msgs = [m for m in nearby_msgs if m.grouped_id == msg.grouped_id]
-                            if not any(m.id == msg.id for m in album_msgs):
-                                album_msgs.append(msg)
-                            album_msgs.sort(key=lambda m: m.id)
-                            
-                            album_caption = ""
-                            for m in album_msgs:
-                                if m.message:
-                                    album_caption = m.message
-                                    break
-                            
-                            grouped_id_key = int(msg.grouped_id)
-                            folder_name = _album_folder_cache.get(grouped_id_key, "")
-                            if not folder_name:
-                                folder_name = str(msg.grouped_id)
-                                if album_caption:
-                                    # 极简风格：只保留关键词，去除停用词
-                                    keywords = extract_keywords(album_caption, limit=30)
-                                    if keywords:
-                                        folder_name = keywords
-                                _album_folder_cache[grouped_id_key] = folder_name
-                            
-                            final_folder_path = os.path.join(download_directory, folder_name)
-                            os.makedirs(final_folder_path, exist_ok=True)
-
-                            try:
-                                # 按文件类型分别计数：图片单独编号，视频单独编号
-                                type_sequence = []
-                                for m in album_msgs:
-                                    m_ext = ".jpg"  # Default for photo
-                                    if m.video:
-                                        m_ext = ".mp4"  # Default for video
-                                    elif m.document:
-                                        if hasattr(m.document, 'mime_type') and m.document.mime_type:
-                                            m_ext = "." + m.document.mime_type.split('/')[-1]
-                                    # 只有相同扩展名的才计入同一序列
-                                    if m_ext == original_ext:
-                                        type_sequence.append(m.id)
-                                
-                                if msg.id in type_sequence:
-                                    index = type_sequence.index(msg.id) + 1
-                                else:
-                                    index = len(type_sequence) + 1
-                            except ValueError:
-                                index = msg.id
-                            
-                            # File inherits folder name for better organization
-                            final_filename = f"{folder_name}_{index}{original_ext}"
-                            log_message(f"检测到相册消息 (Group: {msg.grouped_id})。按类型编号 - {media_type_detected}: {index}。归档至: '{folder_name}/{final_filename}'")
-                        except Exception as e:
-                            log_message(f"处理相册逻辑失败: {e}。")
-                    
-                    if not final_filename:
-                        try:
-                            # 优先级调整：消息文本 > 原始文件名 > fallback
-                            potential_name = msg.message or ""
-                            if potential_name:
-                                # 优先使用消息文本作为文件名
-                                clean_name = sanitize_filename(potential_name, limit=60)
-                                if clean_name:
-                                    final_filename = f"{clean_name}{original_ext}"
-                                else:
-                                    final_filename = f"{base_name}{original_ext}"
-                            elif original_filename:
-                                # 其次使用原始文件名（保持原始扩展名）
-                                clean_name = sanitize_filename(os.path.splitext(original_filename)[0], limit=60)
-                                if clean_name:
-                                    final_filename = f"{clean_name}{original_ext}"
-                                else:
-                                    final_filename = f"{base_name}{original_ext}"
-                            else:
-                                # 最后使用默认名称
-                                final_filename = f"{base_name}{original_ext}"
-                        except Exception as e:
-                            final_filename = f"{base_name}{original_ext}"
-
-                    file_path = os.path.join(final_folder_path, final_filename)
-                    safe_file_path = _resolve_non_conflicting_path(file_path, msg.id)
-                    if safe_file_path != file_path:
-                        log_message(f"检测到同名文件，改用防覆盖路径: {os.path.basename(safe_file_path)}")
-                    file_path = safe_file_path
-                    size_info = f" (预计 {expected_size / (1024*1024):.1f}MB)" if expected_size > 0 else ""
-                    source_url = _extract_first_url_from_text(msg.message or "")
-                    source_title = _extract_title_for_download(msg, original_filename or "")
-                    source_resolution = _extract_video_resolution_text(msg)
-                    details = []
-                    if source_url:
-                        details.append(f"原链接: {source_url}")
-                    if source_title:
-                        details.append(f"标题: {source_title}")
-                    if source_resolution:
-                        details.append(f"分辨率: {source_resolution}")
-                    detail_text = f" | {' | '.join(details)}" if details else ""
-                    log_message(f"开始下载 {media_type_detected}{size_info} 到 {file_path}...{detail_text}")
-
-                    while True:
-                        can_download, risk_reason, retry_after = _check_download_risk_controls(
-                            restricted_channel_id=restricted_channel_id,
-                            download_directory=final_folder_path,
-                            msg=msg,
-                            expected_size=expected_size,
-                        )
-                        if can_download:
-                            break
-
-                        if retry_after > 0:
-                            log_message(f"触发下载风控，已进入队列等待 {retry_after}s 后重试: {risk_reason}")
-                            await asyncio.sleep(retry_after)
-                            continue
-
-                        log_message(f"触发下载风控，已跳过下载: {risk_reason}")
-                        downloaded_file = None
-                        break
-
-                    if can_download:
-                        try:
-                            # 为大文件（>50MB）添加进度回调
-                            progress_cb = None
-                            if expected_size > 50 * 1024 * 1024:  # 50MB
-                                progress_cb = create_progress_callback(file_path, media_type_detected)
-                            download_timeout = _compute_download_timeout_seconds(expected_size)
-                            log_message(
-                                f"下载超时设置 [{media_type_detected}]: {download_timeout}s "
-                                f"(文件大小: {expected_size / (1024 * 1024):.1f}MB)"
-                            )
-                            
-                            downloaded_file = await reliable_action(
-                                f"下载 {media_type_detected} {msg.id}",
-                                client.download_media,
-                                download_target,
-                                file=file_path,
-                                progress_callback=progress_cb,
-                                timeout=download_timeout,
-                            )
-                            
-                            if downloaded_file:
-                                # 验证文件完整性
-                                actual_size = os.path.getsize(downloaded_file) if os.path.exists(downloaded_file) else 0
-                                completion_details = []
-                                if source_url:
-                                    completion_details.append(f"原链接: {source_url}")
-                                if source_title:
-                                    completion_details.append(f"标题: {source_title}")
-                                if source_resolution:
-                                    completion_details.append(f"分辨率: {source_resolution}")
-                                completion_detail_text = f" | {' | '.join(completion_details)}" if completion_details else ""
-                                if expected_size > 0 and actual_size > 0:
-                                    size_diff_percent = abs(actual_size - expected_size) / expected_size * 100
-                                    if size_diff_percent > 5:  # 大小差异超过5%
-                                        log_message(f"警告: 下载文件大小异常 - 预期{expected_size/(1024*1024):.1f}MB，实际{actual_size/(1024*1024):.1f}MB (差异{size_diff_percent:.1f}%)")
-                                    else:
-                                        log_message(f"{media_type_detected} 已成功下载到 {downloaded_file} ({actual_size/(1024*1024):.1f}MB)。{completion_detail_text}")
-                                else:
-                                    log_message(f"{media_type_detected} 已成功下载到 {downloaded_file}。{completion_detail_text}")
-                            else:
-                                log_message(f"{media_type_detected} 下载失败。")
-                        except Exception as e:
-                            log_message(f"{media_type_detected} 下载异常: {e}")
+                task = {
+                    "msg": msg,
+                    "chat_id": event.chat_id,
+                    "restricted_channel_id": restricted_channel_id,
+                    "restricted_entry": dict(restricted_entry or {}),
+                    "media_type_detected": media_type_detected,
+                    "download_directory": download_directory,
+                }
+                queued, reason = _enqueue_download_task(task)
+                if queued:
+                    log_message(
+                        f"下载任务已入队 ch={restricted_channel_id} msg={msg.id} "
+                        f"queue={download_queue.qsize()}/{DOWNLOAD_QUEUE_MAXSIZE}"
+                    )
                 else:
-                    log_message(f"跳过下载 {media_type_detected}，因为未配置下载目录。")
+                    log_message(
+                        f"下载队列已满，跳过下载 ch={restricted_channel_id} msg={msg.id} reason={reason}"
+                    )
 
             # --- 2. Execute Forward ---
             if should_forward:
@@ -3093,6 +3597,7 @@ async def monitor_config_changes():
                             # Update Debug Mode
                             DEBUG_MODE = current_config.get('debug_mode', False)
                             _apply_download_concurrency(current_config, announce=True)
+                            _apply_download_queue_config(current_config, announce=True)
                             initialized = False  # 重置标志，便于在模式切换时重新显示初始化日志
                             
                             last_config_mtime = mtime
@@ -3137,6 +3642,7 @@ async def main():
     # 2. Add event handler after client is connected
     _register_event_handlers()
     log_message(f"已成功连接并授权 Telegram 客户端。")
+    _ensure_download_workers(DOWNLOAD_CONCURRENCY)
     
     # --- DIAGNOSIS: List all available dialogs ---
     try:

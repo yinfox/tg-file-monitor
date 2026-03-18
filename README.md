@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.19`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.20`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.19
+y1nf0x/tg-file-monitor:0.5.20
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -394,7 +394,12 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.19 (2026-03-17) - 当前版本
+### v0.5.20 (2026-03-18) - 当前版本
+- ✅ 日志面板实时展示下载队列积压与并发状态
+- ✅ 队列积压超过阈值自动降速，回落后自动恢复并发
+- ✅ 新增队列自动降速配置（阈值/恢复阈值/最低并发）
+
+### v0.5.19 (2026-03-17)
 - ✅ 猫眼网播·网络电影改用官方接口拉取，避免误取票房榜
 - ✅ 网络电影新增“上线天数”剔除阈值（独立于 TMDB 完结）
 - ✅ 追剧白名单按来源保留分组标题（网络电影可单独维护）

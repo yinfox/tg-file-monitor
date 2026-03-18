@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.19`
+Latest image: `y1nf0x/tg-file-monitor:0.5.20`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.19
+y1nf0x/tg-file-monitor:0.5.20
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,12 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.19 (2026-03-17) - Current
+### v0.5.20 (2026-03-18) - Current
+- ✅ Log page shows download queue backlog and concurrency in real time
+- ✅ Auto-throttle download concurrency when queue exceeds threshold, auto-recover on cooldown
+- ✅ New queue auto-throttle settings (threshold/recover threshold/min concurrency)
+
+### v0.5.19 (2026-03-17)
 - ✅ Maoyan web movies now use the official API (avoid grabbing box-office titles)
 - ✅ Web movies: add “days since release” removal threshold (independent of TMDB finish)
 - ✅ Drama whitelist preserves per-source groups (web movies editable separately)

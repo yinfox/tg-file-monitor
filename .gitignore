@@ -61,6 +61,7 @@ logs/
 *.db
 config/message_queue.json
 config/download_risk_stats.json
+config/download_queue_stats.json
 config/bot_monitor.lock
 
 # Downloads

@@ -289,6 +289,77 @@
                                     class="form-control form-control-sm" min="0" step="0.1" value="{{ risk.get('min_free_space_gb', 5) }}">
                             </div>
 
+                            {% set queue_alert = config.get('download_queue_alert', {}) %}
+                            {% set queue_throttle = config.get('download_queue_throttle', {}) %}
+                            <div class="col-12 mt-2">
+                                <div class="border-top pt-2 small text-muted">下载队列设置</div>
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="download_queue_maxsize" class="form-label small">下载队列上限:</label>
+                                <input type="number" id="download_queue_maxsize" name="download_queue_maxsize"
+                                    class="form-control form-control-sm" min="10" max="5000" value="{{ config.get('download_queue_maxsize', 200) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="download_queue_alert_threshold" class="form-label small">队列告警阈值:</label>
+                                <input type="number" id="download_queue_alert_threshold" name="download_queue_alert_threshold"
+                                    class="form-control form-control-sm" min="1" value="{{ queue_alert.get('threshold', 100) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="download_queue_alert_cooldown_seconds" class="form-label small">告警冷却(秒):</label>
+                                <input type="number" id="download_queue_alert_cooldown_seconds" name="download_queue_alert_cooldown_seconds"
+                                    class="form-control form-control-sm" min="30" value="{{ queue_alert.get('cooldown_seconds', 600) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="download_queue_alert_notify_user_ids" class="form-label small">告警通知用户ID:</label>
+                                <input type="text" id="download_queue_alert_notify_user_ids" name="download_queue_alert_notify_user_ids"
+                                    class="form-control form-control-sm" placeholder="123456, @user"
+                                    value="{{ queue_alert.get('notify_user_ids', '') }}">
+                            </div>
+
+                            <div class="col-12 mb-2">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="download_queue_alert_enabled" name="download_queue_alert_enabled"
+                                        {% if queue_alert.get('enabled', False) %}checked{% endif %}>
+                                    <label class="form-check-label small" for="download_queue_alert_enabled">启用下载队列告警</label>
+                                </div>
+                                <div class="form-text small">队列长度达到阈值时通知（默认使用填写的用户ID）。</div>
+                            </div>
+
+                            <div class="col-12 mt-2">
+                                <div class="border-top pt-2 small text-muted">队列自动降速</div>
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="download_queue_throttle_threshold" class="form-label small">降速阈值:</label>
+                                <input type="number" id="download_queue_throttle_threshold" name="download_queue_throttle_threshold"
+                                    class="form-control form-control-sm" min="1" value="{{ queue_throttle.get('threshold', queue_alert.get('threshold', 100)) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="download_queue_throttle_recover_threshold" class="form-label small">恢复阈值(0自动):</label>
+                                <input type="number" id="download_queue_throttle_recover_threshold" name="download_queue_throttle_recover_threshold"
+                                    class="form-control form-control-sm" min="0" value="{{ queue_throttle.get('recover_threshold', 0) }}">
+                            </div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="download_queue_throttle_min_concurrency" class="form-label small">最低并发:</label>
+                                <input type="number" id="download_queue_throttle_min_concurrency" name="download_queue_throttle_min_concurrency"
+                                    class="form-control form-control-sm" min="1" value="{{ queue_throttle.get('min_concurrency', 1) }}">
+                            </div>
+
+                            <div class="col-12 mb-2">
+                                <div class="form-check form-switch">
+                                    <input class="form-check-input" type="checkbox" id="download_queue_throttle_enabled" name="download_queue_throttle_enabled"
+                                        {% if queue_throttle.get('enabled', True) %}checked{% endif %}>
+                                    <label class="form-check-label small" for="download_queue_throttle_enabled">启用队列自动降速</label>
+                                </div>
+                                <div class="form-text small">队列超过阈值时动态下调下载并发，回落到恢复阈值后自动恢复。</div>
+                            </div>
+
                             <div class="col-12">
                                 <button type="submit" class="btn btn-warning btn-sm w-100">保存下载风控设置</button>
                             </div>

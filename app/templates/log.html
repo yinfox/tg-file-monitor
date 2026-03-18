@@ -14,6 +14,22 @@
                 </label>
             </div>
         </div>
+        <div class="card mb-3 shadow-sm">
+            <div class="card-body py-2">
+                <div class="d-flex flex-wrap gap-3 small">
+                    <div>队列: <span class="fw-bold" id="queueSize">{{ download_queue_stats.get('queue_size', 0) }}</span>/<span id="queueMax">{{ download_queue_stats.get('maxsize', '-') }}</span></div>
+                    <div>丢弃: <span class="fw-bold text-danger" id="queueDropped">{{ download_queue_stats.get('dropped_total', 0) }}</span></div>
+                    <div>
+                        并发: <span class="fw-bold" id="queueConcurrency">
+                            {{ download_queue_stats.get('effective_concurrency', download_queue_stats.get('config_concurrency', '-')) }}
+                        </span>
+                        <span id="queueThrottleBadge" class="badge bg-warning text-dark ms-1 {% if not download_queue_stats.get('throttle_active') %}d-none{% endif %}">降速中</span>
+                    </div>
+                    <div>阈值: <span class="fw-bold" id="queueThreshold">{{ download_queue_stats.get('throttle_threshold', '-') }}</span></div>
+                    <div>更新: <span class="fw-bold" id="queueUpdatedAt">{{ download_queue_stats.get('updated_at', '-') }}</span></div>
+                </div>
+            </div>
+        </div>
         <div class="card p-3 shadow-sm" style="max-height: 70vh; overflow-y: auto;" id="logContainer">
             <pre class="mb-0" id="logContent">{{ log_output|safe }}</pre>
         </div>
@@ -35,14 +51,39 @@ let countdown = refreshInterval;
 let intervalId = null;
 let countdownId = null;
 let lastKey = "";
+const initialQueueStats = {{ (download_queue_stats or {})|tojson }};
 
 const logContainer = document.getElementById('logContainer');
 const logContent = document.getElementById('logContent');
 const autoRefreshToggle = document.getElementById('autoRefreshToggle');
 const refreshCountdown = document.getElementById('refreshCountdown');
+const queueSizeEl = document.getElementById('queueSize');
+const queueMaxEl = document.getElementById('queueMax');
+const queueDroppedEl = document.getElementById('queueDropped');
+const queueConcurrencyEl = document.getElementById('queueConcurrency');
+const queueThresholdEl = document.getElementById('queueThreshold');
+const queueUpdatedAtEl = document.getElementById('queueUpdatedAt');
+const queueThrottleBadge = document.getElementById('queueThrottleBadge');
 
 function scrollToBottom() {
     logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+function updateQueueStats(stats) {
+    if (!stats || typeof stats !== 'object') return;
+    if (queueSizeEl) queueSizeEl.textContent = stats.queue_size ?? 0;
+    if (queueMaxEl) queueMaxEl.textContent = stats.maxsize ?? '-';
+    if (queueDroppedEl) queueDroppedEl.textContent = stats.dropped_total ?? 0;
+    if (queueConcurrencyEl) {
+        const effective = stats.effective_concurrency ?? stats.config_concurrency ?? '-';
+        queueConcurrencyEl.textContent = effective;
+    }
+    if (queueThresholdEl) queueThresholdEl.textContent = stats.throttle_threshold ?? '-';
+    if (queueUpdatedAtEl) queueUpdatedAtEl.textContent = stats.updated_at ?? '-';
+    if (queueThrottleBadge) {
+        const active = !!stats.throttle_active;
+        queueThrottleBadge.classList.toggle('d-none', !active);
+    }
 }
 
 function refreshLog() {
@@ -53,6 +94,9 @@ function refreshLog() {
     fetch(url)
         .then(response => response.json())
         .then(data => {
+            if (data && data.download_queue_stats) {
+                updateQueueStats(data.download_queue_stats);
+            }
             if (data && data.key) {
                 lastKey = data.key;
             }
@@ -94,6 +138,7 @@ function startAutoRefresh() {
 
 // 初始滚动到底部
 scrollToBottom();
+updateQueueStats(initialQueueStats);
 
 // 启动自动刷新
 if (autoRefresh) {

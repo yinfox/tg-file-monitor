@@ -41,6 +41,15 @@
                     <span class="text-success fw-bold">{{ auth_status }}</span>
                     {% endif %}
                 </div>
+                {% if download_queue_stats %}
+                <div class="mb-2 small">
+                    <span class="text-muted">下载队列:</span>
+                    <span class="fw-bold">{{ download_queue_stats.get('queue_size', 0) }}/{{ download_queue_stats.get('maxsize', '-') }}</span>
+                    {% if download_queue_stats.get('dropped_total', 0) %}
+                    <span class="text-danger ms-1">丢弃: {{ download_queue_stats.get('dropped_total', 0) }}</span>
+                    {% endif %}
+                </div>
+                {% endif %}
 
                 {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}
                 <a href="{{ url_for('login') }}" class="btn btn-sm w-100 mb-2" 

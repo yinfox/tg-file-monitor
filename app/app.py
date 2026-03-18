@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.19"
+VERSION = "0.5.20"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -48,6 +48,7 @@ CONFIG_DIR = 'config' # Define the config directory
 CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
 DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
+DOWNLOAD_QUEUE_STATS_FILE = os.path.join(CONFIG_DIR, 'download_queue_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
 DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
 TV_CHANNEL_FILTERS_FILE = os.path.join(CONFIG_DIR, 'tvchannel_filters.json')
@@ -102,6 +103,7 @@ def load_config():
         "file_monitor_scan_interval": 5,
         "file_monitor_dir_state_check_interval": 0,
         "download_concurrency": 2,
+        "download_queue_maxsize": 200,
         "startup_tv_whitelist_scan_limit": 20,
         "log_refresh_interval_seconds": LOG_REFRESH_INTERVAL_DEFAULT,
         "log_auto_refresh_enabled": False,
@@ -152,6 +154,18 @@ def load_config():
             "download_timeout_max_seconds": 10800,
             "download_timeout_buffer_seconds": 300,
             "download_timeout_min_speed_mb_s": 1.0
+        },
+        "download_queue_alert": {
+            "enabled": False,
+            "threshold": 100,
+            "cooldown_seconds": 600,
+            "notify_user_ids": ""
+        },
+        "download_queue_throttle": {
+            "enabled": True,
+            "threshold": 100,
+            "recover_threshold": 0,
+            "min_concurrency": 1
         },
         "drama_calendar": {
             "source": "calendar",
@@ -286,6 +300,20 @@ def load_config():
                     merged_risk = default_config["download_risk_control"].copy()
                     merged_risk.update(config.get("download_risk_control") or {})
                     config["download_risk_control"] = merged_risk
+                if "download_queue_maxsize" not in config:
+                    config["download_queue_maxsize"] = default_config["download_queue_maxsize"]
+                if "download_queue_alert" not in config or not isinstance(config.get("download_queue_alert"), dict):
+                    config["download_queue_alert"] = default_config["download_queue_alert"].copy()
+                else:
+                    merged_queue_alert = default_config["download_queue_alert"].copy()
+                    merged_queue_alert.update(config.get("download_queue_alert") or {})
+                    config["download_queue_alert"] = merged_queue_alert
+                if "download_queue_throttle" not in config or not isinstance(config.get("download_queue_throttle"), dict):
+                    config["download_queue_throttle"] = default_config["download_queue_throttle"].copy()
+                else:
+                    merged_queue_throttle = default_config["download_queue_throttle"].copy()
+                    merged_queue_throttle.update(config.get("download_queue_throttle") or {})
+                    config["download_queue_throttle"] = merged_queue_throttle
                 if "drama_calendar" not in config or not isinstance(config.get("drama_calendar"), dict):
                     config["drama_calendar"] = default_config["drama_calendar"].copy()
                 else:
@@ -4759,6 +4787,40 @@ def load_download_risk_stats():
         return default_stats
 
 
+def load_download_queue_stats():
+    default_stats = {
+        "queue_size": 0,
+        "maxsize": 0,
+        "queued_total": 0,
+        "dropped_total": 0,
+        "last_queued_at": "",
+        "last_dropped_at": "",
+        "last_drop_reason": "",
+        "last_alert_at": "",
+        "config_concurrency": 0,
+        "effective_concurrency": 0,
+        "throttle_active": False,
+        "throttle_target_concurrency": 0,
+        "throttle_threshold": 0,
+        "throttle_recover_threshold": 0,
+        "last_throttle_at": "",
+        "last_throttle_reason": "",
+        "updated_at": ""
+    }
+    try:
+        if not os.path.exists(DOWNLOAD_QUEUE_STATS_FILE):
+            return default_stats
+        with open(DOWNLOAD_QUEUE_STATS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if not isinstance(data, dict):
+            return default_stats
+        merged = default_stats.copy()
+        merged.update(data)
+        return merged
+    except Exception:
+        return default_stats
+
+
 def clear_download_risk_stats():
     try:
         data = {
@@ -5137,6 +5199,8 @@ async def index():
     session_file = os.path.join(CONFIG_DIR, TELEGRAM_SESSION_NAME + '.session') # Updated path
     if os.path.exists(session_file):
         auth_status = "已认证 (会话文件存在)"
+
+    download_queue_stats = load_download_queue_stats()
     
     return render_template('index.html', 
                                   config=config, 
@@ -5144,7 +5208,8 @@ async def index():
                                   monitor_status=get_monitor_status(),
                                   file_monitor_status=get_file_monitor_status(),
                                   bot_monitor_status=get_bot_monitor_status(),
-                                  download_risk_stats=download_risk_stats)
+                                  download_risk_stats=download_risk_stats,
+                                  download_queue_stats=download_queue_stats)
 
 @app.route('/toggle_debug', methods=['POST'])
 @login_required
@@ -6419,6 +6484,7 @@ def monitor_log():
         log_output=log_output,
         refresh_interval=interval,
         auto_refresh=auto_refresh,
+        download_queue_stats=load_download_queue_stats(),
     )
 
 @app.route('/monitor_log_data')
@@ -6429,14 +6495,23 @@ def monitor_log_data():
     last_key = (request.args.get("last_key") or "").strip()
     current_key = tg_monitor_mgr.get_log_cache_key(max_lines=max_lines, max_bytes=max_bytes)
     if last_key and last_key == current_key:
-        return jsonify({"changed": False, "key": current_key})
+        return jsonify({
+            "changed": False,
+            "key": current_key,
+            "download_queue_stats": load_download_queue_stats(),
+        })
     log_output = tg_monitor_mgr.get_colored_log_output(
         colorize_log_line,
         empty_text="暂无日志。",
         max_lines=max_lines,
         max_bytes=max_bytes,
     )
-    return jsonify({"changed": True, "key": current_key, "log_output": log_output})
+    return jsonify({
+        "changed": True,
+        "key": current_key,
+        "log_output": log_output,
+        "download_queue_stats": load_download_queue_stats(),
+    })
 
 
 @app.route('/drama_calendar_log')
@@ -6619,9 +6694,41 @@ def manage_file_config():
                 duplicate_cooldown_seconds = int(request.form.get('duplicate_cooldown_seconds', 300))
                 max_single_file_size_mb = int(request.form.get('max_single_file_size_mb', 4096))
                 min_free_space_gb = float(request.form.get('min_free_space_gb', 5))
+                queue_maxsize = int(request.form.get('download_queue_maxsize', config.get('download_queue_maxsize', 200)))
+                queue_alert_threshold = int(request.form.get('download_queue_alert_threshold', config.get('download_queue_alert', {}).get('threshold', 100)))
+                queue_alert_cooldown = int(request.form.get('download_queue_alert_cooldown_seconds', config.get('download_queue_alert', {}).get('cooldown_seconds', 600)))
+                queue_alert_enabled = request.form.get('download_queue_alert_enabled') == 'on'
+                queue_alert_notify = (request.form.get('download_queue_alert_notify_user_ids') or '').strip()
+                queue_throttle_enabled = request.form.get('download_queue_throttle_enabled') == 'on'
+                queue_throttle_threshold = int(
+                    request.form.get(
+                        'download_queue_throttle_threshold',
+                        config.get('download_queue_throttle', {}).get('threshold', queue_alert_threshold),
+                    )
+                )
+                queue_throttle_recover_threshold = int(
+                    request.form.get(
+                        'download_queue_throttle_recover_threshold',
+                        config.get('download_queue_throttle', {}).get('recover_threshold', 0),
+                    )
+                )
+                queue_throttle_min_concurrency = int(
+                    request.form.get(
+                        'download_queue_throttle_min_concurrency',
+                        config.get('download_queue_throttle', {}).get('min_concurrency', 1),
+                    )
+                )
 
                 if per_channel_max < 0 or duplicate_cooldown_seconds < 0 or max_single_file_size_mb < 0 or min_free_space_gb < 0:
                     raise ValueError
+                if queue_maxsize < 10:
+                    raise ValueError
+                if queue_alert_threshold < 1 or queue_alert_cooldown < 30:
+                    raise ValueError
+                if queue_throttle_threshold < 1 or queue_throttle_min_concurrency < 1 or queue_throttle_recover_threshold < 0:
+                    raise ValueError
+                if queue_throttle_recover_threshold >= queue_throttle_threshold and queue_throttle_recover_threshold > 0:
+                    queue_throttle_recover_threshold = 0
 
                 config['download_risk_control'] = {
                     'enabled': enabled,
@@ -6629,6 +6736,19 @@ def manage_file_config():
                     'duplicate_cooldown_seconds': duplicate_cooldown_seconds,
                     'max_single_file_size_mb': max_single_file_size_mb,
                     'min_free_space_gb': min_free_space_gb,
+                }
+                config['download_queue_maxsize'] = min(5000, max(10, queue_maxsize))
+                config['download_queue_alert'] = {
+                    'enabled': queue_alert_enabled,
+                    'threshold': max(1, queue_alert_threshold),
+                    'cooldown_seconds': max(30, queue_alert_cooldown),
+                    'notify_user_ids': queue_alert_notify,
+                }
+                config['download_queue_throttle'] = {
+                    'enabled': queue_throttle_enabled,
+                    'threshold': max(1, queue_throttle_threshold),
+                    'recover_threshold': max(0, queue_throttle_recover_threshold),
+                    'min_concurrency': max(1, queue_throttle_min_concurrency),
                 }
                 save_config(config)
                 flash("下载风控设置已更新！", "success")

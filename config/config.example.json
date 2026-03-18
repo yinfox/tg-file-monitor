@@ -5,6 +5,7 @@
     "session_name": "telegram_monitor"
   },
   "download_concurrency": 2,
+  "download_queue_maxsize": 200,
   "startup_tv_whitelist_scan_limit": 20,
   "web_auth": {
     "username": "admin",
@@ -65,6 +66,12 @@
     "duplicate_cooldown_seconds": 300,
     "max_single_file_size_mb": 4096,
     "min_free_space_gb": 5
+  },
+  "download_queue_alert": {
+    "enabled": false,
+    "threshold": 100,
+    "cooldown_seconds": 600,
+    "notify_user_ids": ""
   },
   "hdhive_cookie": "",
   "hdhive_auto_unlock_points_threshold": 0
