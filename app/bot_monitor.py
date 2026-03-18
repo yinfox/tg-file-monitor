@@ -38,6 +38,9 @@ logger = logging.getLogger(__name__)
 
 # Get the project root directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Ensure project root is importable (for telegram_monitor, etc.)
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
 # Try to find config in BASE_DIR/config or ./config
 CONFIG_DIR = os.path.join(BASE_DIR, 'config')
 if not os.path.exists(CONFIG_DIR):
@@ -59,6 +62,10 @@ _115_SHARE_URL_RE = re.compile(
 )
 _115_SHARE_CODE_RE = re.compile(r'\b[0-9A-Za-z]{8,}-[0-9A-Za-z]{4,}\b')
 _115_CID_RE = re.compile(r'(?:cid|目录|目标)\s*[:=]\s*(U_1_)?(\d+)', re.IGNORECASE)
+_HDHIVE_RESOURCE_RE = re.compile(
+    r'(?:https?://)?(?:www\.)?[^/\s]*hdhive\.[a-z]{2,}/resource/(?:115/)?[0-9A-Za-z]{16,64}',
+    re.IGNORECASE,
+)
 
 # Load environment variables
 load_dotenv(os.path.join(CONFIG_DIR, '.env'))
@@ -229,6 +236,83 @@ def _extract_115_share_link_from_message(msg) -> str:
         pass
 
     return ''
+
+
+def _extract_hdhive_link(text: str) -> str:
+    if not text:
+        return ''
+    m = _HDHIVE_RESOURCE_RE.search(text)
+    if not m:
+        return ''
+    url = m.group(0).rstrip(')>,.;!\"\'')
+    if not url.lower().startswith('http'):
+        url = f"https://{url}"
+    return url
+
+
+def _extract_hdhive_link_from_message(msg) -> str:
+    text = getattr(msg, 'message', None) or getattr(msg, 'text', None) or ''
+    link = _extract_hdhive_link(text)
+    if link:
+        return link
+
+    entities = getattr(msg, 'entities', None) or []
+    for ent in entities:
+        ent_url = getattr(ent, 'url', None)
+        if ent_url:
+            link = _extract_hdhive_link(ent_url)
+            if link:
+                return link
+        try:
+            offset = int(getattr(ent, 'offset', 0))
+            length = int(getattr(ent, 'length', 0))
+            if length and text:
+                fragment = text[offset:offset + length]
+                link = _extract_hdhive_link(fragment)
+                if link:
+                    return link
+        except Exception:
+            pass
+
+    try:
+        media = getattr(msg, 'media', None)
+        if isinstance(media, types.MessageMediaWebPage):
+            wp = getattr(media, 'webpage', None)
+            for candidate in (getattr(wp, 'url', None), getattr(wp, 'display_url', None)):
+                if candidate:
+                    link = _extract_hdhive_link(candidate)
+                    if link:
+                        return link
+    except Exception:
+        pass
+
+    return ''
+
+
+async def _resolve_hdhive_115_link(hdhive_url: str, config: dict) -> Tuple[Optional[str], str]:
+    if not hdhive_url:
+        return None, "空链接"
+    try:
+        import telegram_monitor as tg_monitor
+        # Ensure resolver reads latest config for cookie / open api / base url
+        tg_monitor.current_config = config or tg_monitor.load_config()
+        to_thread = getattr(asyncio, 'to_thread', None)
+        if to_thread:
+            return await to_thread(tg_monitor._resolve_hdhive_115_url_with_note_sync, hdhive_url)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, tg_monitor._resolve_hdhive_115_url_with_note_sync, hdhive_url)
+    except Exception as e:
+        return None, f"解析异常: {e}"
+
+
+def _message_has_any_link(msg, text: str = "") -> bool:
+    if _extract_115_share_link_from_message(msg):
+        return True
+    if _extract_hdhive_link_from_message(msg):
+        return True
+    if text and re.search(r'https?://\S+', text):
+        return True
+    return False
 
 
 def _format_size(size) -> str:
@@ -1006,6 +1090,7 @@ async def main():
             "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
             "6. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
             "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
+            "8. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
         )
         await event.respond(help_text)
 
@@ -1042,6 +1127,7 @@ async def main():
             "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
             "6. **搜寻影视**: 发送 `/movie <剧名>`\n"
             "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
+            "8. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
         )
         await event.reply(help_text)
 
@@ -1404,9 +1490,71 @@ async def main():
                 await event.reply(f"❌ 转存失败: {result.get('message') or '未知错误'}")
             return
 
-        if event.file:
-            await event.reply("请先通过 /start 菜单点击 '🍪 更新 Cookies' 按钮后再发送文件。")
+        # --- 3.6 HDHive Link -> 115 Share Transfer ---
+        hdhive_link = _extract_hdhive_link_from_message(event.message)
+        if hdhive_link:
+            target_cid = _extract_115_target_cid(text, config)
+            msg = await event.reply("检测到影巢链接，正在解析为 115 分享链接...")
+
+            real_url, note = await _resolve_hdhive_115_link(hdhive_link, config)
+            if not real_url:
+                hint = ""
+                if not (config.get('hdhive_cookie') or config.get('hdhive_open_api_key')):
+                    hint = "未配置 HDHive Cookie/Open API Key。"
+                await msg.edit(f"❌ 影巢链接解析失败。{note or ''} {hint}".strip())
+                return
+
+            reply_link = _extract_115_share_link(real_url) or real_url
+            client_115, err_msg = get_115_client(config)
+            if not client_115:
+                await msg.edit(
+                    "✅ 已解析 115 链接:\n"
+                    f"{reply_link}\n\n"
+                    f"⚠️ 未自动转存：{err_msg}\n"
+                    "如需转存，请配置 115 Cookie 并发送 `cid=目标目录`。"
+                )
+                return
+
+            if not target_cid:
+                await msg.edit(
+                    "✅ 已解析 115 链接:\n"
+                    f"{reply_link}\n\n"
+                    "⚠️ 未自动转存：请在消息中带上 `cid=目标目录`。"
+                )
+                return
+
+            await msg.edit("解析成功，开始转存到 115 ...")
+            result = client_115.receive_share_link(
+                reply_link,
+                target_cid=target_cid,
+                accept_all=('all' in text.lower()) or ('全部' in text),
+            )
+            if result.get('need_select'):
+                items = result.get('items') or []
+                if items:
+                    PENDING_115_SHARE[sender_id] = {
+                        'link': reply_link,
+                        'items': items,
+                        'target_cid': target_cid,
+                    }
+                    await event.reply(
+                        "分享链接包含多个项目，请回复序号或发送 “all/全部”\n\n"
+                        + _format_115_items(items)
+                    )
+                else:
+                    await event.reply("❌ 解析分享内容失败，未获取到文件列表。")
+                return
+
+            if result.get('success'):
+                await event.reply("✅ 转存完成")
+            else:
+                await event.reply(f"❌ 转存失败: {result.get('message') or '未知错误'}")
             return
+
+        if event.file:
+            if not _message_has_any_link(event.message, text):
+                await event.reply("请先通过 /start 菜单点击 '🍪 更新 Cookies' 按钮后再发送文件。")
+                return
 
         url_match = re.search(r'https?://\S+', text)
         if url_match:
