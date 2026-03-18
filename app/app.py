@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.27"
+VERSION = "0.5.28"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -7701,7 +7701,7 @@ def downloader_clear_log():
     return jsonify({"success": True})
 
 
-@app.route('/self_service', methods=['GET', 'POST'])
+@app.route('/self_service', methods=['GET', 'POST'], strict_slashes=False)
 @login_required
 def self_service_request():
     config = load_config()
@@ -7846,7 +7846,7 @@ def self_service_request():
     )
 
 
-@app.route('/self_service_result')
+@app.route('/self_service_result', strict_slashes=False)
 def self_service_result():
     rid = (request.args.get('rid') or '').strip()
     result = _get_self_service_result(rid)
@@ -7855,7 +7855,7 @@ def self_service_result():
     return jsonify({"found": True, **result})
 
 
-@app.route('/self_service_transfer', methods=['POST'])
+@app.route('/self_service_transfer', methods=['POST'], strict_slashes=False)
 def self_service_transfer():
     body = request.get_json(silent=True) if request.is_json else request.form
     rid = str((body or {}).get('rid') or (body or {}).get('request_id') or '').strip()
@@ -7986,7 +7986,7 @@ def self_service_transfer():
         "result": updated_result,
     })
 
-@app.route('/self_service_public', methods=['GET', 'POST'])
+@app.route('/self_service_public', methods=['GET', 'POST'], strict_slashes=False)
 def self_service_public():
     config = load_config()
     enabled = bool(config.get("self_service_enabled", False))
