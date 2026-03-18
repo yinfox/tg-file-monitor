@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.22`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.23`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.22
+y1nf0x/tg-file-monitor:0.5.23
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -394,7 +394,12 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.22 (2026-03-18) - 当前版本
+### v0.5.23 (2026-03-18) - 当前版本
+- ✅ 影巢签到：普通/赌狗模式，支持自定义时间与重启自动签到
+- ✅ 签到结果推送 Bot，首页概览展示签到状态与积分
+- ✅ 签到日志持久化到 config/logs/hdhive_checkin.log
+
+### v0.5.22 (2026-03-18)
 - ✅ Bot 支持影巢链接解析并转存到 115（可带 cid 直接转存）
 - ✅ 影巢/115 链接消息不再被“更新 Cookies”提示打断
 

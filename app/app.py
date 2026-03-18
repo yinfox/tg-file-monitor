@@ -15,7 +15,7 @@ import datetime
 import shutil
 import requests
 from urllib.parse import quote_plus
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
 from telethon.errors import SessionPasswordNeededError, PhoneCodeExpiredError, PhoneCodeInvalidError
@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.22"
+VERSION = "0.5.23"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -50,6 +50,7 @@ LOG_DIR = os.path.join(CONFIG_DIR, 'logs')
 DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 DOWNLOAD_QUEUE_STATS_FILE = os.path.join(CONFIG_DIR, 'download_queue_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
+HDHIVE_CHECKIN_LOG_FILE = os.path.join(LOG_DIR, 'hdhive_checkin.log')
 DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
 TV_CHANNEL_FILTERS_FILE = os.path.join(CONFIG_DIR, 'tvchannel_filters.json')
 TV_FILTERS_STATE_KEY = 'tvchannel_filters.json'
@@ -135,6 +136,15 @@ def load_config():
             "notify_user_ids": "",
             "on_invalid": "notify",
             "force_cookie_test": True,
+        },
+        "hdhive_checkin": {
+            "enabled": False,
+            "mode": "normal",
+            "schedule_time": "09:00",
+            "run_on_start": True,
+            "notify_user_ids": "",
+            "normal_path": "",
+            "gamble_path": "",
         },
         "allowed_browse_path": os.getcwd(),
         "restricted_channels": [],
@@ -293,6 +303,12 @@ def load_config():
                     config["hdhive_cookie_monitor"] = merged_monitor
                 if "hdhive_cookie_test_resource" not in config:
                     config["hdhive_cookie_test_resource"] = default_config["hdhive_cookie_test_resource"]
+                if "hdhive_checkin" not in config or not isinstance(config.get("hdhive_checkin"), dict):
+                    config["hdhive_checkin"] = default_config["hdhive_checkin"].copy()
+                else:
+                    merged_checkin = default_config["hdhive_checkin"].copy()
+                    merged_checkin.update(config.get("hdhive_checkin") or {})
+                    config["hdhive_checkin"] = merged_checkin
                 if "proxy" not in config:
                     config["proxy"] = {}
                 if "trace_media_detection" not in config:
@@ -2472,6 +2488,18 @@ _HDHIVE_COOKIE_MONITOR_STATE = {
     "last_message": "",
     "last_notified_at": "",
 }
+_HDHIVE_CHECKIN_STOP_EVENT = threading.Event()
+_HDHIVE_CHECKIN_THREAD = None
+_HDHIVE_CHECKIN_LOCK = threading.Lock()
+_HDHIVE_CHECKIN_STATE = {
+    "enabled": False,
+    "last_status": "",
+    "last_message": "",
+    "last_checkin_at": "",
+    "last_points": "",
+    "next_run_at": "",
+    "last_mode": "",
+}
 _DRAMA_SCHEDULER_STATE = {
     'enabled': False,
     'running': False,
@@ -2519,6 +2547,308 @@ def _set_hdhive_cookie_monitor_state(**kwargs):
 def get_hdhive_cookie_monitor_state() -> dict:
     with _HDHIVE_COOKIE_MONITOR_LOCK:
         return dict(_HDHIVE_COOKIE_MONITOR_STATE)
+
+
+def _set_hdhive_checkin_state(**kwargs):
+    with _HDHIVE_CHECKIN_LOCK:
+        _HDHIVE_CHECKIN_STATE.update(kwargs)
+
+
+def get_hdhive_checkin_state() -> dict:
+    with _HDHIVE_CHECKIN_LOCK:
+        return dict(_HDHIVE_CHECKIN_STATE)
+
+
+def _parse_hdhive_checkin_time(raw: str) -> Tuple[int, int]:
+    text = (raw or "").strip()
+    if not text:
+        return 9, 0
+    parts = text.split(":")
+    try:
+        hour = int(parts[0])
+        minute = int(parts[1]) if len(parts) > 1 else 0
+    except Exception:
+        return 9, 0
+    hour = max(0, min(hour, 23))
+    minute = max(0, min(minute, 59))
+    return hour, minute
+
+
+def _normalize_hdhive_checkin_path(base_url: str, path: str) -> str:
+    if not path:
+        return ""
+    if path.startswith("http://") or path.startswith("https://"):
+        return path
+    return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _extract_points_from_payload(payload) -> Optional[int]:
+    if payload is None:
+        return None
+    candidates = []
+    if isinstance(payload, dict):
+        for key in ("points", "point", "score", "credit", "integral", "balance"):
+            val = payload.get(key)
+            if isinstance(val, (int, float, str)):
+                candidates.append(val)
+        for key in ("data", "user", "profile", "info", "account"):
+            if isinstance(payload.get(key), dict):
+                candidates.append(payload.get(key))
+    for item in candidates:
+        if isinstance(item, (int, float)):
+            return int(item)
+        if isinstance(item, str) and item.strip().isdigit():
+            return int(item.strip())
+        if isinstance(item, dict):
+            nested = _extract_points_from_payload(item)
+            if nested is not None:
+                return nested
+    return None
+
+
+def _hdhive_request_json(method: str, url: str, headers: dict, json_body: Optional[dict] = None, params: Optional[dict] = None) -> Tuple[Optional[dict], str]:
+    try:
+        resp = requests.request(method, url, headers=headers, json=json_body, params=params, timeout=20)
+    except Exception as e:
+        return None, f"{type(e).__name__}: {e}"
+    text = resp.text or ""
+    try:
+        data = resp.json()
+    except Exception:
+        data = None
+    if isinstance(data, dict):
+        return data, text
+    return None, text
+
+
+def _hdhive_is_checkin_success(data: Optional[dict], text: str = "") -> Tuple[bool, str]:
+    msg = ""
+    if isinstance(data, dict):
+        msg = str(data.get("message") or data.get("description") or "")
+        if data.get("success") is True:
+            return True, msg or "success"
+    text = text or ""
+    merged = (msg + " " + text).lower()
+    if any(token in merged for token in ("已签到", "已经签到", "已簽到", "signed", "already signed", "already check", "重复签到")):
+        return True, msg or "already"
+    return False, msg or text[:120]
+
+
+def _hdhive_fetch_points(base_url: str, cookie: str) -> Optional[int]:
+    if not cookie:
+        return None
+    base_url = (base_url or "https://hdhive.com").rstrip("/")
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Origin": base_url,
+        "Referer": f"{base_url}/",
+        "Cookie": _normalize_hdhive_cookie(cookie),
+    }
+    for path in ("/go-api/customer/points", "/go-api/customer/info", "/go-api/customer"):
+        url = f"{base_url}{path}"
+        data, _ = _hdhive_request_json("GET", url, headers=headers)
+        pts = _extract_points_from_payload(data)
+        if pts is not None:
+            return pts
+    return None
+
+
+def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tuple[bool, str, Optional[int]]:
+    if not cookie:
+        return False, "未配置 HDHive Cookie", None
+    base_url = (base_url or "https://hdhive.com").rstrip("/")
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+        "Origin": base_url,
+        "Referer": f"{base_url}/",
+        "Cookie": _normalize_hdhive_cookie(cookie),
+    }
+
+    mode = (mode or "normal").strip().lower()
+    custom_path = ""
+    if mode == "gamble":
+        custom_path = (cfg.get("gamble_path") or "").strip()
+    else:
+        custom_path = (cfg.get("normal_path") or "").strip()
+
+    if custom_path:
+        paths = [_normalize_hdhive_checkin_path(base_url, custom_path)]
+    else:
+        paths = [
+            f"{base_url}/go-api/customer/sign",
+            f"{base_url}/go-api/customer/checkin",
+            f"{base_url}/go-api/customer/signin",
+        ]
+
+    payloads: List[Optional[dict]] = [None]
+    if mode == "gamble":
+        payloads = [
+            {"mode": "gamble"},
+            {"mode": "dog"},
+            {"type": 2},
+            {"gamble": 1},
+            {"bet": 1},
+            {"lucky": 1},
+        ]
+    gamble_params = [
+        {"mode": "gamble"},
+        {"type": 2},
+        {"gamble": 1},
+        {"bet": 1},
+        {"lucky": 1},
+    ] if mode == "gamble" else []
+
+    last_msg = ""
+    for path in paths:
+        for payload in payloads:
+            data, text = _hdhive_request_json("POST", path, headers=headers, json_body=payload)
+            ok, msg = _hdhive_is_checkin_success(data, text)
+            last_msg = msg or last_msg
+            if ok:
+                points = _extract_points_from_payload(data)
+                if points is None:
+                    points = _hdhive_fetch_points(base_url, cookie)
+                return True, msg or "签到成功", points
+            if payload is None:
+                data, text = _hdhive_request_json("GET", path, headers=headers)
+                ok, msg = _hdhive_is_checkin_success(data, text)
+                last_msg = msg or last_msg
+                if ok:
+                    points = _extract_points_from_payload(data)
+                    if points is None:
+                        points = _hdhive_fetch_points(base_url, cookie)
+                    return True, msg or "签到成功", points
+            if mode == "gamble":
+                for params in gamble_params:
+                    data, text = _hdhive_request_json("GET", path, headers=headers, params=params)
+                    ok, msg = _hdhive_is_checkin_success(data, text)
+                    last_msg = msg or last_msg
+                    if ok:
+                        points = _extract_points_from_payload(data)
+                        if points is None:
+                            points = _hdhive_fetch_points(base_url, cookie)
+                        return True, msg or "签到成功", points
+
+    return False, last_msg or "签到失败", _hdhive_fetch_points(base_url, cookie)
+
+
+def _run_hdhive_checkin(config: dict, reason: str = "") -> None:
+    cfg = (config or {}).get("hdhive_checkin") if isinstance(config, dict) else {}
+    if not isinstance(cfg, dict):
+        cfg = {}
+    enabled = bool(cfg.get("enabled", False))
+    if not enabled:
+        _set_hdhive_checkin_state(enabled=False, last_message="未启用", last_status="disabled")
+        return
+
+    base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip()
+    cookie = (config.get("hdhive_cookie") or "").strip()
+    mode = (cfg.get("mode") or "normal").strip().lower()
+    if mode not in ("normal", "gamble"):
+        mode = "normal"
+
+    ok, msg, points = _hdhive_do_checkin(base_url, cookie, mode, cfg)
+    now_str = _format_scheduler_ts(time.time())
+    status = "ok" if ok else "error"
+    message = msg or ("签到成功" if ok else "签到失败")
+    if reason:
+        message = f"{message} ({reason})"
+    log_line = f"[{now_str}] [{status.upper()}] mode={mode} result={message}"
+    if points is not None:
+        log_line += f" points={points}"
+    _append_hdhive_checkin_log(log_line)
+    _set_hdhive_checkin_state(
+        enabled=True,
+        last_status=status,
+        last_message=message,
+        last_checkin_at=now_str,
+        last_points=points if points is not None else "",
+        last_mode=mode,
+    )
+
+    notify_raw = (cfg.get("notify_user_ids") or "").strip()
+    if not notify_raw and isinstance(config, dict):
+        notify_raw = (config.get("self_service_notify_user_ids") or config.get("self_service_target_user_ids") or "").strip()
+    if notify_raw:
+        try:
+            targets = _parse_target_user_ids(notify_raw)
+        except Exception:
+            targets = []
+        if targets:
+            prefix = "✅" if ok else "❌"
+            summary = f"{prefix} HDHive 签到完成 ({mode})\n结果: {message}"
+            if points is not None:
+                summary += f"\n当前积分: {points}"
+            bot_token = (config.get("bot", {}).get("token") or "").strip() if isinstance(config, dict) else ""
+            sent_any = False
+            if bot_token:
+                for tid in targets:
+                    if _bot_api_send_message(bot_token, tid, summary):
+                        sent_any = True
+            if not sent_any:
+                for tid in targets:
+                    _enqueue_message(tid, summary)
+
+
+def _hdhive_checkin_loop():
+    last_run_date = ""
+    while not _HDHIVE_CHECKIN_STOP_EVENT.is_set():
+        try:
+            config = load_config()
+            cfg = (config or {}).get("hdhive_checkin") if isinstance(config, dict) else {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+            enabled = bool(cfg.get("enabled", False))
+            _set_hdhive_checkin_state(enabled=enabled)
+            if not enabled:
+                _HDHIVE_CHECKIN_STOP_EVENT.wait(5)
+                continue
+
+            run_on_start = bool(cfg.get("run_on_start", True))
+            mode = (cfg.get("mode") or "normal").strip().lower()
+            if mode not in ("normal", "gamble"):
+                mode = "normal"
+
+            now = datetime.datetime.now()
+            today_key = now.strftime("%Y-%m-%d")
+
+            if run_on_start and not last_run_date:
+                _run_hdhive_checkin(config, reason="重启自动签到")
+                last_run_date = today_key
+
+            hour, minute = _parse_hdhive_checkin_time(cfg.get("schedule_time", "09:00"))
+            target_today = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            if now >= target_today and last_run_date != today_key:
+                _run_hdhive_checkin(config, reason="定时签到")
+                last_run_date = today_key
+
+            if now >= target_today:
+                next_run = target_today + datetime.timedelta(days=1)
+            else:
+                next_run = target_today
+            _set_hdhive_checkin_state(next_run_at=_format_scheduler_ts(next_run.timestamp()), last_mode=mode)
+
+            wait_seconds = max(5, min(60, int((next_run - now).total_seconds())))
+            _HDHIVE_CHECKIN_STOP_EVENT.wait(wait_seconds)
+        except Exception:
+            _HDHIVE_CHECKIN_STOP_EVENT.wait(5)
+
+
+def start_hdhive_checkin_scheduler():
+    global _HDHIVE_CHECKIN_THREAD
+    if _HDHIVE_CHECKIN_THREAD and _HDHIVE_CHECKIN_THREAD.is_alive():
+        return
+    _HDHIVE_CHECKIN_STOP_EVENT.clear()
+    _HDHIVE_CHECKIN_THREAD = threading.Thread(
+        target=_hdhive_checkin_loop,
+        name="hdhive-checkin",
+        daemon=True,
+    )
+    _HDHIVE_CHECKIN_THREAD.start()
 
 
 def _normalize_cron_expr(expr: str) -> str:
@@ -3622,6 +3952,35 @@ def _enqueue_message(chat_id, text: str) -> bool:
             except Exception:
                 pass
     return False
+
+
+def _bot_api_send_message(bot_token: str, chat_id, text: str) -> bool:
+    if not bot_token or not chat_id or not text:
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "disable_web_page_preview": True,
+    }
+    try:
+        resp = requests.post(url, json=payload, timeout=12)
+        if resp.status_code == 200:
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _append_hdhive_checkin_log(line: str) -> None:
+    if not line:
+        return
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(HDHIVE_CHECKIN_LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(line + "\n")
+    except Exception:
+        pass
 
 
 def _load_self_service_results() -> dict:
@@ -5472,7 +5831,8 @@ async def index():
                                   bot_log_insights=bot_log_insights,
                                   bot_process_info=_get_process_info(bot_monitor_mgr),
                                   bot_queue_size=_load_message_queue_size(),
-                                  log_window_minutes=log_window_minutes)
+                                  log_window_minutes=log_window_minutes,
+                                  hdhive_checkin_state=get_hdhive_checkin_state())
 
 @app.route('/toggle_debug', methods=['POST'])
 @login_required
@@ -5874,6 +6234,13 @@ def manage_config():
             monitor_notify_ids = (request.form.get('hdhive_cookie_monitor_notify_user_ids') or '').strip()
             monitor_on_invalid = (request.form.get('hdhive_cookie_monitor_on_invalid') or 'notify').strip().lower()
             monitor_force_cookie_test = request.form.get('hdhive_cookie_monitor_force_cookie_test') == 'on'
+            checkin_enabled = request.form.get('hdhive_checkin_enabled') == 'on'
+            checkin_mode = (request.form.get('hdhive_checkin_mode') or 'normal').strip().lower()
+            checkin_time = (request.form.get('hdhive_checkin_time') or '').strip()
+            checkin_run_on_start = request.form.get('hdhive_checkin_run_on_start') == 'on'
+            checkin_notify_ids = (request.form.get('hdhive_checkin_notify_user_ids') or '').strip()
+            checkin_normal_path = (request.form.get('hdhive_checkin_normal_path') or '').strip()
+            checkin_gamble_path = (request.form.get('hdhive_checkin_gamble_path') or '').strip()
             try:
                 threshold = int(threshold_raw) if threshold_raw != '' else 0
                 if threshold < 0:
@@ -5887,6 +6254,10 @@ def manage_config():
                 monitor_interval = 60
             if monitor_on_invalid not in ("notify", "switch_open_api", "clear_cookie"):
                 monitor_on_invalid = "notify"
+            if checkin_mode not in ("normal", "gamble"):
+                checkin_mode = "normal"
+            if not checkin_time:
+                checkin_time = "09:00"
 
             config['hdhive_auto_unlock_points_threshold'] = threshold
             if hdhive_cookie_clear:
@@ -5911,6 +6282,15 @@ def manage_config():
                 "notify_user_ids": monitor_notify_ids,
                 "on_invalid": monitor_on_invalid,
                 "force_cookie_test": monitor_force_cookie_test,
+            }
+            config['hdhive_checkin'] = {
+                "enabled": checkin_enabled,
+                "mode": checkin_mode,
+                "schedule_time": checkin_time,
+                "run_on_start": checkin_run_on_start,
+                "notify_user_ids": checkin_notify_ids,
+                "normal_path": checkin_normal_path,
+                "gamble_path": checkin_gamble_path,
             }
             save_config(config)
 
@@ -6074,6 +6454,7 @@ def manage_config():
         'config.html',
         config=config,
         hdhive_cookie_monitor_state=get_hdhive_cookie_monitor_state(),
+        hdhive_checkin_state=get_hdhive_checkin_state(),
     )
 
 
@@ -7823,6 +8204,22 @@ def api_hdhive_test_cookie():
     return jsonify(result)
 
 
+@app.route('/api/hdhive/checkin', methods=['POST'])
+@login_required
+def api_hdhive_checkin():
+    config = load_config()
+    _run_hdhive_checkin(config, reason="手动签到")
+    state = get_hdhive_checkin_state()
+    success = state.get("last_status") == "ok"
+    message = state.get("last_message") or ("签到成功" if success else "签到失败")
+    return jsonify({
+        "success": success,
+        "message": message,
+        "points": state.get("last_points"),
+        "last_checkin_at": state.get("last_checkin_at"),
+    })
+
+
 @app.route('/web_login', methods=['GET', 'POST'])
 async def web_login():
     config = load_config()
@@ -7890,5 +8287,6 @@ if __name__ == "__main__":
         start_bot_monitor_process()
         start_drama_scheduler()
         start_hdhive_cookie_monitor()
+        start_hdhive_checkin_scheduler()
 
     app.run(host="0.0.0.0", port=5001, debug=debug_mode, use_reloader=debug_mode)

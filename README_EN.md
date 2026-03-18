@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.22`
+Latest image: `y1nf0x/tg-file-monitor:0.5.23`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.22
+y1nf0x/tg-file-monitor:0.5.23
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,12 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.22 (2026-03-18) - Current
+### v0.5.23 (2026-03-18) - Current
+- ✅ HDHive check-in: normal/gamble modes with configurable time and auto-run on restart
+- ✅ Check-in results are sent to the Bot and shown in the home overview with points
+- ✅ Check-in logs persist at config/logs/hdhive_checkin.log
+
+### v0.5.22 (2026-03-18)
 - ✅ Bot can resolve HDHive links and transfer to 115 (supports `cid` for direct transfer)
 - ✅ HDHive/115 link messages no longer trigger the “update cookies” prompt
 
