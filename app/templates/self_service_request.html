@@ -101,7 +101,8 @@
                     <div id="selfServiceResultBox" class="alert alert-secondary small" style="display: none;">
                         <div class="fw-semibold mb-1" id="selfServiceResultTitle">处理中</div>
                         <div class="text-muted mb-2" id="selfServiceResultTime"></div>
-                        <pre class="mb-0" id="selfServiceResultDetail" style="white-space: pre-wrap;"></pre>
+                        <pre class="mb-0 border rounded p-3" id="selfServiceResultDetail"
+                            style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.95); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;"></pre>
                         <div id="selfServiceResourceBox" class="mt-3" style="display: none;">
                             <div class="fw-semibold mb-2">候选资源</div>
                             <div class="text-muted mb-2" id="selfServiceResourceHint"></div>
@@ -146,7 +147,8 @@
                         {% if item.detail %}
                         <details class="mt-1">
                             <summary class="text-muted" style="font-size: 0.75rem; cursor: pointer;">详情</summary>
-                            <pre class="mb-1 mt-1" style="white-space: pre-wrap; font-size: 0.75rem;">{{ item.detail }}</pre>
+                            <pre class="mb-1 mt-1 border rounded p-2"
+                                style="white-space: pre-wrap; font-size: 0.75rem; background: rgba(248, 250, 252, 0.95); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;">{{ item.detail }}</pre>
                         </details>
                         {% endif %}
                         <div class="d-flex align-items-center gap-2">
@@ -248,8 +250,11 @@ function renderResources(data) {
         else if (actionStatus === 'error') actionBadge = '<span class="badge bg-danger">最近失败</span>';
         const buttonDisabled = (!item.slug || !manualSupported) ? 'disabled' : '';
         const buttonLabel = manualSupported ? '手动转存到115' : '当前配置不支持手动转存';
+        const noteHtml = item.note_text
+            ? `<div class="mt-2 small" style="color: #374151; line-height: 1.7;">${escapeHtml(item.note_text).replace(/\n/g, '<br>')}</div>`
+            : '';
         const detailHtml = item.detail
-            ? `<pre class="mb-2 mt-2 p-2 bg-light border rounded small" style="white-space: pre-wrap;">${escapeHtml(item.detail)}</pre>`
+            ? `<pre class="mb-2 mt-2 p-2 border rounded small" style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.96); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;">${escapeHtml(item.detail)}</pre>`
             : '';
         const actionNote = item.last_action_note
             ? `<div class="small text-muted mt-1">${escapeHtml(item.last_action_note)}</div>`
@@ -261,6 +266,7 @@ function renderResources(data) {
                         <div>
                             <div class="fw-semibold">${index + 1}. ${escapeHtml(item.title || '未命名资源')}</div>
                             <div class="text-muted small mt-1">${escapeHtml(item.summary || '')}</div>
+                            ${noteHtml}
                         </div>
                         ${actionBadge}
                     </div>

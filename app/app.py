@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.24"
+VERSION = "0.5.25"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -3353,6 +3353,68 @@ def _resource_title(item: dict) -> str:
     return ""
 
 
+def _resource_collect_meta_text(
+    item: dict,
+    *,
+    exact_keys=(),
+    contains_tokens=(),
+    max_items: int = 4,
+    max_len: int = 320,
+) -> str:
+    if not isinstance(item, dict):
+        return ""
+
+    exact = {str(key or "").strip().lower() for key in (exact_keys or ()) if str(key or "").strip()}
+    contains = tuple(str(token or "").strip().lower() for token in (contains_tokens or ()) if str(token or "").strip())
+    found = []
+    seen = set()
+
+    def _add(value) -> None:
+        text = _resource_display_text(value, max_len=max_len)
+        if not text:
+            return
+        norm = text.strip().lower()
+        if not norm or norm in seen:
+            return
+        seen.add(norm)
+        found.append(text)
+
+    def _match_key(key_name: str) -> bool:
+        key = str(key_name or "").strip().lower()
+        if not key:
+            return False
+        if key in exact:
+            return True
+        return any(token and token in key for token in contains)
+
+    def _walk(node) -> None:
+        if len(found) >= max_items:
+            return
+        if isinstance(node, dict):
+            for child_key, child_value in node.items():
+                key = str(child_key or "").strip().lower()
+                if _match_key(key):
+                    if isinstance(child_value, dict):
+                        for nested_value in child_value.values():
+                            _add(nested_value)
+                    elif isinstance(child_value, (list, tuple, set)):
+                        for nested_value in child_value:
+                            _add(nested_value)
+                    else:
+                        _add(child_value)
+                _walk(child_value)
+                if len(found) >= max_items:
+                    return
+        elif isinstance(node, (list, tuple, set)):
+            for child in node:
+                _walk(child)
+                if len(found) >= max_items:
+                    return
+
+    _walk(item)
+    return "\n".join(found[:max_items])
+
+
 def _build_hdhive_full_url(data: dict) -> str:
     if not isinstance(data, dict):
         return ""
@@ -3494,6 +3556,18 @@ def _build_self_service_interactive_resources(
         subtitle_text = _resource_display_text(merged.get("subtitle"))
         release_name = _resource_display_text(merged.get("release_name"))
         description = _resource_display_text(merged.get("description"), max_len=220)
+        note_text = _resource_collect_meta_text(
+            merged,
+            exact_keys=(
+                "description", "remark", "remarks", "summary", "overview", "content",
+                "desc", "intro", "introduction", "note", "notes", "resource_desc",
+                "resource_description", "resource_summary", "resource_overview",
+                "resource_intro", "resource_note",
+            ),
+            contains_tokens=("remark", "summary", "overview", "description", "desc", "intro", "note", "content"),
+            max_items=6,
+            max_len=420,
+        ) or description
         season_match = _resource_match_seasons(merged, requested_seasons) if requested_seasons else None
         resolution_match = _resource_match_resolution(merged, resolution_preference) if resolution_preference else None
         is_dolby = _resource_is_dolby(merged)
@@ -3508,18 +3582,19 @@ def _build_self_service_interactive_resources(
             f"季匹配: {_match_state_label(season_match, '匹配', '不匹配')}" if requested_seasons else "",
             f"分辨率匹配: {_match_state_label(resolution_match, '匹配', '不匹配')}" if resolution_preference else "",
             f"杜比: {'是' if is_dolby else '否'}",
+            f"备注: {note_text}" if note_text else "",
             f"副标题: {subtitle_text}" if subtitle_text else "",
             f"发布名: {release_name}" if release_name else "",
-            f"说明: {description}" if description else "",
             f"链接: {full_url}" if full_url else "",
             f"Slug: {slug}" if slug else "",
-        ], max_lines=12, max_line_len=220)
+        ], max_lines=14, max_line_len=420)
 
         built.append({
             "slug": slug,
             "title": title,
             "summary": _format_resource_line(merged),
             "detail": detail,
+            "note_text": note_text,
             "official": official,
             "unlocked": unlocked,
             "unlock_points": points,
