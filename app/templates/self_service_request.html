@@ -99,7 +99,10 @@
                     </div>
 
                     <div id="selfServiceResultBox" class="alert alert-secondary small" style="display: none;">
-                        <div class="fw-semibold mb-1" id="selfServiceResultTitle">处理中</div>
+                        <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
+                            <div class="fw-semibold" id="selfServiceResultTitle">处理中</div>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="selfServiceClearBtn">清除搜索记录</button>
+                        </div>
                         <div class="text-muted mb-2" id="selfServiceResultTime"></div>
                         <pre class="mb-0 border rounded p-3" id="selfServiceResultDetail"
                             style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.95); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;"></pre>
@@ -167,7 +170,6 @@
 </div>
 
 <script>
-const storageKey = 'self_service_last_rid';
 let requestId = "{{ request_id }}";
 const initialResult = {{ request_result|tojson if request_result else 'null' }};
 const resultBox = document.getElementById('selfServiceResultBox');
@@ -177,21 +179,9 @@ const resultDetail = document.getElementById('selfServiceResultDetail');
 const resultResourceBox = document.getElementById('selfServiceResourceBox');
 const resultResourceHint = document.getElementById('selfServiceResourceHint');
 const resultResourceList = document.getElementById('selfServiceResourceList');
+const clearResultBtn = document.getElementById('selfServiceClearBtn');
 let pollTimer = null;
 let pollCount = 0;
-
-if (requestId) {
-    try {
-        localStorage.setItem(storageKey, requestId);
-    } catch (e) {}
-} else {
-    try {
-        const storedId = localStorage.getItem(storageKey);
-        if (storedId) {
-            requestId = storedId;
-        }
-    } catch (e) {}
-}
 
 function formatTime(ts) {
     if (!ts) return '';
@@ -225,6 +215,61 @@ function matchLabel(value, trueLabel, falseLabel, unknownLabel = '待判断') {
     return unknownLabel;
 }
 
+function buildBadge(text, className = 'bg-light text-dark border') {
+    return `<span class="badge ${className}">${escapeHtml(text)}</span>`;
+}
+
+function tokenizeNoteText(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return [];
+    return raw
+        .split(/[\n\r,，;；|]+|\s+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, 14);
+}
+
+function badgeClassForToken(token) {
+    const lower = String(token || '').toLowerCase();
+    if (!lower) return 'bg-light text-dark border';
+    if (/(4k|2160|uhd)/.test(lower)) return 'text-bg-primary';
+    if (/(1080|720|480)/.test(lower)) return 'text-bg-info';
+    if (/(免费|free|^0积分$|^0分$)/.test(lower)) return 'text-bg-success';
+    if (/积分|分$/.test(lower)) return 'bg-warning text-dark';
+    if (/(杜比|atmos|dolby|dovi|\bdv\b)/.test(lower)) return 'text-bg-dark';
+    if (/(web|webrip|web-dl|maxplus|hive)/.test(lower)) return 'bg-secondary-subtle text-secondary-emphasis';
+    if (/(s\d{1,2}|第.+季|全\d+季|完结|更新)/i.test(token)) return 'bg-success-subtle text-success-emphasis';
+    return 'bg-light text-dark border';
+}
+
+function renderNoteContent(noteText) {
+    const raw = String(noteText || '').trim();
+    if (!raw) return '';
+    const tokens = tokenizeNoteText(raw);
+    if (tokens.length >= 2) {
+        return `<div class="d-flex flex-wrap gap-2 mt-2">${tokens.map((token) => buildBadge(token, badgeClassForToken(token))).join('')}</div>`;
+    }
+    return `<div class="mt-2 small" style="color: #374151; line-height: 1.7;">${escapeHtml(raw).replace(/\n/g, '<br>')}</div>`;
+}
+
+function metaBadge(text, kind = 'neutral') {
+    const classes = {
+        storage: 'text-bg-primary',
+        official_yes: 'text-bg-success',
+        official_no: 'bg-secondary-subtle text-secondary-emphasis',
+        dolby_yes: 'text-bg-dark',
+        dolby_no: 'bg-light text-dark border',
+        points_free: 'text-bg-success',
+        points_paid: 'bg-warning text-dark',
+        resolution: 'text-bg-info',
+        match_yes: 'text-bg-success',
+        match_no: 'text-bg-danger',
+        match_unknown: 'bg-light text-dark border',
+        neutral: 'bg-light text-dark border',
+    };
+    return buildBadge(text, classes[kind] || classes.neutral);
+}
+
 function renderResources(data) {
     if (!resultResourceBox || !resultResourceList || !resultResourceHint) return;
     const resources = Array.isArray(data && data.resources) ? data.resources : [];
@@ -250,14 +295,19 @@ function renderResources(data) {
         else if (actionStatus === 'error') actionBadge = '<span class="badge bg-danger">最近失败</span>';
         const buttonDisabled = (!item.slug || !manualSupported) ? 'disabled' : '';
         const buttonLabel = manualSupported ? '手动转存到115' : '当前配置不支持手动转存';
-        const noteHtml = item.note_text
-            ? `<div class="mt-2 small" style="color: #374151; line-height: 1.7;">${escapeHtml(item.note_text).replace(/\n/g, '<br>')}</div>`
-            : '';
-        const detailHtml = item.detail
-            ? `<pre class="mb-2 mt-2 p-2 border rounded small" style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.96); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;">${escapeHtml(item.detail)}</pre>`
-            : '';
+        const noteHtml = renderNoteContent(item.note_text);
         const actionNote = item.last_action_note
             ? `<div class="small text-muted mt-1">${escapeHtml(item.last_action_note)}</div>`
+            : '';
+        const pointsBadge = item.unlock_points !== null && item.unlock_points !== undefined
+            ? metaBadge(`积分: ${escapeHtml(item.unlock_points)}`, Number(item.unlock_points) === 0 ? 'points_free' : 'points_paid')
+            : '';
+        const resolutionBadge = item.resolution_text ? metaBadge(`分辨率: ${escapeHtml(item.resolution_text)}`, 'resolution') : '';
+        const seasonBadge = item.season_match !== null && item.season_match !== undefined
+            ? metaBadge(`季匹配: ${escapeHtml(matchLabel(item.season_match, '匹配', '不匹配'))}`, item.season_match === true ? 'match_yes' : 'match_no')
+            : '';
+        const resolutionMatchBadge = item.resolution_match !== null && item.resolution_match !== undefined
+            ? metaBadge(`分辨率匹配: ${escapeHtml(matchLabel(item.resolution_match, '匹配', '不匹配'))}`, item.resolution_match === true ? 'match_yes' : 'match_no')
             : '';
         return `
             <div class="card shadow-sm border-0">
@@ -271,15 +321,14 @@ function renderResources(data) {
                         ${actionBadge}
                     </div>
                     <div class="d-flex flex-wrap gap-2 mt-2">
-                        <span class="badge text-bg-light">网盘: ${escapeHtml(item.storage_guess_label || '待解析')}</span>
-                        <span class="badge text-bg-light">官方: ${item.official ? '是' : '否'}</span>
-                        <span class="badge text-bg-light">杜比: ${item.is_dolby ? '是' : '否'}</span>
-                        ${item.unlock_points !== null && item.unlock_points !== undefined ? `<span class="badge text-bg-light">积分: ${escapeHtml(item.unlock_points)}</span>` : ''}
-                        ${item.resolution_text ? `<span class="badge text-bg-light">分辨率: ${escapeHtml(item.resolution_text)}</span>` : ''}
-                        ${item.season_match !== null && item.season_match !== undefined ? `<span class="badge text-bg-light">季匹配: ${escapeHtml(matchLabel(item.season_match, '匹配', '不匹配'))}</span>` : ''}
-                        ${item.resolution_match !== null && item.resolution_match !== undefined ? `<span class="badge text-bg-light">分辨率匹配: ${escapeHtml(matchLabel(item.resolution_match, '匹配', '不匹配'))}</span>` : ''}
+                        ${metaBadge(`网盘: ${escapeHtml(item.storage_guess_label || '待解析')}`, 'storage')}
+                        ${metaBadge(`官方: ${item.official ? '是' : '否'}`, item.official ? 'official_yes' : 'official_no')}
+                        ${metaBadge(`杜比: ${item.is_dolby ? '是' : '否'}`, item.is_dolby ? 'dolby_yes' : 'dolby_no')}
+                        ${pointsBadge}
+                        ${resolutionBadge}
+                        ${seasonBadge}
+                        ${resolutionMatchBadge}
                     </div>
-                    ${detailHtml}
                     <div class="d-flex flex-wrap align-items-center gap-2">
                         <button type="button" class="btn btn-outline-primary btn-sm" data-self-service-transfer data-slug="${escapeHtml(item.slug || '')}" ${buttonDisabled}>${buttonLabel}</button>
                     </div>
@@ -350,6 +399,33 @@ function renderResult(data) {
     renderResources(data);
 }
 
+function stripResultQueryFromUrl() {
+    try {
+        const url = new URL(window.location.href);
+        if (!url.searchParams.has('rid')) return;
+        url.searchParams.delete('rid');
+        const next = url.pathname + (url.searchParams.toString() ? `?${url.searchParams.toString()}` : '') + url.hash;
+        window.history.replaceState({}, '', next);
+    } catch (e) {}
+}
+
+function clearCurrentResult() {
+    requestId = '';
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+    pollCount = 0;
+    resultBox.style.display = 'none';
+    resultTitle.textContent = '处理中';
+    resultTime.textContent = '';
+    resultDetail.textContent = '';
+    resultResourceHint.textContent = '';
+    resultResourceList.innerHTML = '';
+    resultResourceBox.style.display = 'none';
+    stripResultQueryFromUrl();
+}
+
 function pollResult() {
     if (!requestId) return;
     fetch(`/self_service_result?rid=${encodeURIComponent(requestId)}`)
@@ -372,10 +448,14 @@ function pollResult() {
 
 if (initialResult) {
     renderResult(initialResult);
+    stripResultQueryFromUrl();
 }
 if (requestId) {
     pollResult();
     pollTimer = setInterval(pollResult, 3000);
+}
+if (clearResultBtn) {
+    clearResultBtn.addEventListener('click', clearCurrentResult);
 }
 </script>
 {% endblock %}
