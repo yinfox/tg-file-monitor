@@ -19,6 +19,7 @@
   "log_auto_refresh_enabled": false,
   "log_tail_lines": 200,
   "log_tail_max_bytes": 2097152,
+  "log_insights_window_minutes": 5,
   "self_service_enabled": false,
   "self_service_target_user_ids": "",
   "self_service_search_max_results": 5,
@@ -72,6 +73,12 @@
     "threshold": 100,
     "cooldown_seconds": 600,
     "notify_user_ids": ""
+  },
+  "download_queue_throttle": {
+    "enabled": true,
+    "threshold": 100,
+    "recover_threshold": 0,
+    "min_concurrency": 1
   },
   "hdhive_cookie": "",
   "hdhive_auto_unlock_points_threshold": 0

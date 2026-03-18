@@ -9,6 +9,18 @@
             <h2 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>状态概览</h2>
             <div class="d-flex align-items-center gap-3">
                 <div class="text-muted small">版本: {{ version }}</div>
+                <form action="{{ url_for('update_log_insights_window') }}" method="post" class="d-flex align-items-center gap-2">
+                    <label class="small text-muted" for="logWindowSelect">统计窗口</label>
+                    <select id="logWindowSelect" name="log_insights_window_minutes" class="form-select form-select-sm"
+                            style="width: 90px;" onchange="this.form.submit()">
+                        {% set current_window = log_window_minutes or 0 %}
+                        <option value="0" {% if current_window == 0 %}selected{% endif %}>全部</option>
+                        <option value="5" {% if current_window == 5 %}selected{% endif %}>5分钟</option>
+                        <option value="10" {% if current_window == 10 %}selected{% endif %}>10分钟</option>
+                        <option value="30" {% if current_window == 30 %}selected{% endif %}>30分钟</option>
+                        <option value="60" {% if current_window == 60 %}selected{% endif %}>60分钟</option>
+                    </select>
+                </form>
                 <form action="{{ url_for('toggle_debug') }}" method="post" class="d-flex align-items-center">
                     <div class="form-check form-switch mb-0 me-2">
                         <input class="form-check-input" type="checkbox" name="debug_mode" id="debug_mode_switch"
@@ -34,6 +46,10 @@
             </div>
             <div class="card-body">
                 <div class="mb-2 small">
+                    <span class="text-muted">关注频道:</span>
+                    <span class="fw-bold">{{ config.get('restricted_channels', []) | length }}</span>
+                </div>
+                <div class="mb-2 small">
                     <span class="text-muted">认证:</span>
                     {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}
                     <span class="text-danger fw-bold">{{ auth_status }}</span>
@@ -49,7 +65,25 @@
                     <span class="text-danger ms-1">丢弃: {{ download_queue_stats.get('dropped_total', 0) }}</span>
                     {% endif %}
                 </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">下载并发:</span>
+                    <span class="fw-bold">{{ download_queue_stats.get('effective_concurrency', download_queue_stats.get('config_concurrency', '-')) }}</span>
+                    {% if download_queue_stats.get('config_concurrency') and download_queue_stats.get('effective_concurrency') %}
+                    <span class="text-muted">/ {{ download_queue_stats.get('config_concurrency') }}</span>
+                    {% endif %}
+                    {% if download_queue_stats.get('throttle_active') %}
+                    <span class="badge bg-warning text-dark ms-1">降速中</span>
+                    {% endif %}
+                </div>
                 {% endif %}
+                <div class="mb-2 small">
+                    <span class="text-muted">最近活动:</span>
+                    <span class="fw-bold">{{ (tg_last_log or {}).get('message', '暂无') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">活动时间:</span>
+                    <span class="fw-bold">{{ (tg_last_log or {}).get('ts', '-') }}</span>
+                </div>
 
                 {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}
                 <a href="{{ url_for('login') }}" class="btn btn-sm w-100 mb-2" 
@@ -149,6 +183,49 @@
                     <span class="text-muted">Bot ID:</span>
                     <span class="fw-bold text-truncate d-inline-block" style="max-width: 150px;">{{ config.get('bot',
                         {}).get('token', '').split(':')[0] or '未设置' }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">PID:</span>
+                    <span class="fw-bold">{{ (bot_process_info or {}).get('pid') or '-' }}</span>
+                    <span class="text-muted ms-2">运行时长:</span>
+                    <span class="fw-bold">{{ (bot_process_info or {}).get('uptime', '-') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">消息队列:</span>
+                    <span class="fw-bold">{{ bot_queue_size or 0 }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">最近活动:</span>
+                    <span class="fw-bold">{{ (bot_last_log or {}).get('message', '暂无') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">活动时间:</span>
+                    <span class="fw-bold">{{ (bot_last_log or {}).get('ts', '-') }}</span>
+                </div>
+                {% set window_label = '全部' if (log_window_minutes or 0) == 0 else ('近' ~ log_window_minutes ~ '分钟') %}
+                <div class="mb-2 small">
+                    <span class="text-muted">{{ window_label }}链接:</span>
+                    <span class="fw-bold">{{ (bot_log_insights or {}).get('last_message', {}).get('message', '暂无') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">{{ window_label }}下载:</span>
+                    <span class="fw-bold">{{ (bot_log_insights or {}).get('last_download', {}).get('message', '暂无') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">{{ window_label }}转码:</span>
+                    <span class="fw-bold">{{ (bot_log_insights or {}).get('last_transcode', {}).get('message', '暂无') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">{{ window_label }}上传:</span>
+                    <span class="fw-bold">{{ (bot_log_insights or {}).get('last_upload', {}).get('message', '暂无') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">{{ window_label }}错误:</span>
+                    <span class="fw-bold text-danger">{{ (bot_log_insights or {}).get('last_error', {}).get('message', '暂无') }}</span>
+                </div>
+                <div class="mb-2 small">
+                    <span class="text-muted">错误次数({{ window_label }}):</span>
+                    <span class="fw-bold text-danger">{{ (bot_log_insights or {}).get('error_count', 0) }}</span>
                 </div>
 
                 <div class="d-grid gap-2">

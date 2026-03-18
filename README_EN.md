@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.20`
+Latest image: `y1nf0x/tg-file-monitor:0.5.21`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.20
+y1nf0x/tg-file-monitor:0.5.21
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +237,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.20 (2026-03-18) - Current
+### v0.5.21 (2026-03-18) - Current
+- ✅ Home overview adds TG/Bot capture details (last link/download/transcode/upload/error)
+- ✅ Overview stats window is configurable and switchable (All/5/10/30/60 minutes)
+
+### v0.5.20 (2026-03-18)
 - ✅ Log page shows download queue backlog and concurrency in real time
 - ✅ Auto-throttle download concurrency when queue exceeds threshold, auto-recover on cooldown
 - ✅ New queue auto-throttle settings (threshold/recover threshold/min concurrency)

@@ -37,7 +37,7 @@ app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 
-VERSION = "0.5.20"
+VERSION = "0.5.21"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -109,6 +109,7 @@ def load_config():
         "log_auto_refresh_enabled": False,
         "log_tail_lines": LOG_TAIL_LINES,
         "log_tail_max_bytes": LOG_TAIL_MAX_BYTES,
+        "log_insights_window_minutes": 5,
         "self_service_enabled": False,
         "self_service_target_user_ids": "",
         "self_service_notify_user_ids": "",
@@ -245,6 +246,8 @@ def load_config():
                     config["log_tail_lines"] = default_config["log_tail_lines"]
                 if "log_tail_max_bytes" not in config:
                     config["log_tail_max_bytes"] = default_config["log_tail_max_bytes"]
+                if "log_insights_window_minutes" not in config:
+                    config["log_insights_window_minutes"] = default_config["log_insights_window_minutes"]
                 if "self_service_enabled" not in config:
                     config["self_service_enabled"] = default_config["self_service_enabled"]
                 if "self_service_target_user_ids" not in config:
@@ -4866,6 +4869,7 @@ class ProcessManager:
         self.script_path = script_path
         self.name = name
         self.process = None
+        self.start_time = None
         self.log_buffer = []
         self.log_buffer_size = log_buffer_size
         self.log_file_path = os.path.join(LOG_DIR, f"{self.name.replace(' ', '_')}.log")
@@ -5006,6 +5010,7 @@ class ProcessManager:
                 text=True,
                 bufsize=1
             )
+            self.start_time = time.time()
             threading.Thread(target=self._read_output, args=(self.process.stdout, False), daemon=True).start()
             threading.Thread(target=self._read_output, args=(self.process.stderr, True), daemon=True).start()
             print(f"{self.name} 已启动。")
@@ -5022,6 +5027,7 @@ class ProcessManager:
             except subprocess.TimeoutExpired:
                 self.process.kill()
             self.process = None
+            self.start_time = None
             return True
         return False
 
@@ -5110,6 +5116,245 @@ def stop_bot_monitor_process():
         return True
     return False
 def get_bot_monitor_status(): return bot_monitor_mgr.status()
+
+
+def _truncate_text(value: str, max_len: int = 120) -> str:
+    if not value:
+        return ""
+    if len(value) <= max_len:
+        return value
+    if max_len <= 3:
+        return value[:max_len]
+    return value[: max_len - 3] + "..."
+
+
+def _parse_log_line(line: str) -> Tuple[str, str, str]:
+    """Parse log line like: [ts] [LEVEL] message -> (ts, level, message)."""
+    if not line:
+        return "", "", ""
+    raw = str(line).strip()
+    if raw.startswith("ERROR: "):
+        raw = raw[len("ERROR: "):].strip()
+    ts = ""
+    level = ""
+    msg = raw
+    if raw.startswith("[") and "]" in raw:
+        first = raw.find("]")
+        ts = raw[1:first]
+        rest = raw[first + 1:].strip()
+        if rest.startswith("[") and "]" in rest:
+            second = rest.find("]")
+            level = rest[1:second]
+            msg = rest[second + 1:].strip()
+        else:
+            msg = rest
+    return ts, level, msg
+
+
+def _get_last_log_summary(log_buffer) -> dict:
+    last_line = ""
+    if log_buffer:
+        for item in reversed(log_buffer):
+            if isinstance(item, str) and item.strip():
+                last_line = item.strip()
+                break
+    ts, level, msg = _parse_log_line(last_line)
+    return {
+        "ts": ts,
+        "level": level,
+        "message": _truncate_text(msg, 120),
+    }
+
+
+def _format_duration(seconds: Optional[float]) -> str:
+    if seconds is None:
+        return "-"
+    try:
+        seconds = int(seconds)
+    except Exception:
+        return "-"
+    if seconds < 0:
+        seconds = 0
+    days, rem = divmod(seconds, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}d")
+    if hours or parts:
+        parts.append(f"{hours}h")
+    if minutes or parts:
+        parts.append(f"{minutes}m")
+    parts.append(f"{secs}s")
+    return " ".join(parts)
+
+
+def _parse_log_ts(ts_str: str) -> Optional[float]:
+    if not ts_str:
+        return None
+    try:
+        dt = datetime.datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+        return dt.timestamp()
+    except Exception:
+        return None
+
+
+def _is_within_window(ts_str: str, now_ts: float, window_seconds: int) -> bool:
+    if window_seconds <= 0:
+        return True
+    parsed = _parse_log_ts(ts_str)
+    if parsed is None:
+        return False
+    delta = now_ts - parsed
+    return 0 <= delta <= window_seconds
+
+
+def _get_process_info(manager: ProcessManager) -> dict:
+    pid = None
+    uptime = "-"
+    if manager.process and manager.process.poll() is None:
+        try:
+            pid = manager.process.pid
+        except Exception:
+            pid = None
+        if manager.start_time:
+            uptime = _format_duration(time.time() - manager.start_time)
+    return {
+        "pid": pid,
+        "uptime": uptime,
+    }
+
+
+def _is_error_log(ts: str, level: str, msg: str, raw: str) -> bool:
+    if not raw:
+        return False
+    if str(level or "").upper() == "ERROR":
+        return True
+    lower = raw.lower()
+    if lower.startswith("error:") or "[error]" in lower or " error" in lower or "exception" in lower:
+        return True
+    if "失败" in raw or "错误" in raw or "异常" in raw:
+        return True
+    return False
+
+
+def _find_last_log_match(
+    log_buffer,
+    *,
+    keywords=None,
+    predicate=None,
+    max_scan: int = 200,
+    within_seconds: Optional[int] = None,
+    now_ts: Optional[float] = None,
+) -> dict:
+    if not log_buffer:
+        return {"ts": "", "level": "", "message": ""}
+    scan = log_buffer[-max_scan:] if len(log_buffer) > max_scan else log_buffer
+    keyword_list = [str(k).lower() for k in (keywords or []) if k]
+    if within_seconds is not None and now_ts is None:
+        now_ts = time.time()
+    for item in reversed(scan):
+        raw = str(item).strip()
+        if not raw:
+            continue
+        ts, level, msg = _parse_log_line(raw)
+        if within_seconds is not None:
+            if not _is_within_window(ts, float(now_ts), int(within_seconds)):
+                continue
+        if predicate:
+            if predicate(ts, level, msg, raw):
+                return {"ts": ts, "level": level, "message": _truncate_text(msg, 120)}
+        elif keyword_list:
+            hay = f"{msg}\n{raw}".lower()
+            if any(k in hay for k in keyword_list):
+                return {"ts": ts, "level": level, "message": _truncate_text(msg, 120)}
+    return {"ts": "", "level": "", "message": ""}
+
+
+def _count_log_matches(
+    log_buffer,
+    *,
+    predicate=None,
+    max_scan: int = 200,
+    within_seconds: Optional[int] = None,
+    now_ts: Optional[float] = None,
+) -> int:
+    if not log_buffer or not predicate:
+        return 0
+    count = 0
+    scan = log_buffer[-max_scan:] if len(log_buffer) > max_scan else log_buffer
+    if within_seconds is not None and now_ts is None:
+        now_ts = time.time()
+    for item in scan:
+        raw = str(item).strip()
+        if not raw:
+            continue
+        ts, level, msg = _parse_log_line(raw)
+        if within_seconds is not None:
+            if not _is_within_window(ts, float(now_ts), int(within_seconds)):
+                continue
+        if predicate(ts, level, msg, raw):
+            count += 1
+    return count
+
+
+def _build_log_insights(log_buffer, *, window_seconds: Optional[int] = None) -> dict:
+    now_ts = time.time() if window_seconds is not None else None
+    return {
+        "last_activity": _get_last_log_summary(log_buffer),
+        "last_error": _find_last_log_match(
+            log_buffer,
+            predicate=_is_error_log,
+            within_seconds=window_seconds,
+            now_ts=now_ts,
+        ),
+        "error_count": _count_log_matches(
+            log_buffer,
+            predicate=_is_error_log,
+            within_seconds=window_seconds,
+            now_ts=now_ts,
+        ),
+        "last_download": _find_last_log_match(
+            log_buffer,
+            keywords=["下载", "download"],
+            within_seconds=window_seconds,
+            now_ts=now_ts,
+        ),
+        "last_transcode": _find_last_log_match(
+            log_buffer,
+            keywords=["转码", "transcode", "remux"],
+            within_seconds=window_seconds,
+            now_ts=now_ts,
+        ),
+        "last_upload": _find_last_log_match(
+            log_buffer,
+            keywords=["上传", "upload"],
+            within_seconds=window_seconds,
+            now_ts=now_ts,
+        ),
+        "last_message": _find_last_log_match(
+            log_buffer,
+            keywords=["received url", "收到链接", "链接", "url"],
+            within_seconds=window_seconds,
+            now_ts=now_ts,
+        ),
+    }
+
+
+def _load_message_queue_size() -> int:
+    try:
+        if not os.path.exists(MESSAGE_QUEUE_FILE):
+            return 0
+        with open(MESSAGE_QUEUE_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if not content:
+            return 0
+        data = json.loads(content)
+        if isinstance(data, list):
+            return len(data)
+        return 0
+    except Exception:
+        return 0
 
 def colorize_log_line(line):
     """Applies CSS classes to log line based on keywords for colorization, supports ANSI color codes."""
@@ -5202,6 +5447,18 @@ async def index():
 
     download_queue_stats = load_download_queue_stats()
     
+    try:
+        log_window_minutes = int(config.get('log_insights_window_minutes', 5) or 0)
+    except Exception:
+        log_window_minutes = 5
+    if log_window_minutes < 0:
+        log_window_minutes = 0
+    if log_window_minutes > 1440:
+        log_window_minutes = 1440
+    log_window_seconds = log_window_minutes * 60 if log_window_minutes > 0 else None
+
+    tg_log_insights = _build_log_insights(tg_monitor_mgr.log_buffer, window_seconds=log_window_seconds)
+    bot_log_insights = _build_log_insights(bot_monitor_mgr.log_buffer, window_seconds=log_window_seconds)
     return render_template('index.html', 
                                   config=config, 
                                   auth_status=auth_status,
@@ -5209,7 +5466,13 @@ async def index():
                                   file_monitor_status=get_file_monitor_status(),
                                   bot_monitor_status=get_bot_monitor_status(),
                                   download_risk_stats=download_risk_stats,
-                                  download_queue_stats=download_queue_stats)
+                                  download_queue_stats=download_queue_stats,
+                                  tg_last_log=tg_log_insights.get('last_activity', {}),
+                                  bot_last_log=bot_log_insights.get('last_activity', {}),
+                                  bot_log_insights=bot_log_insights,
+                                  bot_process_info=_get_process_info(bot_monitor_mgr),
+                                  bot_queue_size=_load_message_queue_size(),
+                                  log_window_minutes=log_window_minutes)
 
 @app.route('/toggle_debug', methods=['POST'])
 @login_required
@@ -5224,6 +5487,26 @@ def toggle_debug():
         start_monitor_process()
 
     flash(f"DEBUG 模式已{'开启' if debug_mode else '关闭'}", "success")
+    return redirect(url_for('index'))
+
+
+@app.route('/update_log_insights_window', methods=['POST'])
+@login_required
+def update_log_insights_window():
+    config = load_config()
+    raw = request.form.get('log_insights_window_minutes', config.get('log_insights_window_minutes', 5))
+    try:
+        minutes = int(raw)
+    except Exception:
+        minutes = int(config.get('log_insights_window_minutes', 5) or 0)
+    if minutes < 0:
+        minutes = 0
+    if minutes > 1440:
+        minutes = 1440
+    config['log_insights_window_minutes'] = minutes
+    save_config(config)
+    label = "全部" if minutes == 0 else f"{minutes} 分钟"
+    flash(f"主页概览统计窗口已更新为 {label}。", "success")
     return redirect(url_for('index'))
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -6665,8 +6948,18 @@ def manage_file_config():
             allowed_browse_path = request.form.get('allowed_browse_path')
             debug_mode = request.form.get('debug_mode') == 'on'
             trace_media_detection = request.form.get('trace_media_detection') == 'on'
+            log_insights_window_minutes = request.form.get('log_insights_window_minutes', config.get('log_insights_window_minutes', 5))
             config['debug_mode'] = debug_mode
             config['trace_media_detection'] = trace_media_detection
+            try:
+                log_insights_window_minutes = int(log_insights_window_minutes)
+            except Exception:
+                log_insights_window_minutes = config.get('log_insights_window_minutes', 5)
+            if log_insights_window_minutes < 0:
+                log_insights_window_minutes = 0
+            if log_insights_window_minutes > 1440:
+                log_insights_window_minutes = 1440
+            config['log_insights_window_minutes'] = log_insights_window_minutes
             if os.path.isdir(allowed_browse_path):
                 config['allowed_browse_path'] = os.path.abspath(allowed_browse_path)
                 save_config(config)

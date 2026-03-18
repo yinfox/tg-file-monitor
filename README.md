@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.20`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.21`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.20
+y1nf0x/tg-file-monitor:0.5.21
 
 ### ☁️ 115 分享链接转存（Bot）
 
@@ -394,7 +394,11 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.20 (2026-03-18) - 当前版本
+### v0.5.21 (2026-03-18) - 当前版本
+- ✅ 主页概览补充 TG/Bot 采集详情（最近链接/下载/转码/上传/错误）
+- ✅ 主页概览统计窗口支持配置与快捷切换（全部/5/10/30/60 分钟）
+
+### v0.5.20 (2026-03-18)
 - ✅ 日志面板实时展示下载队列积压与并发状态
 - ✅ 队列积压超过阈值自动降速，回落后自动恢复并发
 - ✅ 新增队列自动降速配置（阈值/恢复阈值/最低并发）

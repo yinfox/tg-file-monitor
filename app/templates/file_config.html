@@ -210,6 +210,13 @@
                                 </div>
                                 <div class="form-text small">仅用于排查“有视频但未命中”问题，建议临时开启。</div>
                             </div>
+                            <div class="col-12 mb-2">
+                                <label for="log_insights_window_minutes" class="form-label small">主页概览统计窗口(分钟):</label>
+                                <input type="number" id="log_insights_window_minutes" name="log_insights_window_minutes"
+                                    class="form-control form-control-sm" min="0" max="1440"
+                                    value="{{ config.get('log_insights_window_minutes', 5) }}">
+                                <div class="form-text small">用于 Bot/TG 概览中的“最近下载/错误”等统计，0 表示不限制。</div>
+                            </div>
                             <div class="col-12">
                                 <button type="submit" class="btn btn-dark btn-sm w-100">保存全局设置</button>
                             </div>
