@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.22`
+Latest image: `y1nf0x/tg-file-monitor:0.5.29`
 
 Upgrade example:
 
@@ -87,7 +87,8 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.22
+y1nf0x/tg-file-monitor:0.5.29
+```
 
 ### ☁️ 115 Share Transfer (Bot)
 
@@ -237,7 +238,10 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.22 (2026-03-18) - Current
+### v0.5.29 (2026-03-19) - Current
+- ✅ Added `猎杀史卡佩塔` to the drama whitelist
+
+### v0.5.22 (2026-03-18)
 - ✅ Bot can resolve HDHive links and transfer to 115 (supports `cid` for direct transfer)
 - ✅ HDHive/115 link messages no longer trigger the “update cookies” prompt
 
