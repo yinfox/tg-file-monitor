@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.29`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.30`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.29
+y1nf0x/tg-file-monitor:0.5.30
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -395,7 +395,13 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.29 (2026-03-19) - 当前版本
+### v0.5.30 (2026-03-19) - 当前版本
+- ✅ 影巢自动签到恢复，兼容站点新版 Server Action 接口
+- ✅ 影巢当前积分恢复读取（从账户页数据解析）
+- ✅ 配置页新增“刷新积分”，并显示积分更新时间
+- ✅ Bot 新增 `/hdhive_checkin`、`/hdhive_points` 与 `/start` 快捷按钮
+
+### v0.5.29 (2026-03-19)
 - ✅ 追剧白名单新增《猎杀史卡佩塔》
 
 ### v0.5.22 (2026-03-18)
@@ -421,10 +427,13 @@ Web 界面 → 配置 → 代理配置
 
 ### v0.5.17 (2026-03-17)
 - ✅ 新增追剧数据源：猫眼网播·网络电影（web-heat#4）
-
-### v0.5.16 (2026-03-17)
-- ✅ 追剧白名单自定义分类区域布局优化
 <!-- AUTO-GEN:VERSION_HISTORY:END -->
+
+### v0.5.30 (2026-03-19)
+- ✅ 影巢自动签到恢复，兼容站点新版 Server Action 接口
+- ✅ 影巢当前积分恢复读取（从账户页数据解析）
+- ✅ 配置页新增“刷新积分”，并显示积分更新时间
+- ✅ Bot 新增 `/hdhive_checkin`、`/hdhive_points` 与 `/start` 快捷按钮
 
 ### v0.5.29 (2026-03-19)
 - ✅ 追剧白名单新增《猎杀史卡佩塔》

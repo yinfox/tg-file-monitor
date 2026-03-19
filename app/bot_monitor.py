@@ -93,6 +93,79 @@ def _should_send_queue_via_bot(cfg: dict) -> bool:
     return mode in ('bot_monitor', 'bot')
 
 
+def _load_hdhive_app_helpers():
+    import app.app as web_app
+    return web_app
+
+
+def _hdhive_checkin_via_app_sync(mode: str = "normal") -> Dict[str, object]:
+    cfg = load_config()
+    mode = (mode or "normal").strip().lower()
+    if mode not in ("normal", "gamble"):
+        mode = "normal"
+
+    cookie = (cfg.get("hdhive_cookie") or "").strip()
+    if not cookie:
+        return {
+            "success": False,
+            "message": "未配置 HDHive Cookie，请先在网页配置页填写。",
+            "points": None,
+            "mode": mode,
+        }
+
+    web_app = _load_hdhive_app_helpers()
+    checkin_cfg = dict(cfg.get("hdhive_checkin") or {})
+    checkin_cfg["mode"] = mode
+    cfg = dict(cfg)
+    cfg["hdhive_checkin"] = checkin_cfg
+    web_app._run_hdhive_checkin(cfg, reason="Bot命令", force=True, notify=False)
+    state = web_app.get_hdhive_checkin_state()
+    success = state.get("last_status") == "ok"
+    return {
+        "success": success,
+        "message": state.get("last_message") or ("签到成功" if success else "签到失败"),
+        "points": state.get("last_points"),
+        "checked_at": state.get("last_checkin_at"),
+        "mode": mode,
+    }
+
+
+def _hdhive_points_via_app_sync() -> Dict[str, object]:
+    cfg = load_config()
+    cookie = (cfg.get("hdhive_cookie") or "").strip()
+    if not cookie:
+        return {
+            "success": False,
+            "message": "未配置 HDHive Cookie，请先在网页配置页填写。",
+            "points": None,
+        }
+    web_app = _load_hdhive_app_helpers()
+    base_url = (cfg.get("hdhive_base_url") or "https://hdhive.com").strip()
+    points = web_app._hdhive_fetch_points(base_url, cookie)
+    if points is None:
+        return {
+            "success": False,
+            "message": "未能获取当前积分，请稍后再试。",
+            "points": None,
+        }
+    return {
+        "success": True,
+        "message": f"当前积分：{points}",
+        "points": points,
+    }
+
+
+def build_main_menu_buttons():
+    return [
+        [types.KeyboardButtonCallback("🍪 更新 Cookies", data=b'update_cookies')],
+        [types.KeyboardButtonCallback("⚙️ 下载设置", data=b'dl_settings')],
+        [types.KeyboardButtonCallback("🎯 影巢签到", data=b'hdhive_checkin'),
+         types.KeyboardButtonCallback("💰 当前积分", data=b'hdhive_points')],
+        [types.KeyboardButtonCallback("🗑 清除记录", data=b'clear_history'),
+         types.KeyboardButtonCallback("❓ 使用帮助", data=b'help_menu')],
+    ]
+
+
 async def message_queue_loop(client):
     """Background loop to send pending messages from app.py"""
     downloader.log("消息发送队列轮询已启动。", "info")
@@ -888,18 +961,7 @@ async def main():
             "我可以帮您下载视频（支持 YouTube、TikTok、X/Twitter、Facebook、Instagram 等）。\n\n"
             "👇 **点击下方按钮开始交互**"
         )
-        buttons = [
-            [types.KeyboardButtonCallback("🍪 更新 Cookies", data=b'update_cookies')],
-            [types.KeyboardButtonCallback("❓ 使用帮助", data=b'help_menu')]
-        ]
-        # Note: KeyboardButtonCallback is for Inline keyboards usually sent via buttons=... in client.send_message
-        # In Telethon events.reply(buttons=...) works if it's inline.
-        # Strict types: buttons should be list of lists of Button.inline(...)
-        await event.reply(welcome_text, buttons=[
-            [types.KeyboardButtonCallback("🍪 更新 Cookies", data=b'update_cookies')],
-            [types.KeyboardButtonCallback("⚙️ 下载设置", data=b'dl_settings')],
-            [types.KeyboardButtonCallback("🗑 清除记录", data=b'clear_history'), types.KeyboardButtonCallback("❓ 使用帮助", data=b'help_menu')]
-        ])
+        await event.reply(welcome_text, buttons=build_main_menu_buttons())
 
     @client.on(events.CallbackQuery(data=b'clear_history'))
     async def clear_history_callback_handler(event):
@@ -924,11 +986,7 @@ async def main():
             "我可以帮您下载视频（支持 YouTube、TikTok、X/Twitter、Facebook、Instagram 等）。\n\n"
             "👇 **点击下方按钮开始交互**"
         )
-        await client.send_message(chat_id, welcome_text, buttons=[
-            [types.KeyboardButtonCallback("🍪 更新 Cookies", data=b'update_cookies')],
-            [types.KeyboardButtonCallback("⚙️ 下载设置", data=b'dl_settings')],
-            [types.KeyboardButtonCallback("🗑 清除记录", data=b'clear_history'), types.KeyboardButtonCallback("❓ 使用帮助", data=b'help_menu')]
-        ])
+        await client.send_message(chat_id, welcome_text, buttons=build_main_menu_buttons())
 
     @client.on(events.NewMessage(pattern='/download_settings'))
     async def download_settings_handler(event):
@@ -1091,8 +1149,57 @@ async def main():
             "6. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
             "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
             "8. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
+            "9. **影巢签到**: 发送 `/hdhive_checkin`\n"
+            "10. **当前积分**: 发送 `/hdhive_points`\n"
         )
         await event.respond(help_text)
+
+    async def _run_hdhive_checkin_reply(send_message, mode: str = "normal"):
+        wait_msg = "正在执行影巢签到..."
+        if mode == "gamble":
+            wait_msg = "正在执行影巢赌狗签到..."
+        msg = await send_message(wait_msg)
+        try:
+            result = await asyncio.to_thread(_hdhive_checkin_via_app_sync, mode)
+            if result.get("success"):
+                lines = [
+                    f"✅ **影巢{'赌狗' if mode == 'gamble' else ''}签到完成**",
+                    f"结果: {result.get('message') or '签到成功'}",
+                ]
+                points = result.get("points")
+                if points not in (None, ""):
+                    lines.append(f"当前积分: {points}")
+                checked_at = result.get("checked_at")
+                if checked_at:
+                    lines.append(f"时间: {checked_at}")
+                await msg.edit("\n".join(lines))
+            else:
+                await msg.edit(f"❌ **影巢签到失败**\n{result.get('message') or '未知错误'}")
+        except Exception as e:
+            logger.exception("Bot: HDHive check-in command failed")
+            await msg.edit(f"❌ **影巢签到失败**\n{type(e).__name__}: {e}")
+
+    async def _run_hdhive_points_reply(send_message):
+        msg = await send_message("正在获取影巢当前积分...")
+        try:
+            result = await asyncio.to_thread(_hdhive_points_via_app_sync)
+            if result.get("success"):
+                await msg.edit(f"💰 **影巢当前积分**\n{result.get('message')}")
+            else:
+                await msg.edit(f"❌ **获取影巢积分失败**\n{result.get('message') or '未知错误'}")
+        except Exception as e:
+            logger.exception("Bot: HDHive points command failed")
+            await msg.edit(f"❌ **获取影巢积分失败**\n{type(e).__name__}: {e}")
+
+    @client.on(events.CallbackQuery(data=b'hdhive_checkin'))
+    async def hdhive_checkin_callback_handler(event):
+        await event.answer("正在签到...")
+        await _run_hdhive_checkin_reply(lambda text: event.respond(text), mode="normal")
+
+    @client.on(events.CallbackQuery(data=b'hdhive_points'))
+    async def hdhive_points_callback_handler(event):
+        await event.answer("正在获取积分...")
+        await _run_hdhive_points_reply(lambda text: event.respond(text))
 
     @client.on(events.NewMessage(pattern='/cancel'))
     async def cancel_handler(event):
@@ -1128,6 +1235,8 @@ async def main():
             "6. **搜寻影视**: 发送 `/movie <剧名>`\n"
             "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
             "8. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
+            "9. **影巢签到**: 发送 `/hdhive_checkin`\n"
+            "10. **当前积分**: 发送 `/hdhive_points`\n"
         )
         await event.reply(help_text)
 
@@ -1185,6 +1294,21 @@ async def main():
         except Exception as e:
             logger.error(f"Bot: Failed to save resource request: {e}")
             await event.reply(f"❌ 提交失败: {str(e)}")
+
+    @client.on(events.NewMessage(pattern='/hdhive_checkin'))
+    async def hdhive_checkin_handler(event):
+        text = (event.text or "").strip()
+        parts = text.split()
+        mode = "normal"
+        if len(parts) > 1:
+            arg = (parts[1] or "").strip().lower()
+            if arg in ("normal", "gamble"):
+                mode = arg
+        await _run_hdhive_checkin_reply(lambda text: event.reply(text), mode=mode)
+
+    @client.on(events.NewMessage(pattern='/hdhive_points'))
+    async def hdhive_points_handler(event):
+        await _run_hdhive_points_reply(lambda text: event.reply(text))
 
     @client.on(events.NewMessage(pattern='/status'))
     async def status_handler(event):
@@ -2055,6 +2179,8 @@ async def main():
                 types.BotCommand("cookies_status", "检查 Cookies 状态"),
                 types.BotCommand("cookies_check", "深度检查 Cookies 可用性"),
                 types.BotCommand("movie", "影巢资源搜寻"),
+                types.BotCommand("hdhive_checkin", "影巢签到并查看积分"),
+                types.BotCommand("hdhive_points", "获取影巢当前积分"),
                 types.BotCommand("help", "使用帮助"),
                 types.BotCommand("status", "检查服务状态"),
             ],

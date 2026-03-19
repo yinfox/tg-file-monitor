@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.29`
+Latest image: `y1nf0x/tg-file-monitor:0.5.30`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.29
+y1nf0x/tg-file-monitor:0.5.30
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,13 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.29 (2026-03-19) - Current
+### v0.5.30 (2026-03-19) - Current
+- ✅ Restored HDHive auto sign-in using the site's current Server Action flow
+- ✅ Restored current HDHive points from account-page data
+- ✅ Config page adds a manual points refresh action and updated points timestamp
+- ✅ Bot adds `/hdhive_checkin`, `/hdhive_points`, and `/start` shortcuts
+
+### v0.5.29 (2026-03-19)
 - ✅ Added `猎杀史卡佩塔` to the drama whitelist
 
 ### v0.5.22 (2026-03-18)
