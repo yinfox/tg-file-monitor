@@ -6,6 +6,7 @@ import sqlite3
 import time
 import fcntl
 import hashlib
+import importlib
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 from telethon import TelegramClient, events, functions, types
@@ -94,8 +95,12 @@ def _should_send_queue_via_bot(cfg: dict) -> bool:
 
 
 def _load_hdhive_app_helpers():
-    import app.app as web_app
-    return web_app
+    if BASE_DIR not in sys.path:
+        sys.path.insert(0, BASE_DIR)
+    cached_app = sys.modules.get("app")
+    if cached_app is not None and not hasattr(cached_app, "__path__"):
+        sys.modules.pop("app", None)
+    return importlib.import_module("app.app")
 
 
 def _hdhive_checkin_via_app_sync(mode: str = "normal") -> Dict[str, object]:

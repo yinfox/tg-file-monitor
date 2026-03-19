@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.30`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.33`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.30
+y1nf0x/tg-file-monitor:0.5.33
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -395,7 +395,11 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.30 (2026-03-19) - 当前版本
+### v0.5.33 (2026-03-19) - 当前版本
+- ✅ 首页四张运行状态卡统一为“字段小卡片 + 状态标签”布局
+- ✅ Telegram、文件同步、Bot、追剧调度状态展示层级更一致，长文本状态更易读
+
+### v0.5.30 (2026-03-19)
 - ✅ 影巢自动签到恢复，兼容站点新版 Server Action 接口
 - ✅ 影巢当前积分恢复读取（从账户页数据解析）
 - ✅ 配置页新增“刷新积分”，并显示积分更新时间
@@ -424,10 +428,11 @@ Web 界面 → 配置 → 代理配置
 
 ### v0.5.18 (2026-03-17)
 - ✅ 追剧白名单编辑支持“猫眼网播·网络电影”单独分组与维护
-
-### v0.5.17 (2026-03-17)
-- ✅ 新增追剧数据源：猫眼网播·网络电影（web-heat#4）
 <!-- AUTO-GEN:VERSION_HISTORY:END -->
+
+### v0.5.33 (2026-03-19)
+- ✅ 首页四张运行状态卡统一为“字段小卡片 + 状态标签”布局
+- ✅ Telegram、文件同步、Bot、追剧调度状态展示层级更一致，长文本状态更易读
 
 ### v0.5.30 (2026-03-19)
 - ✅ 影巢自动签到恢复，兼容站点新版 Server Action 接口

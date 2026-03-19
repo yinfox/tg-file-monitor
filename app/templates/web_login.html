@@ -1,23 +1,57 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 
-{% block title %}Web 登录{% endblock %}
+{% block title %}Web 管理登录{% endblock %}
+{% block auth_kicker %}Admin Access{% endblock %}
+{% block auth_heading %}Web 管理登录{% endblock %}
+{% block auth_desc %}输入后台管理员账号和密码，登录后进入完整管理界面。{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-8 col-lg-6">
-        <h2 class="mb-4 text-center">Web 管理登录</h2>
-        <div class="card p-4 shadow-sm">
-            <form method="post">
-                <div class="mb-3">
-                    <label for="username" class="form-label">用户名:</label>
-                    <input type="text" id="username" name="username" class="form-control" value="{{ username }}" required>
+<div class="row justify-content-center g-3">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <div class="auth-card-title"><i class="bi bi-person-lock me-2"></i>管理员登录</div>
+            </div>
+            <div class="card-body p-4">
+                <form method="post">
+                    <div class="mb-3">
+                        <label for="username" class="form-label">用户名</label>
+                        <input type="text" id="username" name="username" class="form-control" value="{{ username }}" required>
+                    </div>
+                    <div class="mb-3">
+                        <label for="password" class="form-label">密码</label>
+                        <input type="password" id="password" name="password" class="form-control" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary w-100">登录</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <div class="auth-card-title"><i class="bi bi-shield-check me-2"></i>说明</div>
+            </div>
+            <div class="card-body p-4">
+                <div class="auth-side-title">登录信息</div>
+                <div class="auth-side-list">
+                    <div class="auth-side-item">
+                        <span class="auth-side-label">当前用户名</span>
+                        <span class="auth-side-value">{{ username }}</span>
+                    </div>
+                    <div class="auth-side-item">
+                        <span class="auth-side-label">登录目标</span>
+                        <span class="auth-side-value">后台管理界面</span>
+                    </div>
                 </div>
-                <div class="mb-3">
-                    <label for="password" class="form-label">密码:</label>
-                    <input type="password" id="password" name="password" class="form-control" required>
+
+                <div class="auth-note-card">
+                    <strong>登录后可用</strong>
+                    <small>进入首页总控台、配置中心、日志中心和业务页面。</small>
+                    <small>如忘记密码，需要在配置目录中手动重置 `web_auth.password_hash`。</small>
                 </div>
-                <button type="submit" class="btn btn-primary w-100">登录</button>
-            </form>
+            </div>
         </div>
     </div>
 </div>

@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}追剧日历正则{% endblock %}
+{% block title %}追剧配置中心{% endblock %}
 
 {% block extra_head %}
 <style>
@@ -798,6 +798,129 @@
         gap: 0.65rem;
     }
 
+    .drama-quick-nav-card {
+        margin-bottom: 0.85rem;
+        background: rgba(255, 255, 255, 0.26);
+    }
+
+    .drama-quick-nav-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.6rem;
+    }
+
+    .drama-quick-nav-title {
+        font-size: 0.82rem;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: 0.03em;
+    }
+
+    .drama-quick-nav-meta {
+        font-size: 0.74rem;
+        color: #64748b;
+        line-height: 1.4;
+    }
+
+    .drama-quick-nav-grid {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.55rem;
+    }
+
+    .drama-quick-nav-link {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.55rem;
+        padding: 0.6rem 0.7rem;
+        border-radius: 0.8rem;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        background: rgba(255, 255, 255, 0.48);
+        color: #1f2937;
+        text-decoration: none;
+        transition: all 0.18s ease;
+        font-size: 0.76rem;
+        font-weight: 700;
+    }
+
+    .drama-quick-nav-link:hover {
+        color: #0f172a;
+        transform: translateY(-1px);
+        border-color: rgba(79, 70, 229, 0.28);
+        box-shadow: 0 12px 24px rgba(79, 70, 229, 0.08);
+    }
+
+    .drama-quick-nav-link.active {
+        color: #312e81;
+        background: rgba(79, 70, 229, 0.12);
+        border-color: rgba(79, 70, 229, 0.26);
+        box-shadow: 0 10px 20px rgba(79, 70, 229, 0.1);
+    }
+
+    .drama-quick-nav-link i {
+        color: #4f46e5;
+    }
+
+    .drama-note-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.65rem;
+        margin-top: 0.85rem;
+    }
+
+    .drama-note-card {
+        padding: 0.8rem 0.85rem;
+        border-radius: 0.85rem;
+        background: rgba(255, 255, 255, 0.42);
+        border: 1px dashed rgba(148, 163, 184, 0.38);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+    }
+
+    .drama-note-card strong {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        color: #0f172a;
+        font-size: 0.78rem;
+        font-weight: 800;
+    }
+
+    .drama-note-card small {
+        display: block;
+        margin-top: 0.35rem;
+        color: #334155;
+        font-weight: 500;
+        line-height: 1.45;
+    }
+
+    .drama-jump-highlight {
+        position: relative;
+        z-index: 1;
+        animation: dramaSectionPulse 1.2s ease;
+    }
+
+    @keyframes dramaSectionPulse {
+        0% {
+            transform: translateY(0);
+            box-shadow: 0 0 0 rgba(79, 70, 229, 0);
+        }
+        35% {
+            transform: translateY(-2px);
+            box-shadow: 0 0 0 4px rgba(79, 70, 229, 0.12);
+        }
+        100% {
+            transform: translateY(0);
+            box-shadow: 0 0 0 rgba(79, 70, 229, 0);
+        }
+    }
+
+    .drama-section-anchor {
+        scroll-margin-top: 5rem;
+    }
+
     @media (max-width: 767.98px) {
         .source-grid {
             grid-template-columns: 1fr;
@@ -806,7 +929,9 @@
         .drama-hero-shell,
         .dense-grid,
         .compact-checks,
-        .overview-grid {
+        .overview-grid,
+        .drama-quick-nav-grid,
+        .drama-note-grid {
             grid-template-columns: 1fr;
         }
 
@@ -863,7 +988,7 @@
                 <div class="drama-hero-main">
                     <div class="drama-hero-title">
                         <i class="bi bi-calendar3"></i>
-                        <span>追剧日历正则同步</span>
+                        <span>追剧配置中心</span>
                     </div>
                     <div class="drama-hero-desc">选择来源后执行预览或写入，详细配置按需展开。<span class="text-danger">预览不会写入配置</span>。</div>
                     <div class="drama-hero-actions">
@@ -871,6 +996,15 @@
                             data-bs-target="#env_edit_panel" aria-expanded="false" aria-controls="env_edit_panel">
                             <i class="bi bi-pencil-square me-1"></i>白名单编辑
                         </button>
+                        <a href="#section-config-main" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
+                            <i class="bi bi-sliders me-1"></i>来源配置
+                        </a>
+                        <a href="#section-write-settings" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
+                            <i class="bi bi-download me-1"></i>写入设置
+                        </a>
+                        <a href="#section-schedule" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
+                            <i class="bi bi-clock-history me-1"></i>自动调度
+                        </a>
                     </div>
                     <div class="drama-hero-meta">
                         <span class="drama-hero-chip">
@@ -1022,6 +1156,56 @@
             </div>
         </div>
 
+        <div class="card shadow-sm drama-quick-nav-card drama-section-anchor" id="section-overview">
+            <div class="card-body p-3">
+                <div class="drama-quick-nav-head">
+                    <div>
+                        <div class="drama-quick-nav-title">快速定位</div>
+                        <div class="drama-quick-nav-meta">保留当前追剧配置页的完整能力，同时补上模块入口，减少在长表单里反复找位置。</div>
+                    </div>
+                    <a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-secondary btn-sm">
+                        <i class="bi bi-journal-text me-1"></i>日志中心
+                    </a>
+                </div>
+                <div class="drama-quick-nav-grid">
+                    <a href="#section-whitelist" class="drama-quick-nav-link active" data-drama-nav>
+                        <span><i class="bi bi-pencil-square me-1"></i>白名单编辑</span>
+                    </a>
+                    <a href="#section-config-main" class="drama-quick-nav-link" data-drama-nav>
+                        <span><i class="bi bi-sliders me-1"></i>来源配置</span>
+                    </a>
+                    <a href="#section-write-settings" class="drama-quick-nav-link" data-drama-nav>
+                        <span><i class="bi bi-download me-1"></i>写入设置</span>
+                    </a>
+                    <a href="#section-finish-settings" class="drama-quick-nav-link" data-drama-nav>
+                        <span><i class="bi bi-stars me-1"></i>TMDB 判定</span>
+                    </a>
+                    <a href="#section-schedule" class="drama-quick-nav-link" data-drama-nav>
+                        <span><i class="bi bi-clock-history me-1"></i>自动调度</span>
+                    </a>
+                </div>
+                <div class="drama-note-grid">
+                    <div class="drama-note-card">
+                        <strong><i class="bi bi-pencil-square"></i>白名单维护</strong>
+                        <small>新增自定义分类、联网回填和按来源改名/删词都在这里，保存分类后才会写回配置文件。</small>
+                    </div>
+                    <div class="drama-note-card">
+                        <strong><i class="bi bi-download"></i>预览与写入</strong>
+                        <small>“保存追剧配置”只更新参数；只有“执行写入”才会把提取后的追剧白名单写入 <code>tvchannel_filters.json</code>。</small>
+                    </div>
+                    <div class="drama-note-card">
+                        <strong><i class="bi bi-stars"></i>TMDB 与调度</strong>
+                        <small>TMDB 是可选联网判定，自动调度的实时状态已经移到顶部概览卡，底部面板只负责改参数。</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <section class="drama-section-anchor" id="section-whitelist">
+        <div class="drama-note-card mb-3">
+            <strong><i class="bi bi-info-circle"></i>白名单编辑提示</strong>
+            <small>这里适合处理“补分类、改剧名、删关键词”这类人工维护动作；如果只是刷新来源参数或写入策略，直接去下面的配置区更省步骤。</small>
+        </div>
         <div class="collapse" id="env_edit_panel">
             <div class="card shadow-sm border-secondary mb-3">
                 <div class="card-header bg-light">
@@ -1167,14 +1351,19 @@
                 </div>
             </div>
         </div>
+        </section>
 
 
-
+        <section class="drama-section-anchor" id="section-config-main">
         <div class="card shadow-sm border-primary">
             <div class="card-header bg-primary text-white">
                 <h5 class="mb-0 small"><i class="bi bi-sliders me-2"></i>配置</h5>
             </div>
             <div class="card-body p-3">
+                <div class="drama-note-card mb-3">
+                    <strong><i class="bi bi-lightning-charge"></i>配置区说明</strong>
+                    <small>这里集中管理来源抓取参数、写入方式、TMDB 判定和自动调度。建议先保存参数，再按需执行“预览提取”或“执行写入”。</small>
+                </div>
                 <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-3">
 
                     <div class="mb-2">
@@ -1660,7 +1849,7 @@
                     </div>
 
                     <div class="overview-grid">
-                        <div class="source-panel">
+                        <div class="source-panel drama-section-anchor" id="section-write-settings">
                             <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_write_panel"
                                 aria-expanded="{{ 'true' if write_panel_open else 'false' }}" aria-controls="drama_write_panel">
                                 <span class="panel-toggle-copy">
@@ -1702,7 +1891,7 @@
                             </div>
                         </div>
 
-                        <div class="source-panel">
+                        <div class="source-panel drama-section-anchor" id="section-finish-settings">
                             <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_finish_panel"
                                 aria-expanded="{{ 'true' if finish_panel_open else 'false' }}" aria-controls="drama_finish_panel">
                                 <span class="panel-toggle-copy">
@@ -1778,7 +1967,7 @@
                         </div>
                     </div>
 
-                    <div class="source-panel">
+                    <div class="source-panel drama-section-anchor" id="section-schedule">
                         {% set auto_sync_enabled = config.get('drama_calendar', {}).get('auto_sync_enabled', False) %}
                         <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_auto_sync_panel"
                             aria-expanded="{{ 'true' if auto_sync_enabled else 'false' }}" aria-controls="drama_auto_sync_panel">
@@ -1852,12 +2041,13 @@
 
                 <div class="secondary-bar">
                     <a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-secondary btn-sm">
-                        <i class="bi bi-journal-text me-1"></i>查看追剧日志
+                        <i class="bi bi-journal-text me-1"></i>日志中心
                     </a>
                     <div class="form-text align-self-center mb-0">执行结果会在页面顶部显示，建议先预览再写入。</div>
                 </div>
             </div>
         </div>
+        </section>
 
     </div>
 </div>
@@ -2050,6 +2240,122 @@
                 }
             });
         });
+    })();
+
+    (function () {
+        const navLinks = Array.from(document.querySelectorAll('[data-drama-nav]'));
+        const jumpLinks = Array.from(document.querySelectorAll('[data-drama-jump]'));
+        if (!navLinks.length && !jumpLinks.length) {
+            return;
+        }
+
+        const sections = navLinks
+            .map((link) => document.querySelector(link.getAttribute('href')))
+            .filter(Boolean);
+        const revealPanels = new Map([
+            ['#section-whitelist', 'env_edit_panel'],
+            ['#section-write-settings', 'drama_write_panel'],
+            ['#section-finish-settings', 'drama_finish_panel'],
+            ['#section-schedule', 'drama_auto_sync_panel']
+        ]);
+        let jumpTimer = null;
+
+        function getHighlightTarget(section) {
+            if (!section) {
+                return null;
+            }
+            if (section.matches('.card, .source-panel, .overview-grid')) {
+                return section;
+            }
+            return section.querySelector('.card, .source-panel, .overview-grid') || section;
+        }
+
+        function showPanelForTarget(targetSelector) {
+            const panelId = revealPanels.get(targetSelector);
+            if (!panelId) {
+                return Promise.resolve();
+            }
+
+            const panelEl = document.getElementById(panelId);
+            if (!panelEl || panelEl.classList.contains('show')) {
+                return Promise.resolve();
+            }
+
+            return new Promise((resolve) => {
+                const finish = () => {
+                    panelEl.removeEventListener('shown.bs.collapse', finish);
+                    resolve();
+                };
+
+                panelEl.addEventListener('shown.bs.collapse', finish, { once: true });
+                bootstrap.Collapse.getOrCreateInstance(panelEl, { toggle: false }).show();
+                window.setTimeout(finish, 220);
+            });
+        }
+
+        async function jumpToDramaSection(targetSelector) {
+            const target = document.querySelector(targetSelector);
+            if (!target) {
+                return;
+            }
+
+            await showPanelForTarget(targetSelector);
+
+            if (jumpTimer) {
+                clearTimeout(jumpTimer);
+                jumpTimer = null;
+            }
+
+            document.querySelectorAll('.drama-jump-highlight').forEach((item) => {
+                item.classList.remove('drama-jump-highlight');
+            });
+
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            const highlightTarget = getHighlightTarget(target);
+            if (highlightTarget) {
+                highlightTarget.classList.add('drama-jump-highlight');
+                jumpTimer = window.setTimeout(() => {
+                    highlightTarget.classList.remove('drama-jump-highlight');
+                }, 1400);
+            }
+        }
+
+        function updateDramaNav() {
+            if (!sections.length) {
+                return;
+            }
+            const offset = window.innerWidth < 992 ? 140 : 96;
+            let activeId = sections[0].id;
+            sections.forEach((section) => {
+                const rect = section.getBoundingClientRect();
+                if (rect.top - offset <= 0) {
+                    activeId = section.id;
+                }
+            });
+            navLinks.forEach((link) => {
+                link.classList.toggle('active', link.getAttribute('href') === `#${activeId}`);
+            });
+        }
+
+        navLinks.forEach((link) => {
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                navLinks.forEach((item) => item.classList.remove('active'));
+                link.classList.add('active');
+                jumpToDramaSection(link.getAttribute('href'));
+            });
+        });
+
+        jumpLinks.forEach((link) => {
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                jumpToDramaSection(link.getAttribute('href'));
+            });
+        });
+
+        updateDramaNav();
+        window.addEventListener('scroll', updateDramaNav, { passive: true });
+        window.addEventListener('resize', updateDramaNav);
     })();
 </script>
 {% endblock %}

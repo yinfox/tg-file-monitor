@@ -36,8 +36,10 @@ except Exception:
 app = Flask(__name__)
 # Stable secret key for v0.4.6
 app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
+app.config["TEMPLATES_AUTO_RELOAD"] = True
+app.jinja_env.auto_reload = True
 
-VERSION = "0.5.30"
+VERSION = "0.5.33"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -240,6 +242,28 @@ def load_config():
                     config["allowed_browse_path"] = os.getcwd()
                 if "restricted_channels" not in config:
                     config["restricted_channels"] = []
+                if not isinstance(config.get("restricted_channels"), list):
+                    config["restricted_channels"] = []
+                if "group_order" not in config or not isinstance(config.get("group_order"), list):
+                    config["group_order"] = []
+                normalized_group_order = []
+                seen_group_names = set()
+                for raw_group_name in config.get("group_order", []):
+                    group_name = str(raw_group_name or "").strip()
+                    if not group_name or group_name in seen_group_names:
+                        continue
+                    seen_group_names.add(group_name)
+                    normalized_group_order.append(group_name)
+                for entry in config.get("restricted_channels", []):
+                    if not isinstance(entry, dict):
+                        continue
+                    group_name = str(entry.get("group_name") or "").strip() or "默认分组"
+                    entry["group_name"] = group_name
+                    if group_name in seen_group_names:
+                        continue
+                    seen_group_names.add(group_name)
+                    normalized_group_order.append(group_name)
+                config["group_order"] = normalized_group_order
                 if "file_monitor_scan_interval" not in config:
                     config["file_monitor_scan_interval"] = default_config["file_monitor_scan_interval"]
                 if "file_monitor_dir_state_check_interval" not in config:
@@ -6004,12 +6028,16 @@ class ProcessManager:
             return True
         try:
             self.log_buffer.clear()
+            launch_cmd = [sys.executable, '-u', self.script_path]
+            if self.script_path == 'app/bot_monitor.py':
+                launch_cmd = [sys.executable, '-u', '-m', 'app.bot_monitor']
             self.process = subprocess.Popen(
-                [sys.executable, '-u', self.script_path],
+                launch_cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                bufsize=1
+                bufsize=1,
+                cwd=ROOT_DIR,
             )
             self.start_time = time.time()
             threading.Thread(target=self._read_output, args=(self.process.stdout, False), daemon=True).start()
@@ -6466,6 +6494,7 @@ async def index():
                                   monitor_status=get_monitor_status(),
                                   file_monitor_status=get_file_monitor_status(),
                                   bot_monitor_status=get_bot_monitor_status(),
+                                  scheduler_state=get_drama_scheduler_state(),
                                   download_risk_stats=download_risk_stats,
                                   download_queue_stats=download_queue_stats,
                                   tg_last_log=tg_log_insights.get('last_activity', {}),

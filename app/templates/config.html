@@ -190,7 +190,7 @@
     #bulkActionBar {
         display: none;
         z-index: 1050;
-        background: rgba(255, 255, 255, 0.9);
+        background: rgba(255, 255, 255, 0.34);
         backdrop-filter: blur(10px);
         border: 1px solid #dee2e6;
         border-radius: 0.3rem;
@@ -214,20 +214,466 @@
         display: inline-block;
         animation: rotate 1s linear infinite;
     }
+
+    .settings-overview {
+        background:
+            radial-gradient(circle at top right, rgba(99, 102, 241, 0.16), transparent 32%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(248, 250, 252, 0.28));
+        border: 1px solid rgba(99, 102, 241, 0.14);
+    }
+
+    .settings-kicker {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #4f46e5;
+        margin-bottom: 0.25rem;
+    }
+
+    .settings-hero-title {
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: #111827;
+        margin: 0;
+    }
+
+    .settings-quick-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        align-items: flex-start;
+    }
+
+    .settings-quick-actions .btn {
+        min-width: 118px;
+        font-weight: 800;
+        border-width: 1.5px;
+        box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
+    }
+
+    .settings-summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.75rem;
+    }
+
+    .settings-stat-card {
+        background: rgba(255, 255, 255, 0.2);
+        border: 1px solid rgba(148, 163, 184, 0.18);
+        border-radius: 0.85rem;
+        padding: 0.85rem 0.9rem;
+        min-height: 112px;
+    }
+
+    .settings-stat-label {
+        font-size: 0.72rem;
+        color: #64748b;
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+    }
+
+    .settings-stat-value {
+        font-size: 1.55rem;
+        line-height: 1;
+        font-weight: 800;
+        color: #0f172a;
+        margin-bottom: 0.25rem;
+    }
+
+    .settings-stat-help {
+        font-size: 0.76rem;
+        color: #64748b;
+        line-height: 1.35;
+    }
+
+    .settings-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin-top: 0.15rem;
+    }
+
+    .settings-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.3rem;
+        padding: 0.2rem 0.5rem;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.16);
+        color: #475569;
+        font-size: 0.72rem;
+        font-weight: 600;
+    }
+
+    .settings-chip.is-on {
+        background: rgba(16, 185, 129, 0.14);
+        color: #047857;
+    }
+
+    .settings-chip.is-off {
+        background: rgba(148, 163, 184, 0.16);
+        color: #64748b;
+    }
+
+    .settings-nav-card {
+        position: sticky;
+        top: 1.1rem;
+    }
+
+    .settings-nav-list {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 0.55rem;
+    }
+
+    .settings-nav-link {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        text-decoration: none;
+        color: #334155;
+        padding: 0.7rem 0.8rem;
+        border-radius: 0.85rem;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        background: rgba(255, 255, 255, 0.16);
+        transition: all 0.2s ease;
+    }
+
+    .settings-nav-link:hover {
+        color: #1e293b;
+        border-color: rgba(99, 102, 241, 0.28);
+        transform: translateY(-1px);
+        box-shadow: 0 10px 24px rgba(99, 102, 241, 0.08);
+    }
+
+    .settings-nav-link.active {
+        color: #312e81;
+        border-color: rgba(99, 102, 241, 0.26);
+        background: rgba(99, 102, 241, 0.1);
+        box-shadow: 0 10px 22px rgba(99, 102, 241, 0.1);
+    }
+
+    .settings-nav-link i {
+        color: #6366f1;
+        margin-right: 0.35rem;
+    }
+
+    .settings-nav-meta {
+        font-size: 0.75rem;
+        color: #64748b;
+        line-height: 1.5;
+    }
+
+    .related-page-link {
+        display: block;
+        text-decoration: none;
+        border: 1px solid rgba(148, 163, 184, 0.16);
+        border-radius: 0.8rem;
+        padding: 0.7rem 0.8rem;
+        background: rgba(255, 255, 255, 0.14);
+        color: #1f2937;
+        transition: all 0.2s ease;
+    }
+
+    .related-page-link:hover {
+        color: #111827;
+        border-color: rgba(99, 102, 241, 0.24);
+        transform: translateY(-1px);
+    }
+
+    .related-page-link small {
+        display: block;
+        color: #64748b;
+        margin-top: 0.15rem;
+        line-height: 1.35;
+    }
+
+    .settings-section {
+        scroll-margin-top: 5.25rem;
+    }
+
+    .settings-section-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.75rem;
+    }
+
+    .settings-section-header h4 {
+        margin: 0 0 0.15rem 0;
+        font-size: 1rem;
+        font-weight: 800;
+        color: #0f172a;
+    }
+
+    .settings-section-header p {
+        margin: 0;
+        color: #64748b;
+        font-size: 0.78rem;
+        line-height: 1.45;
+    }
+
+    .settings-section-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #6366f1;
+        margin-bottom: 0.2rem;
+    }
+
+    .settings-inline-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        padding: 0.25rem 0.55rem;
+        border-radius: 999px;
+        background: rgba(15, 23, 42, 0.05);
+        color: #334155;
+        font-size: 0.72rem;
+        font-weight: 600;
+    }
+
+    .settings-note-card {
+        background: rgba(15, 23, 42, 0.04);
+        border: 1px dashed rgba(148, 163, 184, 0.4);
+        border-radius: 0.8rem;
+        padding: 0.75rem 0.8rem;
+    }
+
+    .settings-note-card strong {
+        color: #0f172a;
+    }
+
+    .settings-note-card,
+    .settings-note-card small {
+        color: #334155;
+        font-weight: 500;
+        line-height: 1.45;
+    }
+
+    .settings-section.is-jumping > .settings-section-header,
+    .settings-section.is-jumping > .card {
+        position: relative;
+        z-index: 1;
+        animation: settingsSectionPulse 1.2s ease;
+    }
+
+    @keyframes settingsSectionPulse {
+        0% {
+            transform: translateY(0);
+            box-shadow: 0 0 0 rgba(99, 102, 241, 0);
+        }
+        35% {
+            transform: translateY(-2px);
+            box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.12);
+        }
+        100% {
+            transform: translateY(0);
+            box-shadow: 0 0 0 rgba(99, 102, 241, 0);
+        }
+    }
+
+    @media (min-width: 992px) {
+        .settings-section {
+            scroll-margin-top: 1.35rem;
+        }
+
+        .settings-summary-grid {
+            grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+    }
+
+    @media (min-width: 992px) {
+        .settings-layout > .col-xl-3,
+        .settings-layout > .col-xl-9,
+        .tg-compact .row.g-3 > .col-lg-7,
+        .tg-compact .row.g-3 > .col-lg-5 {
+            width: 100%;
+            flex: 0 0 auto;
+        }
+
+        .settings-nav-card {
+            position: static;
+        }
+    }
+
+    @media (max-width: 1199.98px) {
+        .settings-nav-card {
+            position: static;
+        }
+    }
+
+    @media (max-width: 767.98px) {
+        .settings-summary-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .settings-section-header {
+            flex-direction: column;
+        }
+    }
 </style>
 {% endblock %}
 
-{% block title %}管理转发配置{% endblock %}
+{% block title %}Telegram 配置中心{% endblock %}
 
 {% block content %}
 <div class="tg-compact">
-<div class="row">
-    <div class="col-md-12">
-        <h3 class="mb-2"><i class="bi bi-gear-fill me-2"></i>监控管理</h3>
+    {% set group_order = config.get('group_order', []) %}
+    {% set summary = namespace(group_count=0, forwarding_count=0, auto_click_count=0, tv_filter_count=0, download_dir_count=0) %}
+    {% for g_name in group_order %}
+    {% set g_list = config.restricted_channels | selectattr('group_name', 'equalto', g_name) | list %}
+    {% if g_list %}
+    {% set summary.group_count = summary.group_count + 1 %}
+    {% endif %}
+    {% endfor %}
+    {% for entry in config.restricted_channels %}
+    {% set entry_types = entry.monitor_types or [] %}
+    {% if entry.download_directory %}
+    {% set summary.download_dir_count = summary.download_dir_count + 1 %}
+    {% endif %}
+    {% if entry.keep_video_message or entry.force_forward_all or entry.forward_only or ('all' in entry_types) %}
+    {% set summary.forwarding_count = summary.forwarding_count + 1 %}
+    {% endif %}
+    {% if entry.auto_click_redpacket or entry.auto_click_keywords %}
+    {% set summary.auto_click_count = summary.auto_click_count + 1 %}
+    {% endif %}
+    {% if entry.use_tvchannel_filters %}
+    {% set summary.tv_filter_count = summary.tv_filter_count + 1 %}
+    {% endif %}
+    {% endfor %}
+    {% set hdhive_enabled = config.get('hdhive_cookie') or config.get('hdhive_open_api_key') %}
+    {% set bot_token_ready = config.get('bot', {}).get('token') %}
+
+    <div class="d-flex flex-column gap-3">
+        <div>
+            <h3 class="mb-1"><i class="bi bi-gear-fill me-2"></i>Telegram 配置中心</h3>
+            <p class="text-muted small mb-0">把频道任务、全局规则、扩展服务和凭证按模块集中整理，常用配置可以直接定位。</p>
+        </div>
+
+        <div class="card shadow-sm settings-overview" id="section-overview">
+            <div class="card-body p-3 p-lg-4">
+                <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-start">
+                    <div>
+                        <div class="settings-kicker">集中管理</div>
+                        <h4 class="settings-hero-title">一页看清常用设置，减少来回翻找</h4>
+                        <p class="text-muted small mb-0 mt-2">现在按“频道管理、规则中心、扩展服务、凭证配置”分区，你可以从左侧目录快速跳转到对应模块。</p>
+                    </div>
+                    <div class="settings-quick-actions">
+                        <a href="#section-editor" class="btn btn-primary btn-sm" data-settings-jump><i class="bi bi-plus-circle me-1"></i>新增频道</a>
+                        <a href="#section-rules" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-sliders me-1"></i>调整规则</a>
+                        <a href="#section-services" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-grid me-1"></i>扩展服务</a>
+                    </div>
+                </div>
+                <div class="settings-summary-grid mt-3">
+                    <div class="settings-stat-card">
+                        <div class="settings-stat-label">监控频道</div>
+                        <div class="settings-stat-value">{{ config.restricted_channels | length }}</div>
+                        <div class="settings-stat-help">当前纳入 Telegram 采集的频道总数。</div>
+                    </div>
+                    <div class="settings-stat-card">
+                        <div class="settings-stat-label">频道分组</div>
+                        <div class="settings-stat-value">{{ summary.group_count }}</div>
+                        <div class="settings-stat-help">按你当前分组顺序实际存在的监控分组。</div>
+                    </div>
+                    <div class="settings-stat-card">
+                        <div class="settings-stat-label">转发任务</div>
+                        <div class="settings-stat-value">{{ summary.forwarding_count }}</div>
+                        <div class="settings-stat-help">开启转发或全类型转发的频道任务数量。</div>
+                    </div>
+                    <div class="settings-stat-card">
+                        <div class="settings-stat-label">自动点击</div>
+                        <div class="settings-stat-value">{{ summary.auto_click_count }}</div>
+                        <div class="settings-stat-help">启用了红包自动点击或关键字自动点击的频道。</div>
+                    </div>
+                    <div class="settings-stat-card">
+                        <div class="settings-stat-label">下载目录</div>
+                        <div class="settings-stat-value">{{ summary.download_dir_count }}</div>
+                        <div class="settings-stat-help">已经明确配置下载目录的频道任务数量。</div>
+                    </div>
+                    <div class="settings-stat-card">
+                        <div class="settings-stat-label">服务状态</div>
+                        <div class="settings-chip-row">
+                            <span class="settings-chip {% if config.get('self_service_enabled', False) %}is-on{% else %}is-off{% endif %}">自助观影{% if config.get('self_service_enabled', False) %}已开{% else %}未开{% endif %}</span>
+                            <span class="settings-chip {% if config.get('self_service_public_enabled', False) %}is-on{% else %}is-off{% endif %}">公共入口{% if config.get('self_service_public_enabled', False) %}已开{% else %}未开{% endif %}</span>
+                            <span class="settings-chip {% if hdhive_enabled %}is-on{% else %}is-off{% endif %}">HDHive{% if hdhive_enabled %}已配{% else %}待配{% endif %}</span>
+                            <span class="settings-chip {% if bot_token_ready %}is-on{% else %}is-off{% endif %}">Bot{% if bot_token_ready %}已配{% else %}待配{% endif %}</span>
+                        </div>
+                        <div class="settings-stat-help mt-2">扩展能力的启用状态会在这里做一个快速提示。</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="row g-3 settings-layout">
+            <div class="col-xl-3">
+                <div class="card shadow-sm settings-nav-card">
+                    <div class="card-body p-3">
+                        <div class="settings-section-label">配置目录</div>
+                        <div class="settings-nav-meta mb-3">当前管理 {{ config.restricted_channels | length }} 个频道，{{ summary.group_count }} 个分组。</div>
+                        <div class="settings-nav-list">
+                            <a href="#section-overview" class="settings-nav-link active" data-settings-nav>
+                                <span><i class="bi bi-grid-1x2-fill"></i>配置概览</span>
+                                <span class="badge bg-light text-dark">总览</span>
+                            </a>
+                            <a href="#section-channels" class="settings-nav-link" data-settings-nav>
+                                <span><i class="bi bi-list-task"></i>频道列表</span>
+                                <span class="badge bg-light text-dark">{{ config.restricted_channels | length }}</span>
+                            </a>
+                            <a href="#section-editor" class="settings-nav-link" data-settings-nav>
+                                <span><i class="bi bi-pencil-square"></i>新增与编辑</span>
+                                <span class="badge bg-light text-dark">表单</span>
+                            </a>
+                            <a href="#section-rules" class="settings-nav-link" data-settings-nav>
+                                <span><i class="bi bi-funnel"></i>全局规则</span>
+                                <span class="badge bg-light text-dark">{{ summary.tv_filter_count }}</span>
+                            </a>
+                            <a href="#section-services" class="settings-nav-link" data-settings-nav>
+                                <span><i class="bi bi-grid"></i>扩展服务</span>
+                                <span class="badge bg-light text-dark">HDHive</span>
+                            </a>
+                            <a href="#section-bot" class="settings-nav-link" data-settings-nav>
+                                <span><i class="bi bi-robot"></i>Bot 凭证</span>
+                                <span class="badge {% if bot_token_ready %}bg-success-subtle text-success{% else %}bg-light text-dark{% endif %}">{% if bot_token_ready %}已配{% else %}待配{% endif %}</span>
+                            </a>
+                        </div>
+                        <div class="settings-note-card mt-3">
+                            <strong>联动页面</strong>
+                            <div class="d-flex flex-column gap-2 mt-2">
+                                <a href="{{ url_for('manage_file_config') }}" class="related-page-link">
+                                    <span><i class="bi bi-folder2-open me-2"></i>文件同步策略</span>
+                                    <small>下载风控、队列、目录同步等配置。</small>
+                                </a>
+                                <a href="{{ url_for('drama_calendar_settings') }}" class="related-page-link">
+                                    <span><i class="bi bi-calendar3 me-2"></i>追剧配置中心</span>
+                                    <small>剧集规则、自动抓取和白名单配置。</small>
+                                </a>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-xl-9">
+                <section class="settings-section" id="section-channels">
+                    <div class="settings-section-header">
+                        <div>
+                            <div class="settings-section-label">频道任务</div>
+                            <h4>已监控频道</h4>
+                            <p>这里负责查看当前监控清单、分组顺序和批量整理操作。</p>
+                        </div>
+                        <a href="#section-editor" class="settings-inline-badge text-decoration-none" data-settings-jump><i class="bi bi-plus-circle"></i>新增或编辑频道</a>
+                    </div>
 
         <div class="card mb-2 shadow-sm">
             <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center py-1 px-3">
-                <h6 class="mb-0 small"><i class="bi bi-list-task me-2"></i>已监控频道列表</h6>
+                <h6 class="mb-0 small"><i class="bi bi-list-task me-2"></i>频道任务清单</h6>
                 <div class="d-flex align-items-center gap-2">
                     <span class="badge bg-white text-primary" id="selectedCountBadge" style="display:none; font-size: 0.7rem;">已选 0</span>
                     <span class="badge bg-white text-primary" style="font-size: 0.7rem;">{{ config.restricted_channels | length }}</span>
@@ -251,7 +697,7 @@
                         <select name="target_group" class="form-select form-select-sm"
                             style="width: auto; min-width: 120px;">
                             <option value="">移动到分组...</option>
-                            {% for g in config.group_order %}
+                            {% for g in group_order %}
                             <option value="{{ g }}">{{ g }}</option>
                             {% endfor %}
                             <option value="NEW_GROUP">+ 新建分组...</option>
@@ -270,7 +716,7 @@
 
             <div class="accordion accordion-flush" id="channelAccordion">
                 {% if config.restricted_channels %}
-                {% for g_name in config.group_order %}
+                {% for g_name in group_order %}
                 {% set g_list = config.restricted_channels | selectattr('group_name', 'equalto', g_name) | list %}
                 {% if g_list %}
                 <div class="accordion-item" data-group="{{ g_name }}">
@@ -387,12 +833,21 @@
                 {% endif %}
             </div>
         </div>
+                </section>
 
-        <div class="row">
+        <div class="row g-3">
             <div class="col-lg-7">
+                <section class="settings-section" id="section-editor">
+                    <div class="settings-section-header">
+                        <div>
+                            <div class="settings-section-label">单频道设置</div>
+                            <h4>新增 / 编辑监控频道</h4>
+                            <p>把一个频道相关的下载、转发、自动点击和目标用户配置放在同一处编辑。</p>
+                        </div>
+                    </div>
                 <div class="card mb-3 shadow-sm">
                     <div class="card-header bg-success text-white">
-                        <h5 class="mb-0 small"><i class="bi bi-plus-circle me-2"></i>添加监控频道</h5>
+                        <h5 class="mb-0 small"><i class="bi bi-plus-circle me-2"></i>新增 / 编辑监控频道</h5>
                     </div>
                     <div class="card-body p-3">
                         <form action="{{ url_for('manage_config') }}" method="post" class="row g-2">
@@ -409,7 +864,7 @@
                                     class="form-control form-control-sm" placeholder="默认分组" list="group_list"
                                     onfocus="showAllGroups(this)">
                                 <datalist id="group_list">
-                                    {% for g in config.group_order %}
+                                    {% for g in group_order %}
                                     <option value="{{ g }}"></option>
                                     {% endfor %}
                                 </datalist>
@@ -613,9 +1068,18 @@
                         </form>
                     </div>
                 </div>
+                </section>
             </div>
 
             <div class="col-lg-5">
+                <section class="settings-section" id="section-rules">
+                    <div class="settings-section-header">
+                        <div>
+                            <div class="settings-section-label">规则中心</div>
+                            <h4>全局过滤与清理规则</h4>
+                            <p>适合放那些跨频道生效的默认规则，减少你逐个频道重复配置。</p>
+                        </div>
+                    </div>
                 <div class="card mb-3 shadow-sm">
                     <div class="card-body p-2">
                         <div class="accordion compact-accordion" id="tgRulesAccordion">
@@ -671,7 +1135,16 @@
                         </div>
                     </div>
                 </div>
+                </section>
 
+                <section class="settings-section" id="section-services">
+                    <div class="settings-section-header">
+                        <div>
+                            <div class="settings-section-label">扩展服务</div>
+                            <h4>监控补充能力与外部服务</h4>
+                            <p>把启动回溯、HDHive、自助观影这些附加能力集中到同一个服务区里。</p>
+                        </div>
+                    </div>
                 <div class="card mb-3 shadow-sm">
                     <div class="card-body p-2">
                         <div class="accordion compact-accordion" id="tgAdvancedAccordion">
@@ -1031,10 +1504,19 @@
                         </div>
                     </div>
                 </div>
+                </section>
 
+                <section class="settings-section" id="section-bot">
+                    <div class="settings-section-header">
+                        <div>
+                            <div class="settings-section-label">凭证配置</div>
+                            <h4>Bot Token</h4>
+                            <p>单独放置机器人凭证，和频道规则分开，查找会更直观。</p>
+                        </div>
+                    </div>
                 <div class="card mb-3 shadow-sm">
                     <div class="card-header bg-dark text-white">
-                        <h5 class="mb-0 small"><i class="bi bi-robot me-2"></i>Bot Token 配置</h5>
+                        <h5 class="mb-0 small"><i class="bi bi-robot me-2"></i>Bot Token 凭证</h5>
                     </div>
                     <div class="card-body p-3">
                         <form action="{{ url_for('manage_config') }}" method="POST">
@@ -1048,6 +1530,7 @@
                         </form>
                     </div>
                 </div>
+                </section>
 
             </div>
         </div>
@@ -1057,6 +1540,7 @@
                     class="bi bi-house-door me-1"></i>返回主页</a>
         </div>
     </div>
+</div>
 </div>
 </div>
 
@@ -1316,9 +1800,14 @@
         }
 
         // 滚动到表单并聚焦
+        const editorSection = document.getElementById('section-editor');
         const channelIdInput = document.getElementById('restricted_channel_id');
+        if (editorSection) {
+            editorSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        } else if (channelIdInput) {
+            channelIdInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
         if (channelIdInput) {
-            channelIdInput.scrollIntoView({ behavior: 'smooth' });
             setTimeout(() => {
                 channelIdInput.focus();
             }, 300);
@@ -1632,6 +2121,71 @@
         updateAutoClickHint();
 
         updateBulkUI();
+        updateForwardOnlyHint();
+
+        const settingsNavLinks = Array.from(document.querySelectorAll('[data-settings-nav]'));
+        const settingsJumpLinks = Array.from(document.querySelectorAll('[data-settings-jump]'));
+        let settingsJumpTimer = null;
+
+        const jumpToSettingsSection = (targetSelector) => {
+            const target = document.querySelector(targetSelector);
+            if (!target) return;
+
+            if (settingsJumpTimer) {
+                clearTimeout(settingsJumpTimer);
+                settingsJumpTimer = null;
+            }
+
+            document.querySelectorAll('.settings-section.is-jumping').forEach((section) => {
+                section.classList.remove('is-jumping');
+            });
+
+            target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            target.classList.add('is-jumping');
+            settingsJumpTimer = window.setTimeout(() => {
+                target.classList.remove('is-jumping');
+            }, 1400);
+        };
+
+        settingsJumpLinks.forEach((link) => {
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                jumpToSettingsSection(link.getAttribute('href'));
+            });
+        });
+
+        if (settingsNavLinks.length > 0) {
+            const sections = settingsNavLinks
+                .map(link => document.querySelector(link.getAttribute('href')))
+                .filter(Boolean);
+
+            const updateSettingsNav = () => {
+                if (sections.length === 0) return;
+                const offset = window.innerWidth < 992 ? 140 : 96;
+                let activeId = sections[0].id;
+                sections.forEach((section) => {
+                    const rect = section.getBoundingClientRect();
+                    if (rect.top - offset <= 0) {
+                        activeId = section.id;
+                    }
+                });
+                settingsNavLinks.forEach((link) => {
+                    link.classList.toggle('active', link.getAttribute('href') === `#${activeId}`);
+                });
+            };
+
+            settingsNavLinks.forEach((link) => {
+                link.addEventListener('click', () => {
+                    settingsNavLinks.forEach(item => item.classList.remove('active'));
+                    link.classList.add('active');
+                });
+            });
+
+            updateSettingsNav();
+            window.addEventListener('scroll', updateSettingsNav, { passive: true });
+            window.addEventListener('resize', updateSettingsNav);
+        }
+
         console.log('页面初始化完成');
 
         const hdhiveTestBtn = document.getElementById('hdhiveTestBtn');

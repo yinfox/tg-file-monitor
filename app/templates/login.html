@@ -1,28 +1,78 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 
-{% block title %}Telegram 登录/认证{% endblock %}
+{% block title %}Telegram 登录 / 认证{% endblock %}
+{% block auth_kicker %}Telegram Access{% endblock %}
+{% block auth_heading %}Telegram 登录 / 认证{% endblock %}
+{% block auth_desc %}填写 Telegram API 凭据和手机号，系统会发送验证码到你的 Telegram 客户端。{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-8 col-lg-6">
-        <h2 class="mb-4 text-center">Telegram 登录/认证</h2>
-        <div class="card p-4 shadow-sm">
-            <form method="post">
-                <div class="mb-3">
-                    <label for="api_id" class="form-label">API ID:</label>
-                    <input type="number" id="api_id" name="api_id" class="form-control" value="{{ config.telegram.api_id or '' }}" {% if api_id_env %}readonly{% endif %} required>
+{% set using_env = api_id_env and api_hash_env %}
+<div class="row justify-content-center g-3">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <div class="auth-card-title"><i class="bi bi-telegram me-2"></i>发送验证码</div>
+            </div>
+            <div class="card-body p-4">
+                <div class="auth-chip-row mb-3">
+                    <span class="auth-chip {% if using_env %}is-on{% else %}is-warn{% endif %}">API 凭据 {% if using_env %}来自环境变量{% else %}来自页面填写{% endif %}</span>
+                    <span class="auth-chip">会话文件 telegram_monitor.session</span>
                 </div>
-                <div class="mb-3">
-                    <label for="api_hash" class="form-label">API Hash:</label>
-                    <input type="text" id="api_hash" name="api_hash" class="form-control" value="{{ config.telegram.api_hash or '' }}" {% if api_hash_env %}readonly{% endif %} required>
+
+                <form method="post">
+                    <div class="mb-3">
+                        <label for="api_id" class="form-label">API ID</label>
+                        <input type="number" id="api_id" name="api_id" class="form-control" value="{{ config.telegram.api_id or '' }}" {% if api_id_env %}readonly{% endif %} required>
+                        <div class="form-text">{% if api_id_env %}当前由环境变量提供，页面中只读显示。{% else %}建议后续改为环境变量管理。{% endif %}</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="api_hash" class="form-label">API Hash</label>
+                        <input type="text" id="api_hash" name="api_hash" class="form-control" value="{{ config.telegram.api_hash or '' }}" {% if api_hash_env %}readonly{% endif %} required>
+                        <div class="form-text">{% if api_hash_env %}当前由环境变量提供，页面中只读显示。{% else %}请确认与你的 API ID 配套。{% endif %}</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="phone" class="form-label">电话号码</label>
+                        <input type="text" id="phone" name="phone" class="form-control" placeholder="+861234567890" required>
+                        <div class="form-text">必须带国际区号，例如 `+86...`。</div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary w-100">发送验证码</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <div class="auth-card-title"><i class="bi bi-shield-check me-2"></i>认证说明</div>
+            </div>
+            <div class="card-body p-4">
+                <div class="auth-side-title">当前状态</div>
+                <div class="auth-side-list">
+                    <div class="auth-side-item">
+                        <span class="auth-side-label">API ID</span>
+                        <span class="auth-side-value">{% if config.telegram.api_id %}已配置{% else %}未配置{% endif %}</span>
+                    </div>
+                    <div class="auth-side-item">
+                        <span class="auth-side-label">API Hash</span>
+                        <span class="auth-side-value">{% if config.telegram.api_hash %}已配置{% else %}未配置{% endif %}</span>
+                    </div>
+                    <div class="auth-side-item">
+                        <span class="auth-side-label">凭据来源</span>
+                        <span class="auth-side-value">{% if using_env %}环境变量{% else %}本地配置 / 表单{% endif %}</span>
+                    </div>
                 </div>
-                <div class="mb-3">
-                    <label for="phone" class="form-label">电话号码 (带国际区号，例如 +861234567890):</label>
-                    <input type="text" id="phone" name="phone" class="form-control" placeholder="+86..." required>
+
+                <div class="auth-note-card">
+                    <strong>流程说明</strong>
+                    <small>1. 提交手机号后，Telegram 会把验证码发送到你的客户端。</small>
+                    <small>2. 下一步输入验证码；如果启用了两步验证，还会要求输入密码。</small>
+                    <small>3. 验证完成后即可进入后台首页。</small>
                 </div>
-                <button type="submit" class="btn btn-primary w-100">发送验证码</button>
-            </form>
-            <p class="mt-3 text-center">如果您已经认证过，可以直接 <a href="{{ url_for('index') }}">返回主页</a>。</p>
+            </div>
         </div>
     </div>
 </div>

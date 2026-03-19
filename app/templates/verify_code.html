@@ -1,25 +1,69 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 
 {% block title %}验证 Telegram 登录{% endblock %}
+{% block auth_kicker %}Telegram Verify{% endblock %}
+{% block auth_heading %}验证 Telegram 登录{% endblock %}
+{% block auth_desc %}输入验证码完成登录；如果你的账号启用了两步验证，请同时输入密码。{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-8 col-lg-6">
-        <h2 class="mb-4 text-center">验证 Telegram 登录</h2>
-        <div class="card p-4 shadow-sm">
-            <form method="post">
-                <div class="mb-3">
-                    <label for="code" class="form-label">验证码 (已发送到您的 Telegram 应用):</label>
-                    <input type="text" id="code" name="code" class="form-control" required>
+<div class="row justify-content-center g-3">
+    <div class="col-lg-7">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <div class="auth-card-title"><i class="bi bi-shield-lock me-2"></i>输入验证码</div>
+            </div>
+            <div class="card-body p-4">
+                <div class="auth-chip-row mb-3">
+                    <span class="auth-chip is-on">验证码已发送</span>
+                    <span class="auth-chip {% if show_password_input %}is-warn{% endif %}">{% if show_password_input %}需要两步验证密码{% else %}等待验证码{% endif %}</span>
                 </div>
-                {% if show_password_input %}
+
+                <form method="post">
                     <div class="mb-3">
-                        <label for="password" class="form-label">两步验证密码:</label>
-                        <input type="password" id="password" name="password" class="form-control">
+                        <label for="code" class="form-label">验证码{% if show_password_input %}（可留空）{% endif %}</label>
+                        <input type="text" id="code" name="code" class="form-control" {% if not show_password_input %}required{% endif %} {% if not show_password_input %}autofocus{% endif %}>
+                        <div class="form-text">{% if show_password_input %}如果已经进入两步验证流程，这里可以留空。{% else %}验证码已发送到你的 Telegram 应用。{% endif %}</div>
                     </div>
-                {% endif %}
-                <button type="submit" class="btn btn-primary w-100">验证</button>
-            </form>
+
+                    {% if show_password_input %}
+                    <div class="mb-3">
+                        <label for="password" class="form-label">两步验证密码</label>
+                        <input type="password" id="password" name="password" class="form-control" autofocus>
+                        <div class="form-text">只有在账号启用了两步验证时才需要填写。</div>
+                    </div>
+                    {% endif %}
+
+                    <button type="submit" class="btn btn-primary w-100">完成验证</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-5">
+        <div class="card shadow-sm">
+            <div class="card-header bg-light">
+                <div class="auth-card-title"><i class="bi bi-info-circle me-2"></i>提示</div>
+            </div>
+            <div class="card-body p-4">
+                <div class="auth-side-title">验证须知</div>
+                <div class="auth-side-list">
+                    <div class="auth-side-item">
+                        <span class="auth-side-label">当前阶段</span>
+                        <span class="auth-side-value">{% if show_password_input %}两步验证{% else %}验证码验证{% endif %}</span>
+                    </div>
+                    <div class="auth-side-item">
+                        <span class="auth-side-label">验证码时效</span>
+                        <span class="auth-side-value">短时间内有效</span>
+                    </div>
+                </div>
+
+                <div class="auth-note-card">
+                    <strong>常见情况</strong>
+                    <small>验证码错误时可以重新输入，不一定需要重新发码。</small>
+                    <small>如果提示过期，返回登录页重新发送验证码即可。</small>
+                    <small>验证成功后会自动跳回后台主页。</small>
+                </div>
+            </div>
         </div>
     </div>
 </div>

@@ -2090,6 +2090,24 @@ async def convert_message_hdhive_links(msg) -> Tuple[bool, str]:
 
     return True, new_text
 
+
+def _should_send_copy_instead_of_forward(
+    media_type_detected: str,
+    convert_hdhive_enabled: bool,
+    has_hdhive: bool,
+) -> bool:
+    """Decide whether to resend a rewritten copy instead of forwarding the original message.
+
+    When HDHive conversion is enabled but the message does not actually contain an HDHive
+    link, we should preserve the original forward behavior so non-HDHive links/buttons
+    are not stripped by send_message/send_file.
+    """
+    if has_hdhive:
+        return True
+    if convert_hdhive_enabled:
+        return False
+    return media_type_detected == 'text'
+
 async def message_queue_loop():
     """Background loop to send pending messages from app.py"""
     log_message("消息发送队列轮询已启动。")
@@ -3530,13 +3548,19 @@ async def new_message_handler(event, *, backfill: bool = False):
                     has_hdhive, converted_text = await convert_message_hdhive_links(msg)
                     if has_hdhive:
                         final_msg_text = converted_text
+                    convert_hdhive_enabled = bool(restricted_entry.get('convert_hdhive', False))
+                    should_send_copy = _should_send_copy_instead_of_forward(
+                        media_type_detected,
+                        convert_hdhive_enabled,
+                        has_hdhive,
+                    )
                     
                     for user_id in target_user_ids:
                         try:
                             target_entity = await client.get_entity(user_id)
                             
                             # Use send_message for text, forward or send_file for media
-                            if has_hdhive or restricted_entry.get('convert_hdhive', False) or media_type_detected == 'text':
+                            if should_send_copy:
                                 if media_type_detected == 'text':
                                     await reliable_action(
                                         f"发送文字消息到 {user_id}",
@@ -3554,7 +3578,7 @@ async def new_message_handler(event, *, backfill: bool = False):
                                         caption=final_msg_text
                                     )
                             else:
-                                # Normal forward (preserves forward tag)
+                                # Normal forward preserves the original forward tag and non-HDHive links/buttons.
                                 await reliable_action(
                                     f"转发消息到 {user_id}",
                                     client.forward_messages,

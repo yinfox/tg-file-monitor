@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.30`
+Latest image: `y1nf0x/tg-file-monitor:0.5.33`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.30
+y1nf0x/tg-file-monitor:0.5.33
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.30 (2026-03-19) - Current
+### v0.5.33 (2026-03-19) - Current
+- ✅ Unified all four homepage runtime cards into the same "mini field cards + status badges" layout
+- ✅ Telegram, file sync, bot, and drama scheduler states now share a cleaner hierarchy and handle long status text better
+
+### v0.5.30 (2026-03-19)
 - ✅ Restored HDHive auto sign-in using the site's current Server Action flow
 - ✅ Restored current HDHive points from account-page data
 - ✅ Config page adds a manual points refresh action and updated points timestamp

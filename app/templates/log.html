@@ -1,54 +1,291 @@
 {% extends "base.html" %}
 
-{% block title %}Telegram 监控日志{% endblock %}
+{% block title %}Telegram 日志中心{% endblock %}
+
+{% block extra_head %}
+<style>
+    .log-page {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+    }
+
+    .log-hero {
+        background:
+            radial-gradient(circle at top right, rgba(99, 102, 241, 0.18), transparent 32%),
+            radial-gradient(circle at 12% 18%, rgba(14, 165, 233, 0.12), transparent 28%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(248, 250, 252, 0.28));
+        border: 1px solid rgba(99, 102, 241, 0.16);
+    }
+
+    .log-kicker {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #4f46e5;
+        margin-bottom: 0.25rem;
+    }
+
+    .log-title {
+        margin: 0;
+        font-size: 1.45rem;
+        font-weight: 800;
+        color: #0f172a;
+    }
+
+    .log-desc {
+        margin-top: 0.45rem;
+        color: #64748b;
+        font-size: 0.84rem;
+        line-height: 1.5;
+    }
+
+    .log-chip-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-top: 0.75rem;
+    }
+
+    .log-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.32rem;
+        padding: 0.25rem 0.6rem;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.14);
+        color: #475569;
+        font-size: 0.74rem;
+        font-weight: 700;
+    }
+
+    .log-chip.is-on {
+        background: rgba(16, 185, 129, 0.14);
+        color: #047857;
+    }
+
+    .log-chip.is-warn {
+        background: rgba(245, 158, 11, 0.16);
+        color: #b45309;
+    }
+
+    .log-side-card {
+        position: sticky;
+        top: 1.1rem;
+        border: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .log-side-title {
+        margin-bottom: 0.7rem;
+        font-size: 0.82rem;
+        font-weight: 800;
+        color: #0f172a;
+        letter-spacing: 0.03em;
+    }
+
+    .log-side-stack {
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+    }
+
+    .log-metric-grid {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .log-metric {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        font-size: 0.78rem;
+    }
+
+    .log-metric-label {
+        color: #64748b;
+    }
+
+    .log-metric-value {
+        text-align: right;
+        font-weight: 700;
+        color: #0f172a;
+        word-break: break-word;
+    }
+
+    .log-action-stack {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .log-action-stack .btn {
+        border-radius: 0.8rem;
+    }
+
+    .log-viewer-card {
+        overflow: hidden;
+    }
+
+    .log-viewer-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        flex-wrap: wrap;
+    }
+
+    .log-viewer-title {
+        font-size: 0.92rem;
+        font-weight: 800;
+    }
+
+    .log-meta-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem 0.75rem;
+        font-size: 0.75rem;
+        color: #64748b;
+    }
+
+    .log-console {
+        max-height: 72vh;
+        overflow-y: auto;
+        background: #0f172a;
+        border-top: 1px solid rgba(148, 163, 184, 0.18);
+    }
+
+    .log-console pre {
+        margin: 0;
+        min-height: 420px;
+        background: transparent;
+        color: #e2e8f0;
+        font-size: 0.8rem;
+        line-height: 1.45;
+    }
+
+    @media (max-width: 1199.98px) {
+        .log-side-card {
+            position: static;
+        }
+    }
+</style>
+{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-md-12">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <h2 class="mb-0">Telegram 监控日志</h2>
-            <div class="form-check form-switch">
-                <input class="form-check-input" type="checkbox" id="autoRefreshToggle" {% if auto_refresh %}checked{% endif %}>
-                <label class="form-check-label" for="autoRefreshToggle">
-                    <i class="bi bi-arrow-clockwise"></i> 实时刷新 (<span id="refreshCountdown">{{ refresh_interval }}</span>s)
-                </label>
-            </div>
-        </div>
-        <div class="card mb-3 shadow-sm">
-            <div class="card-body py-2">
-                <div class="d-flex flex-wrap gap-3 small">
-                    <div>队列: <span class="fw-bold" id="queueSize">{{ download_queue_stats.get('queue_size', 0) }}</span>/<span id="queueMax">{{ download_queue_stats.get('maxsize', '-') }}</span></div>
-                    <div>丢弃: <span class="fw-bold text-danger" id="queueDropped">{{ download_queue_stats.get('dropped_total', 0) }}</span></div>
-                    <div>
-                        并发: <span class="fw-bold" id="queueConcurrency">
-                            {{ download_queue_stats.get('effective_concurrency', download_queue_stats.get('config_concurrency', '-')) }}
-                        </span>
-                        <span id="queueThrottleBadge" class="badge bg-warning text-dark ms-1 {% if not download_queue_stats.get('throttle_active') %}d-none{% endif %}">降速中</span>
+{% set queue = download_queue_stats or {} %}
+<div class="log-page">
+    <div class="card shadow-sm log-hero">
+        <div class="card-body p-3 p-lg-4">
+            <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-start">
+                <div>
+                    <div class="log-kicker">运行日志</div>
+                    <h2 class="log-title"><i class="bi bi-card-text me-2"></i>Telegram 日志中心</h2>
+                    <div class="log-desc">集中查看采集进程的实时输出、下载队列状态和最近降速情况。日志刷新逻辑保持不变，只是把操作区整理得更清晰了。</div>
+                    <div class="log-chip-row">
+                        <span class="log-chip {% if auto_refresh %}is-on{% endif %}">实时刷新 {% if auto_refresh %}开启{% else %}关闭{% endif %}</span>
+                        <span class="log-chip">刷新间隔 {{ refresh_interval }}s</span>
+                        <span class="log-chip">队列 {{ queue.get('queue_size', 0) }}/{{ queue.get('maxsize', '-') }}</span>
+                        <span class="log-chip {% if queue.get('throttle_active') %}is-warn{% endif %}">并发 {{ queue.get('effective_concurrency', queue.get('config_concurrency', '-')) }}</span>
                     </div>
-                    <div>阈值: <span class="fw-bold" id="queueThreshold">{{ download_queue_stats.get('throttle_threshold', '-') }}</span></div>
-                    <div>更新: <span class="fw-bold" id="queueUpdatedAt">{{ download_queue_stats.get('updated_at', '-') }}</span></div>
+                </div>
+                <div class="d-flex flex-wrap gap-2">
+                    <a href="{{ url_for('manage_config') }}" class="btn btn-outline-primary btn-sm"><i class="bi bi-gear me-1"></i>配置中心</a>
+                    <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-house-door me-1"></i>返回主页</a>
                 </div>
             </div>
         </div>
-        <div class="card p-3 shadow-sm" style="max-height: 70vh; overflow-y: auto;" id="logContainer">
-            <pre class="mb-0" id="logContent">{{ log_output|safe }}</pre>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-xl-3">
+            <div class="card shadow-sm log-side-card">
+                <div class="card-body p-3">
+                    <div class="log-side-stack">
+                        <div>
+                            <div class="log-side-title">刷新与状态</div>
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" id="autoRefreshToggle" {% if auto_refresh %}checked{% endif %}>
+                                <label class="form-check-label small" for="autoRefreshToggle">
+                                    <i class="bi bi-arrow-clockwise me-1"></i>实时刷新 (<span id="refreshCountdown">{{ refresh_interval }}</span>s)
+                                </label>
+                            </div>
+
+                            <div class="log-metric-grid">
+                                <div class="log-metric">
+                                    <span class="log-metric-label">队列长度</span>
+                                    <span class="log-metric-value"><span id="queueSize">{{ queue.get('queue_size', 0) }}</span>/<span id="queueMax">{{ queue.get('maxsize', '-') }}</span></span>
+                                </div>
+                                <div class="log-metric">
+                                    <span class="log-metric-label">累计丢弃</span>
+                                    <span class="log-metric-value text-danger" id="queueDropped">{{ queue.get('dropped_total', 0) }}</span>
+                                </div>
+                                <div class="log-metric">
+                                    <span class="log-metric-label">当前并发</span>
+                                    <span class="log-metric-value">
+                                        <span id="queueConcurrency">{{ queue.get('effective_concurrency', queue.get('config_concurrency', '-')) }}</span>
+                                        <span id="queueThrottleBadge" class="badge bg-warning text-dark ms-1 {% if not queue.get('throttle_active') %}d-none{% endif %}">降速中</span>
+                                    </span>
+                                </div>
+                                <div class="log-metric">
+                                    <span class="log-metric-label">降速阈值</span>
+                                    <span class="log-metric-value" id="queueThreshold">{{ queue.get('throttle_threshold', '-') }}</span>
+                                </div>
+                                <div class="log-metric">
+                                    <span class="log-metric-label">最近更新</span>
+                                    <span class="log-metric-value" id="queueUpdatedAt">{{ queue.get('updated_at', '-') }}</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <div class="log-side-title">快捷操作</div>
+                            <div class="log-action-stack">
+                                <button type="button" class="btn btn-outline-secondary btn-sm" id="manualRefreshBtn">
+                                    <i class="bi bi-arrow-repeat me-1"></i>手动刷新
+                                </button>
+                                <a href="{{ url_for('download_monitor_log') }}" class="btn btn-primary btn-sm">
+                                    <i class="bi bi-download me-1"></i>下载日志
+                                </a>
+                                <form action="{{ url_for('clear_monitor_log') }}" method="post">
+                                    <button type="submit" class="btn btn-warning btn-sm w-100" onclick="return confirm('确认清除 Telegram 监控日志吗？');">
+                                        <i class="bi bi-eraser me-1"></i>清除日志
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
-        <p class="mt-3 text-center">
-            <button type="button" class="btn btn-outline-secondary me-2" onclick="refreshLog()">手动刷新</button>
-            <a href="{{ url_for('download_monitor_log') }}" class="btn btn-primary me-2">下载日志</a>
-            <form action="{{ url_for('clear_monitor_log') }}" method="post" class="d-inline-block">
-                <button type="submit" class="btn btn-warning me-2">清除日志</button>
-            </form>
-            <a href="{{ url_for('index') }}" class="btn btn-secondary">返回主页</a>
-        </p>
+
+        <div class="col-xl-9">
+            <div class="card shadow-sm log-viewer-card">
+                <div class="card-header">
+                    <div class="log-viewer-head">
+                        <div>
+                            <div class="log-viewer-title"><i class="bi bi-terminal me-2"></i>实时日志输出</div>
+                            <div class="log-meta-row mt-1">
+                                <span>来源: Telegram 采集进程</span>
+                                <span>自动滚动到底部</span>
+                                <span>支持增量刷新</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="log-console" id="logContainer">
+                    <pre id="logContent">{{ log_output|safe }}</pre>
+                </div>
+            </div>
+        </div>
     </div>
 </div>
+{% endblock %}
 
+{% block scripts %}
 <script>
 const refreshInterval = {{ refresh_interval|default(5) }};
 let autoRefresh = {{ 'true' if auto_refresh else 'false' }};
 let countdown = refreshInterval;
-let intervalId = null;
 let countdownId = null;
 let lastKey = "";
 const initialQueueStats = {{ (download_queue_stats or {})|tojson }};
@@ -64,8 +301,10 @@ const queueConcurrencyEl = document.getElementById('queueConcurrency');
 const queueThresholdEl = document.getElementById('queueThreshold');
 const queueUpdatedAtEl = document.getElementById('queueUpdatedAt');
 const queueThrottleBadge = document.getElementById('queueThrottleBadge');
+const manualRefreshBtn = document.getElementById('manualRefreshBtn');
 
 function scrollToBottom() {
+    if (!logContainer) return;
     logContainer.scrollTop = logContainer.scrollHeight;
 }
 
@@ -75,14 +314,12 @@ function updateQueueStats(stats) {
     if (queueMaxEl) queueMaxEl.textContent = stats.maxsize ?? '-';
     if (queueDroppedEl) queueDroppedEl.textContent = stats.dropped_total ?? 0;
     if (queueConcurrencyEl) {
-        const effective = stats.effective_concurrency ?? stats.config_concurrency ?? '-';
-        queueConcurrencyEl.textContent = effective;
+        queueConcurrencyEl.textContent = stats.effective_concurrency ?? stats.config_concurrency ?? '-';
     }
     if (queueThresholdEl) queueThresholdEl.textContent = stats.throttle_threshold ?? '-';
     if (queueUpdatedAtEl) queueUpdatedAtEl.textContent = stats.updated_at ?? '-';
     if (queueThrottleBadge) {
-        const active = !!stats.throttle_active;
-        queueThrottleBadge.classList.toggle('d-none', !active);
+        queueThrottleBadge.classList.toggle('d-none', !stats.throttle_active);
     }
 }
 
@@ -100,7 +337,7 @@ function refreshLog() {
             if (data && data.key) {
                 lastKey = data.key;
             }
-            if (data && data.changed && typeof data.log_output === 'string') {
+            if (data && data.changed && typeof data.log_output === 'string' && logContent) {
                 logContent.innerHTML = data.log_output;
                 scrollToBottom();
             }
@@ -116,34 +353,47 @@ function updateCountdown() {
             refreshLog();
         }
     }
-    refreshCountdown.textContent = countdown;
+    if (refreshCountdown) {
+        refreshCountdown.textContent = countdown;
+    }
 }
 
-autoRefreshToggle.addEventListener('change', function() {
-    autoRefresh = this.checked;
-    if (!autoRefresh) {
-        if (intervalId) clearInterval(intervalId);
-        if (countdownId) clearInterval(countdownId);
-        refreshCountdown.textContent = '--';
-    } else {
-        countdown = refreshInterval;
-        refreshCountdown.textContent = countdown;
-        startAutoRefresh();
-    }
-});
-
 function startAutoRefresh() {
+    if (countdownId) clearInterval(countdownId);
     countdownId = setInterval(updateCountdown, 1000);
 }
 
-// 初始滚动到底部
+if (autoRefreshToggle) {
+    autoRefreshToggle.addEventListener('change', function() {
+        autoRefresh = this.checked;
+        if (!autoRefresh) {
+            if (countdownId) clearInterval(countdownId);
+            countdownId = null;
+            if (refreshCountdown) refreshCountdown.textContent = '--';
+        } else {
+            countdown = refreshInterval;
+            if (refreshCountdown) refreshCountdown.textContent = countdown;
+            startAutoRefresh();
+        }
+    });
+}
+
+if (manualRefreshBtn) {
+    manualRefreshBtn.addEventListener('click', function () {
+        refreshLog();
+        if (autoRefresh) {
+            countdown = refreshInterval;
+            if (refreshCountdown) refreshCountdown.textContent = countdown;
+        }
+    });
+}
+
 scrollToBottom();
 updateQueueStats(initialQueueStats);
 
-// 启动自动刷新
 if (autoRefresh) {
     startAutoRefresh();
-} else {
+} else if (refreshCountdown) {
     refreshCountdown.textContent = '--';
 }
 </script>
