@@ -4,10 +4,18 @@
 
 {% block extra_head %}
 <style>
+    .public-topbar {
+        display: none;
+    }
+
+    .public-shell {
+        max-width: 1120px;
+    }
+
     .ssp-page {
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: 0.75rem;
     }
 
     .ssp-hero {
@@ -18,45 +26,56 @@
         border: 1px solid rgba(14, 165, 233, 0.16);
     }
 
+    .ssp-hero-body {
+        padding: 0.95rem 1rem !important;
+    }
+
+    .ssp-hero-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.45fr) minmax(260px, 0.9fr);
+        gap: 1rem;
+        align-items: start;
+    }
+
     .ssp-kicker {
-        font-size: 0.72rem;
+        font-size: 0.68rem;
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: #0284c7;
-        margin-bottom: 0.25rem;
+        margin-bottom: 0.18rem;
     }
 
     .ssp-title {
         margin: 0;
-        font-size: 1.35rem;
+        font-size: 1.18rem;
         font-weight: 800;
         color: #0f172a;
     }
 
     .ssp-desc {
-        margin-top: 0.45rem;
+        margin-top: 0.28rem;
         color: #64748b;
-        font-size: 0.84rem;
-        line-height: 1.5;
+        font-size: 0.8rem;
+        line-height: 1.42;
     }
 
     .ssp-chip-row {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.45rem;
-        margin-top: 0.75rem;
+        gap: 0.35rem;
+        margin-top: 0.55rem;
     }
 
     .ssp-chip {
         display: inline-flex;
         align-items: center;
         gap: 0.32rem;
-        padding: 0.25rem 0.6rem;
+        padding: 0.2rem 0.55rem;
         border-radius: 999px;
         background: rgba(148, 163, 184, 0.14);
         color: #475569;
-        font-size: 0.74rem;
+        font-size: 0.71rem;
         font-weight: 700;
     }
 
@@ -70,32 +89,163 @@
         color: #b45309;
     }
 
+    .ssp-hero-note {
+        padding: 0.82rem 0.9rem;
+        border-radius: 0.95rem;
+        background: rgba(255, 255, 255, 0.34);
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.36);
+    }
+
+    .ssp-hero-note-title {
+        display: flex;
+        align-items: center;
+        gap: 0.45rem;
+        font-size: 0.82rem;
+        font-weight: 800;
+        color: #0f172a;
+    }
+
+    .ssp-hero-note-list {
+        margin-top: 0.6rem;
+        display: grid;
+        gap: 0.45rem;
+    }
+
+    .ssp-hero-note-item {
+        display: flex;
+        gap: 0.55rem;
+        font-size: 0.78rem;
+        color: #334155;
+        line-height: 1.45;
+    }
+
+    .ssp-hero-note-item strong {
+        color: #0f172a;
+        font-weight: 800;
+        white-space: nowrap;
+    }
+
+    .ssp-main-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.78fr);
+        gap: 1rem;
+        align-items: start;
+    }
+
+    .ssp-aside {
+        display: grid;
+        gap: 0.9rem;
+        position: sticky;
+        top: 1rem;
+    }
+
+    .ssp-aside-card {
+        padding: 0.95rem 1rem;
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.26);
+        border: 1px solid rgba(148, 163, 184, 0.2);
+        box-shadow:
+            0 10px 24px rgba(15, 23, 42, 0.04),
+            inset 0 1px 0 rgba(255, 255, 255, 0.32);
+    }
+
+    .ssp-aside-kicker {
+        font-size: 0.68rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #0284c7;
+        margin-bottom: 0.28rem;
+    }
+
+    .ssp-aside-title {
+        font-size: 0.96rem;
+        font-weight: 800;
+        color: #0f172a;
+        margin-bottom: 0.65rem;
+    }
+
+    .ssp-aside-list {
+        display: grid;
+        gap: 0.55rem;
+    }
+
+    .ssp-aside-item {
+        display: flex;
+        justify-content: space-between;
+        gap: 0.75rem;
+        font-size: 0.8rem;
+    }
+
+    .ssp-aside-label {
+        color: #64748b;
+        font-weight: 700;
+    }
+
+    .ssp-aside-value {
+        color: #0f172a;
+        font-weight: 800;
+        text-align: right;
+        word-break: break-word;
+    }
+
+    .ssp-aside-tips {
+        display: grid;
+        gap: 0.55rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .ssp-aside-tips li {
+        display: flex;
+        gap: 0.55rem;
+        font-size: 0.8rem;
+        color: #334155;
+        line-height: 1.48;
+    }
+
+    .ssp-aside-tips li::before {
+        content: "•";
+        color: #0284c7;
+        font-weight: 900;
+        line-height: 1.2;
+    }
+
     .ssp-panel {
         border: 1px solid rgba(148, 163, 184, 0.18);
     }
 
     .ssp-form-shell {
-        padding: 0.9rem;
+        padding: 0.75rem;
         border-radius: 0.9rem;
         background: rgba(255, 255, 255, 0.12);
         border: 1px solid rgba(148, 163, 184, 0.18);
     }
 
+    .ssp-form-shell .form-control,
+    .ssp-form-shell .form-select {
+        border-radius: 0.75rem;
+    }
+
     .ssp-form-shell .form-label {
         font-weight: 700;
         color: #0f172a;
+        margin-bottom: 0.32rem;
+        font-size: 0.8rem;
     }
 
     .ssp-page .form-text {
-        margin-top: 0.42rem;
-        font-size: 0.8rem;
+        margin-top: 0.34rem;
+        font-size: 0.76rem;
         color: #1e293b;
         font-weight: 600;
-        line-height: 1.55;
+        line-height: 1.45;
     }
 
     .ssp-note-emphasis {
-        padding: 0.55rem 0.7rem;
+        padding: 0.42rem 0.58rem;
         border-radius: 0.75rem;
         background: rgba(255, 255, 255, 0.56);
         border: 1px solid rgba(148, 163, 184, 0.24);
@@ -108,84 +258,12 @@
         color: #92400e;
     }
 
-    .ssp-side-card {
-        position: sticky;
-        top: 1.1rem;
-    }
-
-    .ssp-side-title {
-        margin-bottom: 0.7rem;
-        font-size: 0.82rem;
-        font-weight: 800;
-        color: #0f172a;
-        letter-spacing: 0.03em;
-    }
-
-    .ssp-side-list {
-        display: grid;
-        gap: 0.55rem;
-    }
-
-    .ssp-side-item {
-        display: flex;
-        justify-content: space-between;
-        gap: 0.75rem;
-        font-size: 0.78rem;
-    }
-
-    .ssp-side-label {
-        color: #64748b;
-    }
-
-    .ssp-side-value {
-        text-align: right;
-        font-weight: 700;
-        color: #0f172a;
-        word-break: break-word;
-    }
-
     .ssp-result-box pre {
         max-height: 320px;
         overflow-y: auto;
     }
 
-    .ssp-hint-card {
-        padding: 0.85rem 0.9rem;
-        border-radius: 0.85rem;
-        border: 1px dashed rgba(148, 163, 184, 0.4);
-        background: rgba(255, 255, 255, 0.42);
-        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.34);
-    }
-
-    .ssp-hint-card strong {
-        display: inline-flex;
-        align-items: center;
-        gap: 0.4rem;
-        color: #0f172a;
-        font-size: 0.82rem;
-        font-weight: 800;
-    }
-
-    .ssp-hint-card small {
-        display: block;
-        margin-top: 0.4rem;
-        color: #334155;
-        font-size: 0.8rem;
-        font-weight: 600;
-        line-height: 1.45;
-    }
-
-    .ssp-mode-banner {
-        margin-bottom: 0;
-        font-size: 0.84rem;
-        font-weight: 700;
-        color: #0f172a;
-        background: rgba(224, 242, 254, 0.84);
-        border-color: rgba(8, 145, 178, 0.22);
-    }
-
     .ssp-result-box .text-muted,
-    .ssp-result-target-label,
     .ssp-result-hint {
         color: #334155 !important;
         font-weight: 600;
@@ -209,9 +287,77 @@
         color: #475569;
     }
 
+    .ssp-inline-meta {
+        margin-top: 0.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.75rem;
+        padding-top: 0.75rem;
+        border-top: 1px solid rgba(148, 163, 184, 0.18);
+        font-size: 0.78rem;
+    }
+
+    .ssp-inline-meta-label {
+        color: #64748b;
+        font-weight: 700;
+    }
+
+    .ssp-inline-meta-value {
+        color: #0f172a;
+        font-weight: 800;
+        text-align: right;
+        word-break: break-word;
+    }
+
     @media (max-width: 991.98px) {
-        .ssp-side-card {
-            position: static;
+        .ssp-hero-grid,
+        .ssp-main-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .ssp-aside {
+            display: none;
+        }
+    }
+
+    @media (max-width: 767.98px) {
+        .public-shell {
+            padding-top: 0.75rem !important;
+            padding-bottom: 1rem !important;
+        }
+
+        .ssp-page {
+            gap: 0.6rem;
+        }
+
+        .ssp-hero-body {
+            padding: 0.85rem !important;
+        }
+
+        .ssp-hero-grid {
+            gap: 0.6rem;
+        }
+
+        .ssp-title {
+            font-size: 1.05rem;
+        }
+
+        .ssp-desc {
+            font-size: 0.76rem;
+        }
+
+        .ssp-form-shell {
+            padding: 0.68rem;
+        }
+
+        .ssp-inline-meta {
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .ssp-inline-meta-value {
+            text-align: left;
         }
     }
 </style>
@@ -222,26 +368,41 @@
 {% set service_ready = (use_open_api and has_open_api_key) or ((not use_open_api) and has_cookie) %}
 <div class="ssp-page">
     <div class="card shadow-sm ssp-hero">
-        <div class="card-body p-3 p-lg-4">
-            <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-start">
+        <div class="card-body ssp-hero-body">
+            <div class="ssp-hero-grid">
                 <div>
-                    <div class="ssp-kicker">公开入口</div>
+                    <div class="ssp-kicker">访客提交</div>
                     <h2 class="ssp-title"><i class="bi bi-ticket-perforated me-2"></i>自助观影公共提交</h2>
-                    <div class="ssp-desc">适合给不登录后台的用户提交观影申请。页面只负责录入需求和展示结果，不暴露后台配置内容。</div>
+                    <div class="ssp-desc">只保留提交申请和查看结果需要的信息，移动端优先聚焦在表单本身。</div>
                     <div class="ssp-chip-row">
-                        <span class="ssp-chip {% if public_enabled %}is-on{% else %}is-warn{% endif %}">公共入口 {% if public_enabled %}开启{% else %}关闭{% endif %}</span>
                         <span class="ssp-chip {% if enabled %}is-on{% else %}is-warn{% endif %}">申请功能 {% if enabled %}开启{% else %}关闭{% endif %}</span>
                         <span class="ssp-chip {% if service_ready %}is-on{% else %}is-warn{% endif %}">{{ service_mode_label }} {% if service_ready %}就绪{% else %}待配置{% endif %}</span>
-                        <span class="ssp-chip">候选数 {{ max_results }}</span>
                         <span class="ssp-chip">{% if require_access_key %}需要口令{% else %}免口令{% endif %}</span>
+                    </div>
+                </div>
+                <div class="ssp-hero-note d-none d-lg-block">
+                    <div class="ssp-hero-note-title"><i class="bi bi-magic"></i>桌面端填写建议</div>
+                    <div class="ssp-hero-note-list">
+                        <div class="ssp-hero-note-item">
+                            <strong>命中率</strong>
+                            <span>片名、年份、类型一起填写时，更容易直接命中正确资源。</span>
+                        </div>
+                        <div class="ssp-hero-note-item">
+                            <strong>剧集</strong>
+                            <span>电视剧建议补充季数，避免默认把全部季都一起纳入候选。</span>
+                        </div>
+                        <div class="ssp-hero-note-item">
+                            <strong>高级模式</strong>
+                            <span>适合想自己挑资源的人，页面会直接返回候选列表供手动转存。</span>
+                        </div>
                     </div>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="row g-3 justify-content-center">
-        <div class="col-lg-7">
+    <div class="ssp-main-grid">
+        <div>
             <div class="card shadow-sm ssp-panel">
                 <div class="card-header bg-info text-white">
                     <h5 class="mb-0"><i class="bi bi-ticket-perforated me-2"></i>提交申请</h5>
@@ -273,24 +434,24 @@
 
                     <form method="post" action="{{ url_for('self_service_public') }}">
                         {% if require_access_key %}
-                        <div class="mb-3">
+                        <div class="mb-2">
                             <label class="form-label">访问口令</label>
                             <input type="password" class="form-control" name="access_key" placeholder="请输入访问口令">
                             <div class="form-text ssp-note-emphasis">管理员设置的公开提交口令。</div>
                         </div>
                         {% endif %}
 
-                        <div class="ssp-form-shell mb-3">
-                            <div class="d-flex align-items-center mb-2">
+                        <div class="ssp-form-shell mb-2">
+                            <div class="d-flex align-items-center mb-2 gap-2 flex-wrap">
                                 <span class="badge bg-primary me-2">关键项</span>
-                                <span class="small text-danger fw-bold"><i class="bi bi-stars me-1"></i>请尽量填写完整，命中率更高</span>
+                                <span class="small text-danger fw-bold"><i class="bi bi-stars me-1"></i>信息越完整，命中率越高</span>
                             </div>
-                            <div class="mb-3">
+                            <div class="mb-2">
                                 <label class="form-label">影片/剧集名称 <span class="text-danger">*</span></label>
-                                <input type="text" class="form-control form-control-lg" name="title" required placeholder="例如：沙丘2 / 绝命毒师">
+                                <input type="text" class="form-control" name="title" required placeholder="例如：沙丘2 / 绝命毒师">
                             </div>
                             <div class="row g-2">
-                                <div class="col-md-4">
+                                <div class="col-6 col-md-6">
                                     <label class="form-label">类型</label>
                                     <select class="form-select" name="type">
                                         <option value="">不指定</option>
@@ -301,22 +462,18 @@
                                         <option value="纪录片">纪录片</option>
                                     </select>
                                 </div>
-                                <div class="col-md-4">
+                                <div class="col-6 col-md-6">
                                     <label class="form-label">年份</label>
                                     <input type="text" class="form-control" name="year" placeholder="如 2024">
                                 </div>
-                                <div class="col-md-4">
-                                    <label class="form-label">候选数</label>
-                                    <input type="text" class="form-control" value="{{ max_results }}" disabled>
-                                </div>
                             </div>
                             <div class="row g-2 mt-1">
-                                <div class="col-md-4">
+                                <div class="col-12 col-md-4">
                                     <label class="form-label">季（可选）</label>
                                     <input type="text" class="form-control" name="season" placeholder="如 1,2 或 1-2 或 S01,S02">
                                     <div class="form-text ssp-note-emphasis">留空 = 全部季。填写后启用严格季匹配。</div>
                                 </div>
-                                <div class="col-md-4">
+                                <div class="col-6 col-md-4">
                                     <label class="form-label">分辨率（可选）</label>
                                     <select class="form-select" name="resolution">
                                         <option value="any" selected>不指定</option>
@@ -326,7 +483,7 @@
                                         <option value="480p">480P</option>
                                     </select>
                                 </div>
-                                <div class="col-md-4">
+                                <div class="col-6 col-md-4">
                                     <label class="form-label">杜比偏好</label>
                                     <select class="form-select" name="dolby_preference">
                                         <option value="any" selected>不指定</option>
@@ -335,84 +492,67 @@
                                     </select>
                                 </div>
                             </div>
-                            <div class="form-check form-switch mt-3">
+                            <div class="form-check form-switch mt-2">
                                 <input class="form-check-input" type="checkbox" id="advanced_mode" name="advanced_mode">
                                 <label class="form-check-label fw-semibold" for="advanced_mode">高级交互模式</label>
                                 <div class="form-text ssp-note-emphasis is-warn">不自动挑选、不自动转存，直接列出候选资源供手动转存。当前依赖 Open API，手动转存会跳过积分阈值限制。</div>
                             </div>
                         </div>
 
-                        <div class="alert alert-info ssp-mode-banner">
-                            普通模式会自动挑选并尝试入库；高级模式会返回候选资源列表，等待手动选择转存。
-                        </div>
-
-                        <div id="selfServiceResultBox" class="ssp-result-box alert alert-secondary small" style="display: none;">
-                            <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
-                                <div class="fw-semibold" id="selfServiceResultTitle">处理中</div>
-                                <button type="button" class="btn btn-outline-secondary btn-sm" id="selfServiceClearBtn">清除搜索记录</button>
-                            </div>
-                            <div class="text-muted mb-2" id="selfServiceResultTime"></div>
-                            <pre class="mb-0 border rounded p-3" id="selfServiceResultDetail" style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.95); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;"></pre>
-                            <div id="selfServiceResourceBox" class="mt-3" style="display: none;">
-                                <div class="fw-semibold mb-2">候选资源</div>
-                                <div class="text-muted mb-2 ssp-result-hint" id="selfServiceResourceHint"></div>
-                                <div id="selfServiceResourceList" class="d-grid gap-2"></div>
-                            </div>
-                        </div>
-
-                        <div class="mb-3">
-                            <div class="small text-muted ssp-result-target-label">结果将发送到：</div>
-                            <div class="fw-semibold">{{ target_display }}</div>
-                        </div>
-
                         <button type="submit" class="btn btn-primary btn-lg w-100" {% if not enabled or not public_enabled %}disabled{% endif %}>提交申请</button>
+
+                        <div class="ssp-inline-meta d-lg-none">
+                            <span class="ssp-inline-meta-label">结果将发送到</span>
+                            <span class="ssp-inline-meta-value">{{ target_display }}</span>
+                        </div>
                     </form>
+                    <div id="selfServiceResultBox" class="ssp-result-box alert alert-secondary small mt-3" style="display: none;">
+                        <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
+                            <div class="fw-semibold" id="selfServiceResultTitle">处理中</div>
+                            <button type="button" class="btn btn-outline-secondary btn-sm" id="selfServiceClearBtn">清除搜索记录</button>
+                        </div>
+                        <div class="text-muted mb-2" id="selfServiceResultTime"></div>
+                        <pre class="mb-0 border rounded p-3" id="selfServiceResultDetail" style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.95); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;"></pre>
+                        <div id="selfServiceResourceBox" class="mt-3" style="display: none;">
+                            <div class="fw-semibold mb-2">候选资源</div>
+                            <div class="text-muted mb-2 ssp-result-hint" id="selfServiceResourceHint"></div>
+                            <div id="selfServiceResourceList" class="d-grid gap-2"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="col-lg-5">
-            <div class="card shadow-sm ssp-side-card">
-                <div class="card-header bg-light">
-                    <h6 class="mb-0"><i class="bi bi-clipboard-data me-2"></i>公开入口状态</h6>
-                </div>
-                <div class="card-body p-3">
-                    <div class="ssp-side-title">服务摘要</div>
-                    <div class="ssp-side-list">
-                        <div class="ssp-side-item">
-                            <span class="ssp-side-label">公共入口</span>
-                            <span class="ssp-side-value">{{ '已开启' if public_enabled else '未开启' }}</span>
-                        </div>
-                        <div class="ssp-side-item">
-                            <span class="ssp-side-label">申请功能</span>
-                            <span class="ssp-side-value">{{ '已启用' if enabled else '未启用' }}</span>
-                        </div>
-                        <div class="ssp-side-item">
-                            <span class="ssp-side-label">解析模式</span>
-                            <span class="ssp-side-value">{{ service_mode_label }}</span>
-                        </div>
-                        <div class="ssp-side-item">
-                            <span class="ssp-side-label">凭证状态</span>
-                            <span class="ssp-side-value">{{ '已就绪' if service_ready else '待配置' }}</span>
-                        </div>
-                        <div class="ssp-side-item">
-                            <span class="ssp-side-label">访问方式</span>
-                            <span class="ssp-side-value">{% if require_access_key %}需要口令{% else %}无需口令{% endif %}</span>
-                        </div>
-                        <div class="ssp-side-item">
-                            <span class="ssp-side-label">结果通知</span>
-                            <span class="ssp-side-value">{{ target_display }}</span>
-                        </div>
-                    </div>
+        <aside class="ssp-aside">
+            <div class="ssp-aside-card">
+                <div class="ssp-aside-kicker">填写提示</div>
+                <div class="ssp-aside-title">桌面端更适合补全偏好</div>
+                <ul class="ssp-aside-tips">
+                    <li>只知道片名时先提交基础信息，缺季或缺年份再补充细化。</li>
+                    <li>分辨率和杜比偏好属于加分项，不确定时保持“不指定”更稳妥。</li>
+                    <li>高级模式不会自动挑选，适合想自己决定转存目标的场景。</li>
+                </ul>
+            </div>
 
-                    <div class="ssp-hint-card mt-3">
-                        <strong><i class="bi bi-lightbulb"></i>提交建议</strong>
-                        <small>公共入口更适合给访客或非后台用户使用。</small>
-                        <small>如果你知道更准确的年份、类型或季数，尽量一起填写。</small>
+            <div class="ssp-aside-card">
+                <div class="ssp-aside-kicker">本次提交</div>
+                <div class="ssp-aside-title">结果与匹配方式</div>
+                <div class="ssp-aside-list">
+                    <div class="ssp-aside-item">
+                        <span class="ssp-aside-label">结果发送到</span>
+                        <span class="ssp-aside-value">{{ target_display }}</span>
+                    </div>
+                    <div class="ssp-aside-item">
+                        <span class="ssp-aside-label">解析方式</span>
+                        <span class="ssp-aside-value">{{ service_mode_label }}</span>
+                    </div>
+                    <div class="ssp-aside-item">
+                        <span class="ssp-aside-label">访问方式</span>
+                        <span class="ssp-aside-value">{% if require_access_key %}需要口令{% else %}免口令{% endif %}</span>
                     </div>
                 </div>
             </div>
-        </div>
+        </aside>
     </div>
 </div>
 {% endblock %}
