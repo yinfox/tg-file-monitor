@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.34`
+Latest image: `y1nf0x/tg-file-monitor:0.5.35`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.34
+y1nf0x/tg-file-monitor:0.5.35
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.34 (2026-03-20) - Current
+### v0.5.35 (2026-03-20) - Current
+- ✅ Public self-service entry no longer shows the public-entry status block
+- ✅ The public request form is rebalanced for both mobile and desktop, with a tighter first screen and cleaner desktop layout
+
+### v0.5.34 (2026-03-20)
 - ✅ Telegram monitor no longer exits its main loop after transient Telethon connection drops
 - ✅ Reconnect now reuses the existing Telethon session first, reducing session database lock conflicts
 
