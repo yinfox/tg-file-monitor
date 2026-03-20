@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.33`
+Latest image: `y1nf0x/tg-file-monitor:0.5.34`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.33
+y1nf0x/tg-file-monitor:0.5.34
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.33 (2026-03-19) - Current
+### v0.5.34 (2026-03-20) - Current
+- ✅ Telegram monitor no longer exits its main loop after transient Telethon connection drops
+- ✅ Reconnect now reuses the existing Telethon session first, reducing session database lock conflicts
+
+### v0.5.33 (2026-03-19)
 - ✅ Unified all four homepage runtime cards into the same "mini field cards + status badges" layout
 - ✅ Telegram, file sync, bot, and drama scheduler states now share a cleaner hierarchy and handle long status text better
 

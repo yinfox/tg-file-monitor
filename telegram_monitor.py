@@ -2121,6 +2121,10 @@ async def message_queue_loop():
                 await asyncio.sleep(3)
                 continue
 
+            if client is None or not client.is_connected():
+                await asyncio.sleep(2)
+                continue
+
             if os.path.exists(MESSAGE_QUEUE_FILE):
                 pending = []
                 # Use a lock-free approach for simplicity, but we should be careful
@@ -2154,6 +2158,23 @@ async def message_queue_loop():
 # Global client and configuration
 client = None
 current_config = load_config()
+_CLIENT_CONNECT_LOCK = None
+
+
+def _get_client_connect_lock() -> asyncio.Lock:
+    global _CLIENT_CONNECT_LOCK
+    if _CLIENT_CONNECT_LOCK is None:
+        _CLIENT_CONNECT_LOCK = asyncio.Lock()
+    return _CLIENT_CONNECT_LOCK
+
+
+async def _disconnect_client_safely(target_client) -> None:
+    if target_client is None:
+        return
+    try:
+        await target_client.disconnect()
+    except Exception as e:
+        debug_log(f"断开 Telegram 客户端时忽略异常: {e}")
 
 # Semaphore for concurrency limiting
 # Limit concurrent "expensive" operations (download/forward)
@@ -2359,77 +2380,94 @@ async def ensure_client_connected():
         log_message("Telegram API 凭据未设置。无法启动监控。" )
         return False
 
-    # If client exists and is connected, and authorized, return true
-    if client and client.is_connected():
+    async with _get_client_connect_lock():
+        # If client exists, always prefer reconnecting the same instance first.
+        if client is not None:
+            try:
+                if client.is_connected():
+                    if await client.is_user_authorized():
+                        return True
+                    log_message("现有客户端未授权。" )
+                    await _disconnect_client_safely(client)
+                    client = None
+                else:
+                    log_message("检测到现有 Telegram 客户端已断开，尝试复用会话重连...")
+                    await client.connect()
+                    if not await client.is_user_authorized():
+                        log_message("Telethon 客户端未授权。请通过 Web UI 进行认证。" )
+                        await _disconnect_client_safely(client)
+                        client = None
+                        return False
+                    log_message("Telethon 客户端已连接并授权。" )
+                    return True
+            except FloodWaitError as e:
+                log_message(f"遇到 FloodWaitError，等待 {e.seconds} 秒...")
+                await asyncio.sleep(e.seconds)
+                return False
+            except Exception as e:
+                log_message(f"复用现有 Telegram 会话重连失败: {e}")
+                traceback.print_exc()
+                stale_client = client
+                client = None
+                await _disconnect_client_safely(stale_client)
+
+        # Attempt to create and connect client
+        proxy_config = current_config.get('proxy', {})
+        
+        # Pre-configure the session database with WAL mode before creating client
+        db_file = session_file_path + '.session'
         try:
-            if await client.is_user_authorized():
-                return True
-            else:
-                log_message("现有客户端未授权。" )
-                await client.disconnect() # Disconnect unauthorized client
+            conn = sqlite3.connect(db_file, timeout=10)
+            conn.execute('PRAGMA journal_mode=WAL')
+            conn.execute('PRAGMA busy_timeout=10000')
+            conn.commit()
+            conn.close()
+            log_message("✓ Session数据库已配置为WAL模式")
+        except Exception as e:
+            log_message(f"警告: 无法预配置数据库 (将继续): {e}")
+        
+        client_args = {'session': session_file_path, 'api_id': api_id, 'api_hash': api_hash}
+        
+        if proxy_config and proxy_config.get('addr') and proxy_config.get('port'):
+            try:
+                proxy_addr = proxy_config['addr']
+                proxy_port = int(proxy_config['port'])
+                proxy_username = proxy_config.get('username')
+                proxy_password = proxy_config.get('password')
+
+                log_message(f"使用代理：{proxy_addr}:{proxy_port}")
+                client_args['proxy'] = (proxy_addr, proxy_port, proxy_username, proxy_password)
+            except Exception as e:
+                log_message(f"解析代理配置失败，将不使用代理: {e}")
+                traceback.print_exc()
+
+        new_client = TelegramClient(**client_args) # Modified to use full path and proxy
+        client = new_client
+        try:
+            log_message("尝试连接到 Telegram...")
+            await new_client.connect()
+            if not await new_client.is_user_authorized():
+                log_message("Telethon 客户端未授权。请通过 Web UI 进行认证。" )
+                await _disconnect_client_safely(new_client)
+                if client is new_client:
+                    client = None
+                return False
+            log_message("Telethon 客户端已连接并授权。" )
+            return True
         except FloodWaitError as e:
             log_message(f"遇到 FloodWaitError，等待 {e.seconds} 秒...")
             await asyncio.sleep(e.seconds)
-            return False # Try again after waiting
-        except Exception as e:
-            log_message(f"检查客户端授权状态失败: {e}")
-            traceback.print_exc()
-            if client and client.is_connected():
-                await client.disconnect()
+            await _disconnect_client_safely(new_client)
+            if client is new_client:
+                client = None
             return False
-
-    # Attempt to create and connect client
-    proxy_config = current_config.get('proxy', {})
-    
-    # Pre-configure the session database with WAL mode before creating client
-    db_file = session_file_path + '.session'
-    try:
-        conn = sqlite3.connect(db_file, timeout=10)
-        conn.execute('PRAGMA journal_mode=WAL')
-        conn.execute('PRAGMA busy_timeout=10000')
-        conn.commit()
-        conn.close()
-        log_message("✓ Session数据库已配置为WAL模式")
-    except Exception as e:
-        log_message(f"警告: 无法预配置数据库 (将继续): {e}")
-    
-    client_args = {'session': session_file_path, 'api_id': api_id, 'api_hash': api_hash}
-    
-    if proxy_config and proxy_config.get('addr') and proxy_config.get('port'):
-        try:
-            proxy_addr = proxy_config['addr']
-            proxy_port = int(proxy_config['port'])
-            proxy_username = proxy_config.get('username')
-            proxy_password = proxy_config.get('password')
-
-            log_message(f"使用代理：{proxy_addr}:{proxy_port}")
-            client_args['proxy'] = (proxy_addr, proxy_port, proxy_username, proxy_password)
         except Exception as e:
-            log_message(f"解析代理配置失败，将不使用代理: {e}")
-            traceback.print_exc()
-
-    client = TelegramClient(**client_args) # Modified to use full path and proxy
-    try:
-        log_message("尝试连接到 Telegram...")
-        await client.connect()
-        if not await client.is_user_authorized():
-            log_message("Telethon 客户端未授权。请通过 Web UI 进行认证。" )
-            await client.disconnect()
+            log_message(f"连接或授权 Telethon 客户端失败: {e}")
+            traceback.print_exc() # Add this line
+            await _disconnect_client_safely(new_client)
+            if client is new_client:
+                client = None
             return False
-        log_message("Telethon 客户端已连接并授权。" )
-        return True
-    except FloodWaitError as e:
-        log_message(f"遇到 FloodWaitError，等待 {e.seconds} 秒...")
-        await asyncio.sleep(e.seconds)
-        if client and client.is_connected():
-            await client.disconnect() # Disconnect to ensure clean state after flood wait
-        return False
-    except Exception as e:
-        log_message(f"连接或授权 Telethon 客户端失败: {e}")
-        traceback.print_exc() # Add this line
-        if client and client.is_connected():
-            await client.disconnect()
-        return False
 
 def _register_event_handlers():
     global _HANDLER_CLIENT
@@ -2447,17 +2485,32 @@ def _register_event_handlers():
 
 
 async def keep_client_connected():
+    reconnect_delay = 5
     while True:
         try:
-            if client is None or not client.is_connected():
-                log_message("检测到 Telegram 断开，尝试重连...")
-                ok = await ensure_client_connected()
-                if ok:
-                    _register_event_handlers()
-                    log_message("Telegram 已重连并恢复监控。")
+            ok = await ensure_client_connected()
+            if not ok:
+                log_message(f"Telegram 客户端暂不可用，{reconnect_delay} 秒后重试。")
+                await asyncio.sleep(reconnect_delay)
+                continue
+
+            _register_event_handlers()
+            active_client = client
+            try:
+                await active_client.run_until_disconnected()
+                log_message("Telegram 长连接已断开，准备自动重连...")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                log_message(f"Telegram 长连接异常断开，将自动重连: {e}")
+                traceback.print_exc()
+            finally:
+                if active_client is not None and active_client.is_connected():
+                    await _disconnect_client_safely(active_client)
         except Exception as e:
             log_message(f"重连检查失败: {e}")
-        await asyncio.sleep(10)
+            traceback.print_exc()
+        await asyncio.sleep(reconnect_delay)
 
 async def reliable_action(action_name, coro_func, *args, **kwargs):
     """
@@ -3727,9 +3780,8 @@ async def main():
             monitor_config_changes(), # Monitors config file for changes
             # periodic_checkin_loop(),   # HDHive 签到功能已移除
             message_queue_loop(),      # Sends messages requested by app.py
-            keep_client_connected(),   # Auto-reconnect on disconnect
+            keep_client_connected(),   # Keeps the Telegram long connection alive and reconnects on disconnect
             # resource_request_loop(),   # HDHive 功能已移除
-            client.run_until_disconnected() # Keeps Telethon client running
         )
     except Exception as e:
         log_message(f"监控主循环发生错误: {e}")

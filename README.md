@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.33`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.34`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.33
+y1nf0x/tg-file-monitor:0.5.34
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -395,7 +395,11 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.33 (2026-03-19) - 当前版本
+### v0.5.34 (2026-03-20) - 当前版本
+- ✅ Telegram 长连接异常断开后不再导致监控主循环退出
+- ✅ 重连优先复用现有 Telethon 会话，降低 session 数据库锁冲突概率
+
+### v0.5.33 (2026-03-19)
 - ✅ 首页四张运行状态卡统一为“字段小卡片 + 状态标签”布局
 - ✅ Telegram、文件同步、Bot、追剧调度状态展示层级更一致，长文本状态更易读
 
@@ -425,10 +429,11 @@ Web 界面 → 配置 → 代理配置
 - ✅ 猫眼网播·网络电影改用官方接口拉取，避免误取票房榜
 - ✅ 网络电影新增“上线天数”剔除阈值（独立于 TMDB 完结）
 - ✅ 追剧白名单按来源保留分组标题（网络电影可单独维护）
-
-### v0.5.18 (2026-03-17)
-- ✅ 追剧白名单编辑支持“猫眼网播·网络电影”单独分组与维护
 <!-- AUTO-GEN:VERSION_HISTORY:END -->
+
+### v0.5.34 (2026-03-20)
+- ✅ Telegram 长连接异常断开后不再导致监控主循环退出
+- ✅ 重连优先复用现有 Telethon 会话，降低 session 数据库锁冲突概率
 
 ### v0.5.33 (2026-03-19)
 - ✅ 首页四张运行状态卡统一为“字段小卡片 + 状态标签”布局
