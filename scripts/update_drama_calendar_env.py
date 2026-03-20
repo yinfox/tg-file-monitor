@@ -52,6 +52,16 @@ SOURCE_CHOICES = (
     "all",
 )
 _TMDB_CACHE_LOCK = threading.Lock()
+_TMDB_PROXY_URL = (os.environ.get("DRAMA_TMDB_PROXY_URL") or os.environ.get("TMDB_PROXY_URL") or "").strip()
+
+
+def _tmdb_request_get(url: str, **kwargs):
+    if _TMDB_PROXY_URL and "proxies" not in kwargs:
+        kwargs["proxies"] = {
+            "http": _TMDB_PROXY_URL,
+            "https": _TMDB_PROXY_URL,
+        }
+    return requests.get(url, **kwargs)
 
 
 def _normalize_sources(raw_sources: Sequence[str]) -> List[str]:
@@ -362,7 +372,7 @@ def _tmdb_fetch_finish_state(
         "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
         "Accept": "application/json",
     }
-    search_resp = requests.get(
+    search_resp = _tmdb_request_get(
         "https://api.themoviedb.org/3/search/tv",
         params={
             "api_key": api_key,
@@ -393,7 +403,7 @@ def _tmdb_fetch_finish_state(
         return None, None, f"tmdb_low_confidence(score={score},reason={score_reason})"
 
     tv_id = int(picked.get("id"))
-    detail_resp = requests.get(
+    detail_resp = _tmdb_request_get(
         f"https://api.themoviedb.org/3/tv/{tv_id}",
         params={
             "api_key": api_key,
@@ -477,7 +487,7 @@ def _tmdb_fetch_movie_release_date(
         "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
         "Accept": "application/json",
     }
-    search_resp = requests.get(
+    search_resp = _tmdb_request_get(
         "https://api.themoviedb.org/3/search/movie",
         params={
             "api_key": api_key,
@@ -508,7 +518,7 @@ def _tmdb_fetch_movie_release_date(
         return None, f"tmdb_movie_low_confidence(score={score},reason={score_reason})"
 
     movie_id = int(picked.get("id"))
-    detail_resp = requests.get(
+    detail_resp = _tmdb_request_get(
         f"https://api.themoviedb.org/3/movie/{movie_id}",
         params={
             "api_key": api_key,

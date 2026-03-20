@@ -136,7 +136,7 @@ class Client115:
                 'target': target,
             }
             
-            resp = requests.post(
+            resp = self.session.post(
                 'https://proapi.115.com/app/uploadinfo',
                 headers=headers,
                 data=data,

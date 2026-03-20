@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 from types import SimpleNamespace
 import html
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote
 
 import requests
 from telethon.sync import TelegramClient
@@ -218,7 +218,11 @@ def load_config() -> dict:
         },
         "startup_tv_whitelist_scan_limit": STARTUP_TV_WHITELIST_SCAN_LIMIT,
         "restricted_channels": [],
-        "proxy": {},
+        "proxy": {
+            "telegram": {},
+            "service": {},
+            "downloader": {},
+        },
         "debug_mode": False,
         "trace_media_detection": False,
         "hdhive_base_url": "https://hdhive.com",
@@ -272,7 +276,38 @@ def load_config() -> dict:
         if 'restricted_channels' not in config:
             config['restricted_channels'] = []
         if 'proxy' not in config:
-            config['proxy'] = {}
+            config['proxy'] = json.loads(json.dumps(default_config['proxy']))
+        else:
+            raw_proxy = config.get('proxy')
+            if not isinstance(raw_proxy, dict):
+                config['proxy'] = json.loads(json.dumps(default_config['proxy']))
+            else:
+                legacy_keys = {"addr", "port", "username", "password"}
+                if legacy_keys & set(raw_proxy.keys()):
+                    legacy_proxy = {
+                        "addr": str(raw_proxy.get("addr") or "").strip(),
+                        "port": str(raw_proxy.get("port") or "").strip(),
+                        "username": str(raw_proxy.get("username") or "").strip(),
+                        "password": str(raw_proxy.get("password") or "").strip(),
+                    }
+                    config['proxy'] = {
+                        "telegram": dict(legacy_proxy),
+                        "service": dict(legacy_proxy),
+                        "downloader": {},
+                    }
+                else:
+                    normalized_proxy = json.loads(json.dumps(default_config['proxy']))
+                    for scope in ("telegram", "service", "downloader"):
+                        scope_cfg = raw_proxy.get(scope)
+                        if not isinstance(scope_cfg, dict):
+                            continue
+                        normalized_proxy[scope] = {
+                            "addr": str(scope_cfg.get("addr") or "").strip(),
+                            "port": str(scope_cfg.get("port") or "").strip(),
+                            "username": str(scope_cfg.get("username") or "").strip(),
+                            "password": str(scope_cfg.get("password") or "").strip(),
+                        }
+                    config['proxy'] = normalized_proxy
         if 'trace_media_detection' not in config:
             config['trace_media_detection'] = False
         if 'debug_mode' not in config:
@@ -301,6 +336,113 @@ def load_config() -> dict:
             return _LAST_GOOD_CONFIG
         _LAST_GOOD_CONFIG = default_config
         return default_config
+
+
+def _normalize_proxy_scope(scope: Optional[str]) -> str:
+    value = str(scope or "service").strip().lower()
+    aliases = {
+        "telegram": "telegram",
+        "tg": "telegram",
+        "telethon": "telegram",
+        "service": "service",
+        "hdhive": "service",
+        "tmdb": "service",
+        "hdhive_tmdb": "service",
+        "downloader": "downloader",
+        "download": "downloader",
+        "yt": "downloader",
+    }
+    return aliases.get(value, "service")
+
+
+def _get_proxy_scope_config(config: Optional[dict] = None, scope: Optional[str] = None) -> dict:
+    cfg = config if isinstance(config, dict) else load_config()
+    proxy_cfg = cfg.get('proxy', {}) if isinstance(cfg, dict) else {}
+    if not isinstance(proxy_cfg, dict):
+        return {}
+
+    normalized_scope = _normalize_proxy_scope(scope)
+    legacy_keys = {"addr", "port", "username", "password"}
+    if legacy_keys & set(proxy_cfg.keys()):
+        if normalized_scope in ("telegram", "service"):
+            return {
+                "addr": str(proxy_cfg.get("addr") or "").strip(),
+                "port": str(proxy_cfg.get("port") or "").strip(),
+                "username": str(proxy_cfg.get("username") or "").strip(),
+                "password": str(proxy_cfg.get("password") or "").strip(),
+            }
+        return {}
+
+    scoped_cfg = proxy_cfg.get(normalized_scope, {})
+    if not isinstance(scoped_cfg, dict):
+        return {}
+    return {
+        "addr": str(scoped_cfg.get("addr") or "").strip(),
+        "port": str(scoped_cfg.get("port") or "").strip(),
+        "username": str(scoped_cfg.get("username") or "").strip(),
+        "password": str(scoped_cfg.get("password") or "").strip(),
+    }
+
+
+def _build_proxy_url_from_config(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[str]:
+    proxy_cfg = _get_proxy_scope_config(config, scope)
+    addr = str(proxy_cfg.get('addr') or '').strip()
+    port = str(proxy_cfg.get('port') or '').strip()
+    if not addr or not port:
+        return None
+
+    username = str(proxy_cfg.get('username') or '').strip()
+    password = str(proxy_cfg.get('password') or '').strip()
+    auth = ""
+    if username:
+        auth = quote(username, safe="")
+        if password:
+            auth += ":" + quote(password, safe="")
+        auth += "@"
+    return f"http://{auth}{addr}:{port}"
+
+
+def _build_requests_proxies(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[dict]:
+    proxy_url = _build_proxy_url_from_config(config, scope)
+    if not proxy_url:
+        return None
+    return {
+        'http': proxy_url,
+        'https': proxy_url,
+    }
+
+
+def _build_telethon_proxy_from_config(config: Optional[dict] = None) -> Optional[tuple]:
+    proxy_cfg = _get_proxy_scope_config(config, "telegram")
+    addr = proxy_cfg.get("addr") or ""
+    port = proxy_cfg.get("port") or ""
+    if not addr or not port:
+        return None
+    try:
+        return (
+            addr,
+            int(port),
+            proxy_cfg.get("username") or None,
+            proxy_cfg.get("password") or None,
+        )
+    except Exception:
+        return None
+
+
+def _requests_request(method: str, url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
+    if proxy_scope and 'proxies' not in kwargs:
+        proxies = _build_requests_proxies(config, proxy_scope)
+        if proxies:
+            kwargs['proxies'] = proxies
+    return requests.request(method, url, **kwargs)
+
+
+def _requests_get(url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
+    return _requests_request('GET', url, config=config, proxy_scope=proxy_scope, **kwargs)
+
+
+def _requests_post(url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
+    return _requests_request('POST', url, config=config, proxy_scope=proxy_scope, **kwargs)
 
 
 def _atomic_write_json(path: str, data: dict, *, indent: int = 4) -> None:
@@ -440,10 +582,11 @@ def _refresh_hdhive_action_ids_if_needed():
     if not needs_refresh and _HDHIVE_ACTION_IDS_LAST_REFRESH_TS and (now - _HDHIVE_ACTION_IDS_LAST_REFRESH_TS) < _HDHIVE_ACTION_IDS_REFRESH_TTL_SECONDS:
         return
     try:
-        html_text = requests.get(
+        html_text = _requests_get(
             "https://hdhive.com/",
             timeout=20,
             headers={"User-Agent": "Mozilla/5.0"},
+            proxy_scope="service",
         ).text
     except Exception:
         return
@@ -481,10 +624,11 @@ def _refresh_hdhive_action_ids_if_needed():
 
         for p in chunk_paths[:200]:
             try:
-                js_text = requests.get(
+                js_text = _requests_get(
                     f"https://hdhive.com{p}",
                     timeout=20,
                     headers={"User-Agent": "Mozilla/5.0"},
+                    proxy_scope="service",
                 ).text
             except Exception:
                 continue
@@ -534,10 +678,11 @@ def _refresh_hdhive_unlock_action_id_if_needed(slug: str) -> Optional[str]:
         return _HDHIVE_UNLOCK_ACTION_ID
 
     try:
-        html_text = requests.get(
+        html_text = _requests_get(
             f"https://hdhive.com/resource/115/{slug}",
             timeout=30,
             headers={"User-Agent": "Mozilla/5.0"},
+            proxy_scope="service",
         ).text
     except Exception:
         return _HDHIVE_UNLOCK_ACTION_ID
@@ -554,10 +699,11 @@ def _refresh_hdhive_unlock_action_id_if_needed(slug: str) -> Optional[str]:
         unlock_id = None
         for p in chunk_paths[:200]:
             try:
-                js_text = requests.get(
+                js_text = _requests_get(
                     f"https://hdhive.com{p}",
                     timeout=20,
                     headers={"User-Agent": "Mozilla/5.0"},
+                    proxy_scope="service",
                 ).text
             except Exception:
                 continue
@@ -596,10 +742,11 @@ def _get_hdhive_router_state_tree_json(slug: str) -> str:
     headers = {'User-Agent': 'Mozilla/5.0'}
     try:
         for attempt in range(2):
-            html_text = requests.get(
+            html_text = _requests_get(
                 f"https://hdhive.com/resource/115/{slug}",
                 timeout=30,
                 headers=headers,
+                proxy_scope="service",
             ).text
             # New Next.js format: embedded flight data in self.__next_f.push([1,"..."])
             parts = re.findall(r'self\.__next_f\.push\(\[1,"([\s\S]*?)"\]\)', html_text)
@@ -1214,7 +1361,7 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
     if method.upper() in ("POST", "PATCH"):
         headers["Content-Type"] = "application/json"
     try:
-        resp = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)
+        resp = _requests_request(method, url, headers=headers, json=json_body, timeout=timeout, proxy_scope="service")
     except Exception as e:
         return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
     try:
@@ -1324,14 +1471,14 @@ def _hdhive_next_action_call_sync(
     rsc_token = int(time.time() * 1000)
     body = json.dumps(action_args, ensure_ascii=False)
     rsc_url = f"https://hdhive.com/?_rsc={rsc_token}"
-    resp = requests.post(rsc_url, data=body.encode('utf-8'), timeout=25, headers=headers)
+    resp = _requests_post(rsc_url, data=body.encode('utf-8'), timeout=25, headers=headers, proxy_scope="service")
     parsed = _parse_next_action_rsc_result(resp.text)
     if parsed is not None:
         return parsed
     # Fallback: try page path as endpoint (some deployments require scoped URL)
     try:
         alt_url = f"https://hdhive.com{page_path}?_rsc={rsc_token}"
-        resp2 = requests.post(alt_url, data=body.encode('utf-8'), timeout=25, headers=headers)
+        resp2 = _requests_post(alt_url, data=body.encode('utf-8'), timeout=25, headers=headers, proxy_scope="service")
         return _parse_next_action_rsc_result(resp2.text)
     except Exception:
         return None
@@ -1415,7 +1562,7 @@ def _hdhive_go_api_get_url_info_sync(cookie_header: str, slug: str) -> Optional[
         'Referer': f'https://hdhive.com/resource/115/{slug}',
     }
     url = f"https://hdhive.com/go-api/customer/resources/{slug}/url"
-    resp = requests.get(url, params={'query': encrypted_query}, timeout=25, headers=headers)
+    resp = _requests_get(url, params={'query': encrypted_query}, timeout=25, headers=headers, proxy_scope="service")
     try:
         raw = resp.json()
     except Exception:
@@ -1451,7 +1598,7 @@ def _hdhive_go_api_unlock_sync(cookie_header: str, slug: str) -> Optional[dict]:
     }
     url = f"https://hdhive.com/go-api/customer/resources/{slug}/unlock"
     if isinstance(encrypted_body, str) and encrypted_body:
-        resp = requests.post(url, json={'data': encrypted_body}, timeout=25, headers=headers)
+        resp = _requests_post(url, json={'data': encrypted_body}, timeout=25, headers=headers, proxy_scope="service")
     else:
         return {
             "__error": "加密参数生成失败"
@@ -2412,8 +2559,6 @@ async def ensure_client_connected():
                 await _disconnect_client_safely(stale_client)
 
         # Attempt to create and connect client
-        proxy_config = current_config.get('proxy', {})
-        
         # Pre-configure the session database with WAL mode before creating client
         db_file = session_file_path + '.session'
         try:
@@ -2427,18 +2572,14 @@ async def ensure_client_connected():
             log_message(f"警告: 无法预配置数据库 (将继续): {e}")
         
         client_args = {'session': session_file_path, 'api_id': api_id, 'api_hash': api_hash}
-        
-        if proxy_config and proxy_config.get('addr') and proxy_config.get('port'):
-            try:
-                proxy_addr = proxy_config['addr']
-                proxy_port = int(proxy_config['port'])
-                proxy_username = proxy_config.get('username')
-                proxy_password = proxy_config.get('password')
 
-                log_message(f"使用代理：{proxy_addr}:{proxy_port}")
-                client_args['proxy'] = (proxy_addr, proxy_port, proxy_username, proxy_password)
+        telethon_proxy = _build_telethon_proxy_from_config(current_config)
+        if telethon_proxy:
+            try:
+                log_message(f"使用 Telegram 代理：{telethon_proxy[0]}:{telethon_proxy[1]}")
+                client_args['proxy'] = telethon_proxy
             except Exception as e:
-                log_message(f"解析代理配置失败，将不使用代理: {e}")
+                log_message(f"解析 Telegram 代理配置失败，将不使用代理: {e}")
                 traceback.print_exc()
 
         new_client = TelegramClient(**client_args) # Modified to use full path and proxy

@@ -550,6 +550,14 @@
     {% endfor %}
     {% set hdhive_enabled = config.get('hdhive_cookie') or config.get('hdhive_open_api_key') %}
     {% set bot_token_ready = config.get('bot', {}).get('token') %}
+    {% set raw_proxy_cfg = config.get('proxy', {}) %}
+    {% set legacy_proxy_ready = raw_proxy_cfg.get('addr') and raw_proxy_cfg.get('port') %}
+    {% set telegram_proxy_cfg = raw_proxy_cfg.get('telegram', raw_proxy_cfg if legacy_proxy_ready else {}) %}
+    {% set service_proxy_cfg = raw_proxy_cfg.get('service', raw_proxy_cfg if legacy_proxy_ready else {}) %}
+    {% set downloader_proxy_cfg = raw_proxy_cfg.get('downloader', {}) %}
+    {% set telegram_proxy_ready = telegram_proxy_cfg.get('addr') and telegram_proxy_cfg.get('port') %}
+    {% set service_proxy_ready = service_proxy_cfg.get('addr') and service_proxy_cfg.get('port') %}
+    {% set downloader_proxy_ready = downloader_proxy_cfg.get('addr') and downloader_proxy_cfg.get('port') %}
 
     <div class="d-flex flex-column gap-3">
         <div>
@@ -568,7 +576,7 @@
                     <div class="settings-quick-actions">
                         <a href="#section-editor" class="btn btn-primary btn-sm" data-settings-jump><i class="bi bi-plus-circle me-1"></i>新增频道</a>
                         <a href="#section-rules" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-sliders me-1"></i>调整规则</a>
-                        <a href="#section-services" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-grid me-1"></i>扩展服务</a>
+                        <a href="{{ url_for('proxy_config') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-diagram-3 me-1"></i>代理设置</a>
                     </div>
                 </div>
                 <div class="settings-summary-grid mt-3">
@@ -604,6 +612,9 @@
                             <span class="settings-chip {% if config.get('self_service_public_enabled', False) %}is-on{% else %}is-off{% endif %}">公共入口{% if config.get('self_service_public_enabled', False) %}已开{% else %}未开{% endif %}</span>
                             <span class="settings-chip {% if hdhive_enabled %}is-on{% else %}is-off{% endif %}">HDHive{% if hdhive_enabled %}已配{% else %}待配{% endif %}</span>
                             <span class="settings-chip {% if bot_token_ready %}is-on{% else %}is-off{% endif %}">Bot{% if bot_token_ready %}已配{% else %}待配{% endif %}</span>
+                            <span class="settings-chip {% if telegram_proxy_ready %}is-on{% else %}is-off{% endif %}">TG代理{% if telegram_proxy_ready %}已配{% else %}直连{% endif %}</span>
+                            <span class="settings-chip {% if service_proxy_ready %}is-on{% else %}is-off{% endif %}">HDHive/TMDB{% if service_proxy_ready %}代理{% else %}直连{% endif %}</span>
+                            <span class="settings-chip {% if downloader_proxy_ready %}is-on{% else %}is-off{% endif %}">下载器{% if downloader_proxy_ready %}代理{% else %}直连{% endif %}</span>
                         </div>
                         <div class="settings-stat-help mt-2">扩展能力的启用状态会在这里做一个快速提示。</div>
                     </div>
@@ -637,6 +648,10 @@
                             <a href="#section-services" class="settings-nav-link" data-settings-nav>
                                 <span><i class="bi bi-grid"></i>扩展服务</span>
                                 <span class="badge bg-light text-dark">HDHive</span>
+                            </a>
+                            <a href="{{ url_for('proxy_config') }}" class="settings-nav-link">
+                                <span><i class="bi bi-diagram-3"></i>代理设置</span>
+                                <span class="badge bg-light text-dark">独立页</span>
                             </a>
                             <a href="#section-bot" class="settings-nav-link" data-settings-nav>
                                 <span><i class="bi bi-robot"></i>Bot 凭证</span>
@@ -1380,6 +1395,25 @@
                                             <div class="form-text mt-2">如已配置 Open API Key，“测试(API优先)”会优先验证 API Key；“测试 Cookie”强制验证 Cookie。</div>
                                             <div class="form-text mt-2" id="hdhiveTestResult"></div>
                                         </form>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="accordion-item">
+                                <h2 class="accordion-header" id="proxySettingsHeading">
+                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                        data-bs-target="#proxySettingsCollapse" aria-expanded="false"
+                                        aria-controls="proxySettingsCollapse">
+                                        <i class="bi bi-diagram-3 me-2"></i>🌐 网络代理
+                                    </button>
+                                </h2>
+                                <div id="proxySettingsCollapse" class="accordion-collapse collapse"
+                                    aria-labelledby="proxySettingsHeading" data-bs-parent="#tgAdvancedAccordion">
+                                    <div class="accordion-body p-2">
+                                        <div class="form-text mb-2">代理设置已移到独立页面，建议从左侧导航进入维护三类代理：Telegram、HDHive / TMDB、下载器。</div>
+                                        <a href="{{ url_for('proxy_config') }}" class="btn btn-outline-primary btn-sm w-100">
+                                            <i class="bi bi-box-arrow-up-right me-1"></i>打开代理设置页面
+                                        </a>
                                     </div>
                                 </div>
                             </div>

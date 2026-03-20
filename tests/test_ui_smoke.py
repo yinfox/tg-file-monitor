@@ -35,6 +35,7 @@ class UISmokeTestCase(unittest.TestCase):
         checks = [
             ("/", "配置入口与运行状态一页集中"),
             ("/config", "Telegram 配置中心"),
+            ("/proxy_config", "代理设置"),
             ("/file_config", "文件同步配置中心"),
             ("/drama_calendar", "追剧配置中心"),
             ("/monitor_log", "Telegram 日志中心"),

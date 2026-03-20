@@ -367,6 +367,10 @@
                 href="{{ url_for('manage_config') }}">
                 <i class="bi bi-telegram"></i>Telegram 配置中心
             </a>
+            <a class="nav-link {% if request.endpoint == 'proxy_config' %}active{% endif %}"
+                href="{{ url_for('proxy_config') }}">
+                <i class="bi bi-diagram-3"></i>代理设置
+            </a>
             <a class="nav-link {% if request.endpoint == 'manage_file_config' %}active{% endif %}"
                 href="{{ url_for('manage_file_config') }}">
                 <i class="bi bi-folder2-open"></i>文件同步配置中心

@@ -14,7 +14,7 @@ import re
 import datetime
 import shutil
 import requests
-from urllib.parse import quote_plus
+from urllib.parse import quote_plus, quote
 from typing import Tuple, Optional, List
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
 from telethon.sync import TelegramClient # Using sync version for simpler Flask integration
@@ -39,7 +39,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.35"
+VERSION = "0.5.36"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -150,7 +150,11 @@ def load_config():
         },
         "allowed_browse_path": os.getcwd(),
         "restricted_channels": [],
-        "proxy": {},
+        "proxy": {
+            "telegram": {},
+            "service": {},
+            "downloader": {},
+        },
         "115_cookie": "",
         "115_target_cid": "",
         "bot": {"token": ""},
@@ -334,7 +338,38 @@ def load_config():
                     merged_checkin.update(config.get("hdhive_checkin") or {})
                     config["hdhive_checkin"] = merged_checkin
                 if "proxy" not in config:
-                    config["proxy"] = {}
+                    config["proxy"] = json.loads(json.dumps(default_config["proxy"]))
+                else:
+                    raw_proxy = config.get("proxy")
+                    if not isinstance(raw_proxy, dict):
+                        config["proxy"] = json.loads(json.dumps(default_config["proxy"]))
+                    else:
+                        legacy_keys = {"addr", "port", "username", "password"}
+                        if legacy_keys & set(raw_proxy.keys()):
+                            legacy_proxy = {
+                                "addr": str(raw_proxy.get("addr") or "").strip(),
+                                "port": str(raw_proxy.get("port") or "").strip(),
+                                "username": str(raw_proxy.get("username") or "").strip(),
+                                "password": str(raw_proxy.get("password") or "").strip(),
+                            }
+                            config["proxy"] = {
+                                "telegram": dict(legacy_proxy),
+                                "service": dict(legacy_proxy),
+                                "downloader": {},
+                            }
+                        else:
+                            normalized_proxy = json.loads(json.dumps(default_config["proxy"]))
+                            for scope in ("telegram", "service", "downloader"):
+                                scope_cfg = raw_proxy.get(scope)
+                                if not isinstance(scope_cfg, dict):
+                                    continue
+                                normalized_proxy[scope] = {
+                                    "addr": str(scope_cfg.get("addr") or "").strip(),
+                                    "port": str(scope_cfg.get("port") or "").strip(),
+                                    "username": str(scope_cfg.get("username") or "").strip(),
+                                    "password": str(scope_cfg.get("password") or "").strip(),
+                                }
+                            config["proxy"] = normalized_proxy
                 if "trace_media_detection" not in config:
                     config["trace_media_detection"] = False
                 if "download_risk_control" not in config or not isinstance(config.get("download_risk_control"), dict):
@@ -408,8 +443,202 @@ def load_config():
         config['115_cookie'] = os.environ.get('WEB_115_COOKIE')
     
     # 移除 HDHive 配置
-    
+
     return config
+
+
+def _normalize_proxy_scope(scope: Optional[str]) -> str:
+    value = str(scope or "service").strip().lower()
+    aliases = {
+        "telegram": "telegram",
+        "tg": "telegram",
+        "telethon": "telegram",
+        "service": "service",
+        "hdhive": "service",
+        "tmdb": "service",
+        "hdhive_tmdb": "service",
+        "downloader": "downloader",
+        "download": "downloader",
+        "yt": "downloader",
+    }
+    return aliases.get(value, "service")
+
+
+def _proxy_scope_label(scope: Optional[str]) -> str:
+    normalized = _normalize_proxy_scope(scope)
+    labels = {
+        "telegram": "Telegram 代理",
+        "service": "HDHive / TMDB 代理",
+        "downloader": "下载器代理",
+    }
+    return labels.get(normalized, "代理")
+
+
+def _empty_proxy_scope_config() -> dict:
+    return {
+        "addr": "",
+        "port": "",
+        "username": "",
+        "password": "",
+    }
+
+
+def _ensure_proxy_config_structure(config: dict) -> dict:
+    if not isinstance(config, dict):
+        return {
+            "telegram": _empty_proxy_scope_config(),
+            "service": _empty_proxy_scope_config(),
+            "downloader": _empty_proxy_scope_config(),
+        }
+
+    proxy_cfg = config.get("proxy", {})
+    if not isinstance(proxy_cfg, dict):
+        proxy_cfg = {}
+
+    legacy_keys = {"addr", "port", "username", "password"}
+    if legacy_keys & set(proxy_cfg.keys()):
+        legacy_proxy = {
+            "addr": str(proxy_cfg.get("addr") or "").strip(),
+            "port": str(proxy_cfg.get("port") or "").strip(),
+            "username": str(proxy_cfg.get("username") or "").strip(),
+            "password": str(proxy_cfg.get("password") or "").strip(),
+        }
+        normalized = {
+            "telegram": dict(legacy_proxy),
+            "service": dict(legacy_proxy),
+            "downloader": _empty_proxy_scope_config(),
+        }
+        config["proxy"] = normalized
+        return normalized
+
+    normalized = {
+        "telegram": _empty_proxy_scope_config(),
+        "service": _empty_proxy_scope_config(),
+        "downloader": _empty_proxy_scope_config(),
+    }
+    for scope in ("telegram", "service", "downloader"):
+        scope_cfg = proxy_cfg.get(scope)
+        if not isinstance(scope_cfg, dict):
+            continue
+        normalized[scope] = {
+            "addr": str(scope_cfg.get("addr") or "").strip(),
+            "port": str(scope_cfg.get("port") or "").strip(),
+            "username": str(scope_cfg.get("username") or "").strip(),
+            "password": str(scope_cfg.get("password") or "").strip(),
+        }
+    config["proxy"] = normalized
+    return normalized
+
+
+def _get_proxy_scope_config(config: Optional[dict] = None, scope: Optional[str] = None) -> dict:
+    cfg = config if isinstance(config, dict) else load_config()
+    if isinstance(cfg, dict):
+        proxy_cfg = _ensure_proxy_config_structure(cfg)
+    else:
+        proxy_cfg = {}
+    normalized_scope = _normalize_proxy_scope(scope)
+    scoped_cfg = proxy_cfg.get(normalized_scope, {})
+    if not isinstance(scoped_cfg, dict):
+        return {}
+    return {
+        "addr": str(scoped_cfg.get("addr") or "").strip(),
+        "port": str(scoped_cfg.get("port") or "").strip(),
+        "username": str(scoped_cfg.get("username") or "").strip(),
+        "password": str(scoped_cfg.get("password") or "").strip(),
+    }
+
+
+def _set_proxy_scope(config: dict, scope: Optional[str], *, addr: str = "", port: str = "", username: str = "", password: str = "") -> str:
+    proxy_cfg = _ensure_proxy_config_structure(config)
+    normalized_scope = _normalize_proxy_scope(scope)
+    proxy_cfg[normalized_scope] = {
+        "addr": str(addr or "").strip(),
+        "port": str(port or "").strip(),
+        "username": str(username or "").strip(),
+        "password": str(password or "").strip(),
+    }
+    config["proxy"] = proxy_cfg
+    return normalized_scope
+
+
+def _clear_proxy_scope(config: dict, scope: Optional[str]) -> str:
+    proxy_cfg = _ensure_proxy_config_structure(config)
+    normalized_scope = _normalize_proxy_scope(scope)
+    proxy_cfg[normalized_scope] = _empty_proxy_scope_config()
+    config["proxy"] = proxy_cfg
+    return normalized_scope
+
+
+def _build_proxy_url_from_config(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[str]:
+    proxy_cfg = _get_proxy_scope_config(config, scope)
+    addr = proxy_cfg.get("addr") or ""
+    port = proxy_cfg.get("port") or ""
+    if not addr or not port:
+        return None
+
+    username = str(proxy_cfg.get("username") or "").strip()
+    password = str(proxy_cfg.get("password") or "").strip()
+    auth = ""
+    if username:
+        auth = quote(username, safe="")
+        if password:
+            auth += ":" + quote(password, safe="")
+        auth += "@"
+    return f"http://{auth}{addr}:{port}"
+
+
+def _build_requests_proxies(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[dict]:
+    proxy_url = _build_proxy_url_from_config(config, scope)
+    if not proxy_url:
+        return None
+    return {
+        "http": proxy_url,
+        "https": proxy_url,
+    }
+
+
+def _build_telethon_proxy_from_config(config: Optional[dict] = None) -> Optional[tuple]:
+    proxy_cfg = _get_proxy_scope_config(config, "telegram")
+    addr = proxy_cfg.get("addr") or ""
+    port = proxy_cfg.get("port") or ""
+    if not addr or not port:
+        return None
+    try:
+        return (
+            addr,
+            int(port),
+            proxy_cfg.get("username") or None,
+            proxy_cfg.get("password") or None,
+        )
+    except Exception:
+        return None
+
+
+def _requests_request(method: str, url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
+    if proxy_scope and "proxies" not in kwargs:
+        proxies = _build_requests_proxies(config, proxy_scope)
+        if proxies:
+            kwargs["proxies"] = proxies
+    return requests.request(method, url, **kwargs)
+
+
+def _requests_get(url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
+    return _requests_request("GET", url, config=config, proxy_scope=proxy_scope, **kwargs)
+
+
+def _requests_post(url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
+    return _requests_request("POST", url, config=config, proxy_scope=proxy_scope, **kwargs)
+
+
+def _build_tmdb_proxy_env(config: Optional[dict] = None) -> dict:
+    env = os.environ.copy()
+    proxy_url = _build_proxy_url_from_config(config, "service")
+    if proxy_url:
+        env["DRAMA_TMDB_PROXY_URL"] = proxy_url
+    else:
+        env.pop("DRAMA_TMDB_PROXY_URL", None)
+    return env
+
 
 def _atomic_write_json(path: str, data: dict, *, indent: int = 4) -> None:
     os.makedirs(os.path.dirname(path) or '.', exist_ok=True)
@@ -2349,6 +2578,7 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
             capture_output=True,
             timeout=timeout_seconds,
             check=False,
+            env=_build_tmdb_proxy_env(),
         )
         finished_at = time.strftime('%Y-%m-%d %H:%M:%S')
         level = 'INFO' if proc.returncode == 0 else 'ERROR'
@@ -2473,6 +2703,7 @@ def _run_drama_calendar_source_map(drama_cfg: dict) -> tuple:
             capture_output=True,
             timeout=timeout_seconds,
             check=False,
+            env=_build_tmdb_proxy_env(),
         )
         stdout_text = _decode_subprocess_output(proc.stdout)
         stderr_text = _decode_subprocess_output(proc.stderr)
@@ -2700,7 +2931,7 @@ def _get_hdhive_home_router_state_tree_json(base_url: str, cookie: str = "") -> 
     if cookie_header:
         headers["Cookie"] = cookie_header
     try:
-        resp = requests.get(base_url.rstrip("/") + "/", timeout=20, headers=headers)
+        resp = _requests_get(base_url.rstrip("/") + "/", timeout=20, headers=headers, proxy_scope="service")
         html_text = _decode_hdhive_text(resp.content)
         tree_json = _extract_hdhive_next_router_tree(html_text)
         if tree_json:
@@ -2723,12 +2954,12 @@ def _refresh_hdhive_checkin_action_id_if_needed(base_url: str, cookie: str = "")
     if cookie_header:
         headers["Cookie"] = cookie_header
     try:
-        html_text = _decode_hdhive_text(requests.get(base_url.rstrip("/") + "/", timeout=20, headers=headers).content)
+        html_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + "/", timeout=20, headers=headers, proxy_scope="service").content)
         chunk_paths = sorted(set(re.findall(r'/_next/static/[^"<> ]+\.js', html_text)))
         pat_checkin = re.compile(r'createServerReference\("([0-9a-f]{40,})"[^)]*"checkIn"\)')
         for path in chunk_paths[:80]:
             try:
-                js_text = _decode_hdhive_text(requests.get(base_url.rstrip("/") + path, timeout=15, headers={"User-Agent": "Mozilla/5.0"}).content)
+                js_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + path, timeout=15, headers={"User-Agent": "Mozilla/5.0"}, proxy_scope="service").content)
             except Exception:
                 continue
             match = pat_checkin.search(js_text)
@@ -2783,7 +3014,7 @@ def _hdhive_request_json(
     params: Optional[dict] = None,
 ) -> Tuple[Optional[dict], str]:
     try:
-        resp = requests.request(method, url, headers=headers, json=json_body, params=params, timeout=20)
+        resp = _requests_request(method, url, headers=headers, json=json_body, params=params, timeout=20, proxy_scope="service")
     except Exception as e:
         return None, f"{type(e).__name__}: {e}"
     text = resp.text or ""
@@ -2834,7 +3065,7 @@ def _hdhive_next_action_call_sync(
     body = json.dumps(action_args, ensure_ascii=False).encode("utf-8")
     rsc_token = int(time.time() * 1000)
     try:
-        resp = requests.post(f"{base_url}/?_rsc={rsc_token}", data=body, timeout=25, headers=headers)
+        resp = _requests_post(f"{base_url}/?_rsc={rsc_token}", data=body, timeout=25, headers=headers, proxy_scope="service")
         parsed = _parse_next_action_rsc_result_text(_decode_hdhive_text(resp.content))
         if parsed is not None:
             return parsed
@@ -2842,7 +3073,7 @@ def _hdhive_next_action_call_sync(
         pass
     try:
         alt_url = f"{base_url}{page_path}?_rsc={rsc_token}"
-        resp = requests.post(alt_url, data=body, timeout=25, headers=headers)
+        resp = _requests_post(alt_url, data=body, timeout=25, headers=headers, proxy_scope="service")
         return _parse_next_action_rsc_result_text(_decode_hdhive_text(resp.content))
     except Exception:
         return None
@@ -2903,7 +3134,7 @@ def _hdhive_fetch_points(base_url: str, cookie: str) -> Optional[int]:
     }
     for path in ("/manager/account", "/manager", "/"):
         try:
-            resp = requests.get(f"{base_url}{path}", timeout=20, headers=page_headers)
+            resp = _requests_get(f"{base_url}{path}", timeout=20, headers=page_headers, proxy_scope="service")
         except Exception:
             continue
         pts = _extract_hdhive_current_points_from_html(_decode_hdhive_text(resp.content))
@@ -3483,7 +3714,7 @@ def _fetch_hdhive_urls_from_url(
     tmdb_ids: list = None,
 ) -> None:
     try:
-        resp = requests.get(url, timeout=20, headers=headers)
+        resp = _requests_get(url, timeout=20, headers=headers, proxy_scope="service")
     except Exception as e:
         debug_info.append(f"url={url} error={type(e).__name__}")
         return
@@ -3539,7 +3770,7 @@ def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, langu
         else:
             params["first_air_date_year"] = year
     try:
-        resp = requests.get(url, params=params, timeout=20)
+        resp = _requests_get(url, params=params, timeout=20, proxy_scope="service")
         data = resp.json() if resp.status_code == 200 else None
     except Exception:
         data = None
@@ -3601,7 +3832,7 @@ def _test_hdhive_cookie(base_url: str, cookie: str, test_resource: str = "") -> 
     details = []
     for name, url in checks:
         try:
-            resp = requests.get(url, timeout=15, headers=headers)
+            resp = _requests_get(url, timeout=15, headers=headers, proxy_scope="service")
         except Exception as e:
             details.append(f"{name}: {type(e).__name__}")
             continue
@@ -3717,7 +3948,7 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
     if method.upper() in ("POST", "PATCH"):
         headers["Content-Type"] = "application/json"
     try:
-        resp = requests.request(method, url, headers=headers, json=json_body, timeout=timeout)
+        resp = _requests_request(method, url, headers=headers, json=json_body, timeout=timeout, proxy_scope="service")
     except Exception as e:
         return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
     try:
@@ -4509,7 +4740,7 @@ def _hdhive_url_is_dolby(url: str, base_url: str, cookie_header: str, cache: Opt
     if cookie_header:
         headers["Cookie"] = cookie_header
     try:
-        resp = requests.get(url, timeout=12, headers=headers)
+        resp = _requests_get(url, timeout=12, headers=headers, proxy_scope="service")
         html_text = resp.text or ""
     except Exception:
         html_text = ""
@@ -4742,7 +4973,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
             return results, debug_info, tmdb_urls, tmdb_ids
 
         try:
-            html_text = requests.get(url, timeout=20, headers=headers).text
+            html_text = _requests_get(url, timeout=20, headers=headers, proxy_scope="service").text
         except Exception:
             html_text = ""
         next_data = _extract_next_data_json(html_text)
@@ -4776,7 +5007,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
                 ]
                 for durl in data_urls:
                     try:
-                        dresp = requests.get(durl, timeout=20, headers=headers)
+                        dresp = _requests_get(durl, timeout=20, headers=headers, proxy_scope="service")
                     except Exception:
                         continue
                     debug_info.append(f"data_url={durl} status={getattr(dresp, 'status_code', 'NA')}")
@@ -4802,7 +5033,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
         try:
             headers_json = dict(headers)
             headers_json["x-nextjs-data"] = "1"
-            jresp = requests.get(url, timeout=20, headers=headers_json)
+            jresp = _requests_get(url, timeout=20, headers=headers_json, proxy_scope="service")
             debug_info.append(f"nextjs_data={getattr(jresp, 'status_code', 'NA')}")
             if jresp.status_code == 200 and jresp.text:
                 raw = jresp.text.strip()
@@ -4835,7 +5066,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
         ]
         for api_url in api_urls:
             try:
-                aresp = requests.get(api_url, timeout=20, headers=json_headers)
+                aresp = _requests_get(api_url, timeout=20, headers=json_headers, proxy_scope="service")
             except Exception:
                 continue
             debug_info.append(f"api_url={api_url} status={getattr(aresp, 'status_code', 'NA')}")
@@ -4860,7 +5091,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
         # Try RSC parameter (some pages require _rsc)
         try:
             rsc_url = f"{url}{'&' if '?' in url else '?'}_rsc={int(time.time() * 1000)}"
-            rresp = requests.get(rsc_url, timeout=20, headers=headers)
+            rresp = _requests_get(rsc_url, timeout=20, headers=headers, proxy_scope="service")
             debug_info.append(f"rsc_url={rsc_url} status={getattr(rresp, 'status_code', 'NA')}")
             if rresp.status_code == 200 and rresp.text:
                 _collect_hdhive_urls_from_text(rresp.text, base_url, results, max_results)
@@ -6566,7 +6797,11 @@ async def login():
 
             # Initialize client for authentication
             session_file_path = os.path.join(CONFIG_DIR, TELEGRAM_SESSION_NAME) # Updated path
-            flask_telethon_client = TelegramClient(session_file_path, int(api_id_input), api_hash_input) # Updated session_name
+            telethon_proxy = _build_telethon_proxy_from_config(config)
+            telethon_args = {}
+            if telethon_proxy:
+                telethon_args["proxy"] = telethon_proxy
+            flask_telethon_client = TelegramClient(session_file_path, int(api_id_input), api_hash_input, **telethon_args) # Updated session_name
             await flask_telethon_client.connect()
 
             # Send code request
@@ -6621,7 +6856,11 @@ async def verify_code():
 
     # Re-instantiate client, it should load the session created in login
     session_file_path = os.path.join(CONFIG_DIR, session_name) # Updated path
-    client_for_verify = TelegramClient(session_file_path, api_id, api_hash) # Updated session_name
+    telethon_proxy = _build_telethon_proxy_from_config(config)
+    telethon_args = {}
+    if telethon_proxy:
+        telethon_args["proxy"] = telethon_proxy
+    client_for_verify = TelegramClient(session_file_path, api_id, api_hash, **telethon_args) # Updated session_name
     
     if request.method == 'POST':
         code = request.form['code']
@@ -6877,19 +7116,22 @@ def manage_config():
             flash("受限频道配置删除成功！", "success")
         
         elif action == 'update_proxy':
-            proxy_addr = request.form.get('proxy_addr')
-            proxy_port = request.form.get('proxy_port')
-            proxy_username = request.form.get('proxy_username')
-            proxy_password = request.form.get('proxy_password')
+            proxy_scope = _normalize_proxy_scope(request.form.get('proxy_scope') or 'service')
+            proxy_addr = (request.form.get('proxy_addr') or '').strip()
+            proxy_port = (request.form.get('proxy_port') or '').strip()
+            proxy_username = (request.form.get('proxy_username') or '').strip()
+            proxy_password = (request.form.get('proxy_password') or '').strip()
 
-            config['proxy'] = {
-                "addr": proxy_addr,
-                "port": proxy_port,
-                "username": proxy_username,
-                "password": proxy_password
-            }
+            _set_proxy_scope(
+                config,
+                proxy_scope,
+                addr=proxy_addr,
+                port=proxy_port,
+                username=proxy_username,
+                password=proxy_password,
+            )
             save_config(config)
-            flash("代理配置已更新！", "success")
+            flash(f"{_proxy_scope_label(proxy_scope)}已更新！", "success")
 
         elif action == 'update_hdhive_cookie':
             hdhive_cookie = (request.form.get('hdhive_cookie') or '').strip()
@@ -7018,9 +7260,10 @@ def manage_config():
             flash("自助观影申请配置已更新！", "success")
 
         elif action == 'clear_proxy':
-            config['proxy'] = {}
+            proxy_scope = _normalize_proxy_scope(request.form.get('proxy_scope') or 'service')
+            _clear_proxy_scope(config, proxy_scope)
             save_config(config)
-            flash("代理配置已清除！", "info")
+            flash(f"{_proxy_scope_label(proxy_scope)}已清除！", "info")
 
         elif action == 'reorder_groups':
             group_order_str = request.form.get('group_order', '[]')
@@ -7125,6 +7368,35 @@ def manage_config():
         hdhive_cookie_monitor_state=get_hdhive_cookie_monitor_state(),
         hdhive_checkin_state=get_hdhive_checkin_state(),
     )
+
+
+@app.route('/proxy_config', methods=['GET', 'POST'])
+@login_required
+def proxy_config():
+    config = load_config()
+    _ensure_proxy_config_structure(config)
+
+    if request.method == 'POST':
+        action = (request.form.get('action') or '').strip()
+        proxy_scope = _normalize_proxy_scope(request.form.get('proxy_scope') or 'service')
+        if action == 'update_proxy':
+            _set_proxy_scope(
+                config,
+                proxy_scope,
+                addr=(request.form.get('proxy_addr') or '').strip(),
+                port=(request.form.get('proxy_port') or '').strip(),
+                username=(request.form.get('proxy_username') or '').strip(),
+                password=(request.form.get('proxy_password') or '').strip(),
+            )
+            save_config(config)
+            flash(f"{_proxy_scope_label(proxy_scope)}已更新！", "success")
+        elif action == 'clear_proxy':
+            _clear_proxy_scope(config, proxy_scope)
+            save_config(config)
+            flash(f"{_proxy_scope_label(proxy_scope)}已清除！", "info")
+        return redirect(url_for('proxy_config'))
+
+    return render_template('proxy_config.html', config=config)
 
 
 @app.route('/drama_calendar', methods=['GET', 'POST'])
@@ -8281,7 +8553,11 @@ async def api_get_channel_info():
         if not os.path.exists(session_file_path + '.session'):
             return jsonify({"error": "Telegram 会话文件不存在，请先登录认证"}), 404
 
-        client = TelegramClient(session_file_path, int(api_id), api_hash)
+        telethon_proxy = _build_telethon_proxy_from_config(config)
+        telethon_args = {}
+        if telethon_proxy:
+            telethon_args["proxy"] = telethon_proxy
+        client = TelegramClient(session_file_path, int(api_id), api_hash, **telethon_args)
         try:
             # 尝试连接，设置等待时间以防卡死
             await asyncio.wait_for(client.connect(), timeout=10)
@@ -8852,13 +9128,10 @@ async def api_download():
         downloader_cfg['quality_mode'] = quality_mode
     save_config(config)
 
-    p_cfg = config.get("proxy", {})
-    proxy_url = None
-    if p_cfg.get("addr") and p_cfg.get("port"):
-        proxy_url = f"http://{p_cfg.get('username') + ':' + p_cfg.get('password') + '@' if p_cfg.get('username') else ''}{p_cfg.get('addr')}:{p_cfg.get('port')}"
+    downloader_proxy_url = _build_proxy_url_from_config(config, "downloader")
 
     # Run download in background
-    asyncio.create_task(downloader.download_task(url, output_dir, cookie_path, browser, proxy_url))
+    asyncio.create_task(downloader.download_task(url, output_dir, cookie_path, browser, downloader_proxy_url))
     
     return jsonify({"success": True})
 

@@ -13,7 +13,7 @@ from telethon import TelegramClient, events, functions, types
 from telethon.sessions import SQLiteSession
 import sys
 from dotenv import load_dotenv
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse, urlunparse, quote
 
 # Add current directory to sys.path to find downloader_module when running from app directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -84,6 +84,81 @@ def load_config():
     except Exception as e:
         logger.error(f"Failed to load config: {e}")
         return {}
+
+
+def _normalize_proxy_scope(scope: str) -> str:
+    value = str(scope or "service").strip().lower()
+    aliases = {
+        "telegram": "telegram",
+        "tg": "telegram",
+        "telethon": "telegram",
+        "service": "service",
+        "hdhive": "service",
+        "tmdb": "service",
+        "downloader": "downloader",
+        "download": "downloader",
+    }
+    return aliases.get(value, "service")
+
+
+def _get_proxy_scope_config(config: dict, scope: str) -> dict:
+    proxy_cfg = config.get('proxy', {}) if isinstance(config, dict) else {}
+    if not isinstance(proxy_cfg, dict):
+        return {}
+
+    normalized_scope = _normalize_proxy_scope(scope)
+    legacy_keys = {"addr", "port", "username", "password"}
+    if legacy_keys & set(proxy_cfg.keys()):
+        if normalized_scope in ("telegram", "service"):
+            return {
+                "addr": str(proxy_cfg.get("addr") or "").strip(),
+                "port": str(proxy_cfg.get("port") or "").strip(),
+                "username": str(proxy_cfg.get("username") or "").strip(),
+                "password": str(proxy_cfg.get("password") or "").strip(),
+            }
+        return {}
+
+    scoped_cfg = proxy_cfg.get(normalized_scope, {})
+    if not isinstance(scoped_cfg, dict):
+        return {}
+    return {
+        "addr": str(scoped_cfg.get("addr") or "").strip(),
+        "port": str(scoped_cfg.get("port") or "").strip(),
+        "username": str(scoped_cfg.get("username") or "").strip(),
+        "password": str(scoped_cfg.get("password") or "").strip(),
+    }
+
+
+def _build_proxy_url_from_config(config: dict, scope: str) -> str:
+    proxy_cfg = _get_proxy_scope_config(config, scope)
+    addr = proxy_cfg.get('addr') or ''
+    port = proxy_cfg.get('port') or ''
+    if not addr or not port:
+        return ''
+    username = proxy_cfg.get('username') or ''
+    password = proxy_cfg.get('password') or ''
+    if username and password:
+        return f"http://{quote(username, safe='')}:{quote(password, safe='')}@{addr}:{port}"
+    if username:
+        return f"http://{quote(username, safe='')}@{addr}:{port}"
+    return f"http://{addr}:{port}"
+
+
+def _build_telethon_proxy_from_config(config: dict):
+    proxy_cfg = _get_proxy_scope_config(config, "telegram")
+    addr = proxy_cfg.get('addr') or ''
+    port = proxy_cfg.get('port') or ''
+    if not addr or not port:
+        return None
+    try:
+        return (
+            addr,
+            int(port),
+            proxy_cfg.get('username') or None,
+            proxy_cfg.get('password') or None,
+        )
+    except Exception:
+        return None
 
 
 def _should_send_queue_via_bot(cfg: dict) -> bool:
@@ -685,7 +760,11 @@ async def main():
         downloader.log(f"Warning: Could not pre-configure database: {e}", "warning")
     
     # Now create the Telethon session
-    client = TelegramClient(session_path, api_id, api_hash)
+    telethon_proxy = _build_telethon_proxy_from_config(config)
+    telethon_args = {}
+    if telethon_proxy:
+        telethon_args["proxy"] = telethon_proxy
+    client = TelegramClient(session_path, api_id, api_hash, **telethon_args)
 
     # State management for interactive flows
     waiting_for_cookies = set()
@@ -1736,18 +1815,6 @@ async def main():
                              cookies_file = os.path.abspath(p)
                              break
 
-                proxy_config = config.get('proxy', {})
-                proxy_url = None
-                if proxy_config.get('addr') and proxy_config.get('port'):
-                    addr = proxy_config['addr']
-                    port = proxy_config['port']
-                    user = proxy_config.get('username')
-                    pwd = proxy_config.get('password')
-                    if user and pwd:
-                        proxy_url = f"http://{user}:{pwd}@{addr}:{port}"
-                    else:
-                        proxy_url = f"http://{addr}:{port}"
-
                 youtube_quality_mode = None
                 if "youtube.com" in url or "youtu.be" in url:
                     youtube_quality_mode = resolve_youtube_quality_mode(config)
@@ -1770,7 +1837,7 @@ async def main():
                     default_path,
                     cookies_file,
                     cookies_from_browser,
-                    proxy_url,
+                    _build_proxy_url_from_config(config, "downloader") or None,
                     youtube_quality_mode,
                     False,
                 )
@@ -2149,7 +2216,11 @@ async def main():
                             os.remove(p)
                     except Exception as e:
                         downloader.log(f"Failed to remove old session file: {e}", "warning")
-                client = TelegramClient(session_path, api_id, api_hash)
+                telethon_proxy = _build_telethon_proxy_from_config(config)
+                telethon_args = {}
+                if telethon_proxy:
+                    telethon_args["proxy"] = telethon_proxy
+                client = TelegramClient(session_path, api_id, api_hash, **telethon_args)
         else:
             await client.disconnect()
     except Exception as e:

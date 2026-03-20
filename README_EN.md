@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.35`
+Latest image: `y1nf0x/tg-file-monitor:0.5.36`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.35
+y1nf0x/tg-file-monitor:0.5.36
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.35 (2026-03-20) - Current
+### v0.5.36 (2026-03-20) - Current
+- ✅ Proxy settings now have a dedicated admin sidebar entry and standalone settings page
+- ✅ Proxy handling is split into Telegram, HDHive/TMDB, and downloader scopes, while 115 stays direct
+
+### v0.5.35 (2026-03-20)
 - ✅ Public self-service entry no longer shows the public-entry status block
 - ✅ The public request form is rebalanced for both mobile and desktop, with a tighter first screen and cleaner desktop layout
 

@@ -54,7 +54,11 @@
     "gamble_path": ""
   },
   "restricted_channels": [],
-  "proxy": {},
+  "proxy": {
+    "telegram": {},
+    "service": {},
+    "downloader": {}
+  },
   "115_cookie": "",
   "115_target_cid": "",
   "downloader": {
