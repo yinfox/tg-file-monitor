@@ -2,9 +2,11 @@ import unittest
 from unittest.mock import patch
 import tempfile
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import telegram_monitor
 from app.app import app, _build_proxy_url_from_config, _build_tmdb_proxy_env, _try_115_share_transfer
+from app.api_115 import Client115
 
 
 class ProxySupportTestCase(unittest.TestCase):
@@ -66,6 +68,90 @@ class ProxySupportTestCase(unittest.TestCase):
         self.assertEqual(reason, "transfer_ok")
         client_cls.assert_called_once_with(cookie="cookie=value")
 
+    def test_115_uploadinfo_errno_99_returns_relogin_message(self):
+        client = Client115(cookie="cookie=value")
+        fake_p115 = Mock()
+        fake_p115.upload_key.return_value = {
+            "state": False,
+            "error": "请重新登录",
+            "errno": 99,
+            "request": "/android/2.0/user/upload_key",
+            "data": [],
+        }
+        fake_p115.upload_info.return_value = {
+            "state": False,
+            "error": "请重新登录",
+            "errno": 99,
+            "request": "/app/uploadinfo",
+            "data": [],
+        }
+        client.p115_client = fake_p115
+        result = client.check_file_exists(
+            "9e5198f1f78afb17f373f1e8f5ffa857888352fe",
+            879039017,
+            "test.mp4",
+            target="U_1_123456",
+            file_path=__file__,
+        )
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error"], "COOKIE_RELOGIN_REQUIRED")
+        self.assertIn("重新登录 115", result["message"])
+
+    def test_115_second_transfer_reuse_uses_native_upload_init(self):
+        client = Client115(cookie="cookie=value")
+        fake_p115 = Mock()
+        fake_p115.upload_key.return_value = {"state": True, "data": {"userkey": "abc"}}
+        fake_p115.upload_init.return_value = {
+            "state": True,
+            "status": 2,
+            "reuse": True,
+            "data": {"file_id": "123", "pick_code": "pick"},
+        }
+        client.p115_client = fake_p115
+        result = client.check_file_exists(
+            "9e5198f1f78afb17f373f1e8f5ffa857888352fe",
+            879039017,
+            "test.mp4",
+            target="U_1_123456",
+            file_path=__file__,
+        )
+        self.assertTrue(result["success"])
+        self.assertTrue(result["already_exists"])
+        fake_p115.upload_key.assert_called_once()
+        fake_p115.upload_init.assert_called_once()
+
+    def test_115_second_transfer_falls_back_to_upload_info_when_upload_key_fails(self):
+        client = Client115(cookie="cookie=value")
+        fake_p115 = Mock()
+        fake_p115.upload_key.return_value = {
+            "state": False,
+            "error": "temporary unavailable",
+            "errno": 500,
+        }
+        fake_p115.upload_info.return_value = {
+            "state": True,
+            "userkey": "fallback-key",
+            "userid": "123456",
+        }
+        fake_p115.upload_init.return_value = {
+            "state": True,
+            "status": 2,
+            "data": {"file_id": "123", "pick_code": "pick"},
+        }
+        client.p115_client = fake_p115
+        result = client.check_file_exists(
+            "9e5198f1f78afb17f373f1e8f5ffa857888352fe",
+            879039017,
+            "test.mp4",
+            target="U_1_123456",
+            file_path=__file__,
+        )
+        self.assertTrue(result["success"])
+        self.assertTrue(result["already_exists"])
+        fake_p115.upload_key.assert_called_once()
+        fake_p115.upload_info.assert_called_once()
+        fake_p115.upload_init.assert_called_once()
+
     def test_web_downloader_uses_only_downloader_proxy_scope(self):
         self._login()
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -97,6 +183,31 @@ class ProxySupportTestCase(unittest.TestCase):
             download_task.assert_called_once()
             self.assertEqual(download_task.call_args.args[4], "http://127.0.0.1:7890")
             self.assertEqual(len(scheduled), 1)
+
+    def test_115_upload_chain_api_returns_json(self):
+        self._login()
+
+        fake_client = Mock()
+        fake_client.test_upload_chain.return_value = {
+            "success": True,
+            "message": "上传链路可用：已通过初始化，可进入真实上传",
+            "credential_source": "upload_key",
+        }
+
+        with patch("app.app.Client115", return_value=fake_client):
+            response = self.client.post(
+                "/api/115/test_upload_chain",
+                json={
+                    "cookie_115": "cookie=value",
+                    "target_115_cid": "123456",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.is_json)
+        payload = response.get_json()
+        self.assertTrue(payload.get("success"))
+        self.assertIn("上传链路可用", payload.get("message", ""))
 
 
 if __name__ == "__main__":

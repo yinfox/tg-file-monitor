@@ -785,7 +785,12 @@
                                         </div>
 
                                         <div class="col-12">
-                                            <button type="submit" class="btn btn-secondary btn-sm w-100">保存 115 设置</button>
+                                            <div class="d-flex gap-2">
+                                                <button type="submit" class="btn btn-secondary btn-sm flex-grow-1">保存 115 设置</button>
+                                                <button type="button" class="btn btn-outline-secondary btn-sm" id="test115UploadChainBtn">测试上传链路</button>
+                                            </div>
+                                            <div class="form-text small mt-2">会检测上传凭证刷新与上传初始化是否可用，但不会真的上传测试文件。</div>
+                                            <div class="form-text small mt-2" id="test115UploadChainResult"></div>
                                         </div>
                                     </form>
                                 </div>
@@ -1179,6 +1184,51 @@
         const dirBrowserModalEl = document.getElementById('dirBrowserModal');
         if (dirBrowserModalEl) {
             dirBrowserModalInstance = new bootstrap.Modal(dirBrowserModalEl);
+        }
+
+        const test115UploadChainBtn = document.getElementById('test115UploadChainBtn');
+        const test115UploadChainResult = document.getElementById('test115UploadChainResult');
+        const cookie115Input = document.getElementById('cookie_115');
+        const target115CidInput = document.getElementById('target_115_cid');
+
+        if (test115UploadChainBtn && test115UploadChainResult) {
+            test115UploadChainBtn.addEventListener('click', async () => {
+                const cookie115 = (cookie115Input && cookie115Input.value ? cookie115Input.value : '').trim();
+                const target115Cid = (target115CidInput && target115CidInput.value ? target115CidInput.value : '').trim();
+
+                test115UploadChainBtn.disabled = true;
+                test115UploadChainResult.className = 'form-text small mt-2 text-muted';
+                test115UploadChainResult.textContent = '正在检测 115 上传链路...';
+
+                try {
+                    const response = await fetch("{{ url_for('api_test_115_upload_chain') }}", {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            cookie_115: cookie115,
+                            target_115_cid: target115Cid
+                        })
+                    });
+
+                    const data = await response.json();
+                    if (data.success) {
+                        test115UploadChainResult.className = 'form-text small mt-2 text-success';
+                        const sourceText = data.credential_source ? `（凭证来源: ${data.credential_source}）` : '';
+                        test115UploadChainResult.textContent = `${data.message || '上传链路可用'}${sourceText}`;
+                    } else {
+                        test115UploadChainResult.className = 'form-text small mt-2 text-danger';
+                        const detail = data.error ? ` [${data.error}]` : '';
+                        test115UploadChainResult.textContent = `${data.message || '上传链路检测失败'}${detail}`;
+                    }
+                } catch (err) {
+                    test115UploadChainResult.className = 'form-text small mt-2 text-danger';
+                    test115UploadChainResult.textContent = `检测失败: ${err.message}`;
+                } finally {
+                    test115UploadChainBtn.disabled = false;
+                }
+            });
         }
 
         if (selectDirBtn) {

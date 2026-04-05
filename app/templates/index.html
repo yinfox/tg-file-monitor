@@ -5,40 +5,100 @@
 {% block extra_head %}
 <style>
     .home-dashboard {
+        --home-page-ink: #132842;
+        --home-page-muted: #5f748b;
+        --console-ink: #10213a;
+        --console-ink-soft: #5f748b;
+        --console-line: rgba(108, 138, 171, 0.18);
+        --console-line-strong: rgba(77, 140, 202, 0.26);
+        --console-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(241, 247, 252, 0.68));
+        --console-panel-soft: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(240, 246, 251, 0.66));
+        --console-shadow: 0 20px 38px rgba(15, 23, 42, 0.08);
+        --console-mono: "JetBrains Mono", "SFMono-Regular", "SF Mono", "Roboto Mono", Consolas, "Liberation Mono", Menlo, monospace;
         display: flex;
         flex-direction: column;
         gap: 1rem;
+        padding-bottom: 0.35rem;
     }
 
     .home-hero {
+        position: relative;
+        overflow: hidden;
         background:
-            radial-gradient(circle at top right, rgba(96, 165, 250, 0.22), transparent 32%),
-            radial-gradient(circle at 12% 18%, rgba(16, 185, 129, 0.16), transparent 30%),
-            linear-gradient(135deg, rgba(255, 255, 255, 0.5), rgba(248, 250, 252, 0.26));
-        border: 1px solid rgba(96, 165, 250, 0.16);
+            radial-gradient(circle at 86% 14%, rgba(56, 189, 248, 0.24), transparent 24%),
+            radial-gradient(circle at 14% 16%, rgba(16, 185, 129, 0.16), transparent 22%),
+            radial-gradient(circle at 50% -12%, rgba(250, 204, 21, 0.09), transparent 24%),
+            radial-gradient(circle at 72% 84%, rgba(59, 130, 246, 0.16), transparent 24%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 241, 249, 0.82));
+        border: 1px solid rgba(56, 189, 248, 0.16);
+        box-shadow:
+            0 24px 46px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.56),
+            inset 0 -1px 0 rgba(14, 165, 233, 0.04);
+    }
+
+    .home-hero::before,
+    .home-hero::after {
+        content: "";
+        position: absolute;
+        inset: auto;
+        pointer-events: none;
+        z-index: 0;
+    }
+
+    .home-hero::before {
+        inset: 0;
+        background:
+            linear-gradient(rgba(111, 168, 220, 0.08) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(111, 168, 220, 0.08) 1px, transparent 1px);
+        background-size: 28px 28px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.34), transparent 92%);
+        -webkit-mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.34), transparent 92%);
+        opacity: 0.18;
+    }
+
+    .home-hero::after {
+        inset: auto 0 0 0;
+        height: 132px;
+        background:
+            linear-gradient(180deg, transparent, rgba(14, 165, 233, 0.08)),
+            linear-gradient(90deg, transparent, rgba(94, 234, 212, 0.12), transparent);
+        opacity: 0.82;
+    }
+
+    .home-hero .card-body {
+        position: relative;
+        z-index: 1;
     }
 
     .home-kicker {
         font-size: 0.72rem;
         font-weight: 700;
-        letter-spacing: 0.08em;
+        letter-spacing: 0.12em;
         text-transform: uppercase;
-        color: #2563eb;
+        color: #0f766e;
+        font-family: var(--console-mono);
         margin-bottom: 0.25rem;
+        text-shadow: none;
     }
 
     .home-hero-title {
         margin: 0;
         font-size: 1.5rem;
+        line-height: 1.12;
         font-weight: 800;
-        color: #0f172a;
+        color: var(--console-ink);
+        text-shadow: none;
+        max-width: 16ch;
     }
 
     .home-hero-desc {
         margin-top: 0.45rem;
-        color: #64748b;
+        color: var(--console-ink-soft);
         font-size: 0.86rem;
         line-height: 1.5;
+        max-width: 58ch;
+        text-wrap: balance;
     }
 
     .home-hero-grid {
@@ -59,37 +119,75 @@
         display: inline-flex;
         align-items: center;
         gap: 0.32rem;
-        padding: 0.25rem 0.6rem;
+        padding: 0.28rem 0.68rem;
         border-radius: 999px;
-        background: rgba(148, 163, 184, 0.14);
-        color: #475569;
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(243, 247, 251, 0.74));
+        border: 1px solid rgba(130, 154, 181, 0.16);
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.5),
+            0 8px 16px rgba(15, 23, 42, 0.05);
+        color: #31465c;
         font-size: 0.74rem;
         font-weight: 700;
+        font-family: var(--console-mono);
+        letter-spacing: 0.02em;
     }
 
     .home-chip.is-on {
-        background: rgba(16, 185, 129, 0.14);
+        background: linear-gradient(180deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.08));
+        border-color: rgba(16, 185, 129, 0.18);
         color: #047857;
     }
 
     .home-chip.is-off {
-        background: rgba(148, 163, 184, 0.16);
+        background: linear-gradient(180deg, rgba(241, 245, 249, 0.88), rgba(241, 245, 249, 0.74));
+        border-color: rgba(148, 163, 184, 0.16);
         color: #64748b;
     }
 
     .home-control-card {
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        background: rgba(255, 255, 255, 0.16);
-        border-radius: 0.95rem;
-        padding: 0.95rem;
+        position: relative;
+        overflow: hidden;
+        border: 1px solid var(--console-line);
+        background: var(--console-panel-soft);
+        border-radius: 1rem;
+        padding: 1rem;
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.56),
+            0 14px 28px rgba(15, 23, 42, 0.06);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+    }
+
+    .home-control-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 3px;
+        background: linear-gradient(90deg, #22d3ee, rgba(34, 211, 238, 0));
+        opacity: 0.9;
+    }
+
+    .home-control-card::after {
+        content: "";
+        position: absolute;
+        inset: auto 1rem 1rem auto;
+        width: 110px;
+        height: 110px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(56, 189, 248, 0.12), transparent 72%);
+        opacity: 0.64;
+        pointer-events: none;
     }
 
     .home-control-title {
         margin-bottom: 0.7rem;
         font-size: 0.82rem;
         font-weight: 800;
-        color: #0f172a;
-        letter-spacing: 0.03em;
+        color: var(--console-ink);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-family: var(--console-mono);
     }
 
     .home-control-stack {
@@ -98,11 +196,73 @@
         gap: 0.75rem;
     }
 
+    .home-control-card .text-muted,
+    .home-control-card label {
+        color: var(--console-ink-soft) !important;
+    }
+
+    .home-control-card .text-dark {
+        color: var(--console-ink) !important;
+    }
+
+    .home-control-card .form-select {
+        border-color: rgba(111, 168, 220, 0.18);
+        background-color: rgba(255, 255, 255, 0.84);
+        color: var(--console-ink);
+        box-shadow: none;
+    }
+
+    .home-control-card .form-select:focus {
+        border-color: rgba(34, 211, 238, 0.34);
+        box-shadow: 0 0 0 0.18rem rgba(34, 211, 238, 0.12);
+    }
+
+    .home-control-card .form-check-input {
+        background-color: rgba(255, 255, 255, 0.92);
+        border-color: rgba(111, 168, 220, 0.26);
+        box-shadow: none;
+    }
+
+    .home-control-card .form-check-input:checked {
+        background-color: #06b6d4;
+        border-color: #06b6d4;
+    }
+
+    .home-control-card .badge {
+        border: 1px solid rgba(111, 168, 220, 0.16);
+        box-shadow: none;
+    }
+
+    .home-control-card .badge.bg-success {
+        background: rgba(16, 185, 129, 0.12) !important;
+        color: #047857;
+    }
+
+    .home-control-card .badge.bg-secondary {
+        background: rgba(148, 163, 184, 0.18) !important;
+        color: #64748b;
+    }
+
     .home-section-header {
+        position: relative;
+        padding-bottom: 0.35rem;
+    }
+
+    .home-section-top {
         display: flex;
         align-items: flex-end;
         justify-content: space-between;
-        gap: 0.75rem;
+        gap: 1rem;
+    }
+
+    .home-section-header::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        bottom: 0;
+        width: min(240px, 100%);
+        height: 1px;
+        background: linear-gradient(90deg, rgba(15, 118, 110, 0.34), transparent);
     }
 
     .home-section-label {
@@ -111,58 +271,242 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #2563eb;
+        color: #0f766e;
+        font-family: var(--console-mono);
     }
 
     .home-section-header h3 {
         margin: 0;
         font-size: 1.05rem;
         font-weight: 800;
-        color: #0f172a;
+        color: var(--home-page-ink);
     }
 
     .home-section-header p {
         margin: 0.15rem 0 0;
-        color: #64748b;
+        color: var(--home-page-muted);
         font-size: 0.8rem;
         line-height: 1.45;
+    }
+
+    .home-section-tools {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 0.5rem;
+    }
+
+    .home-section-tool {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.42rem;
+        padding: 0.42rem 0.72rem;
+        border-radius: 999px;
+        border: 1px solid rgba(130, 154, 181, 0.18);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(243, 247, 251, 0.8));
+        color: #29435d;
+        text-decoration: none;
+        font-size: 0.74rem;
+        font-weight: 700;
+        box-shadow: 0 8px 16px rgba(15, 23, 42, 0.04);
+    }
+
+    .home-section-tool:hover,
+    .home-section-tool:focus {
+        color: #10213a;
+        border-color: rgba(14, 165, 233, 0.22);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 252, 0.9));
+    }
+
+    .overview-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.95rem;
+    }
+
+    .overview-card {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1rem;
+        padding: 0.95rem 1rem;
+        border: 1px solid var(--overview-border, var(--console-line));
+        background:
+            radial-gradient(circle at top right, var(--overview-glow, rgba(56, 189, 248, 0.14)), transparent 38%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(240, 246, 251, 0.78));
+        box-shadow:
+            0 18px 32px rgba(15, 23, 42, 0.07),
+            inset 0 1px 0 rgba(255, 255, 255, 0.56);
+    }
+
+    .overview-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--overview-accent, #2563eb), var(--overview-accent-soft, rgba(37, 99, 235, 0.24)));
+        opacity: 0.92;
+    }
+
+    .overview-card.telegram {
+        --overview-accent: #2563eb;
+        --overview-accent-soft: rgba(37, 99, 235, 0.28);
+        --overview-border: rgba(59, 130, 246, 0.2);
+        --overview-glow: rgba(59, 130, 246, 0.16);
+    }
+
+    .overview-card.file {
+        --overview-accent: #ea580c;
+        --overview-accent-soft: rgba(234, 88, 12, 0.26);
+        --overview-border: rgba(249, 115, 22, 0.2);
+        --overview-glow: rgba(249, 115, 22, 0.14);
+    }
+
+    .overview-card.bot {
+        --overview-accent: #0284c7;
+        --overview-accent-soft: rgba(2, 132, 199, 0.26);
+        --overview-border: rgba(14, 165, 233, 0.2);
+        --overview-glow: rgba(14, 165, 233, 0.14);
+    }
+
+    .overview-card.drama {
+        --overview-accent: #0f766e;
+        --overview-accent-soft: rgba(15, 118, 110, 0.26);
+        --overview-border: rgba(20, 184, 166, 0.2);
+        --overview-glow: rgba(20, 184, 166, 0.14);
+    }
+
+    .overview-card-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+        margin-bottom: 0.8rem;
+    }
+
+    .overview-card-eyebrow {
+        margin-bottom: 0.18rem;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--console-ink-soft);
+        font-family: var(--console-mono);
+    }
+
+    .overview-card-title {
+        font-size: 0.95rem;
+        font-weight: 800;
+        color: var(--console-ink);
+        line-height: 1.2;
+    }
+
+    .overview-card-title i {
+        color: var(--overview-accent, #2563eb);
+    }
+
+    .overview-card .status-result-badge {
+        white-space: nowrap;
+        box-shadow: none;
+    }
+
+    .overview-card-main {
+        min-height: 2.6em;
+        font-size: 0.92rem;
+        font-weight: 800;
+        color: var(--console-ink);
+        line-height: 1.38;
+    }
+
+    .overview-card-note {
+        margin-top: 0.42rem;
+        font-size: 0.78rem;
+        color: var(--console-ink-soft);
+        line-height: 1.5;
+    }
+
+    .overview-card-note strong {
+        color: var(--console-ink);
+        font-weight: 800;
     }
 
     .portal-grid {
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.9rem;
+        gap: 1rem;
     }
 
     .portal-card {
         position: relative;
         overflow: hidden;
-        border-radius: 1rem;
+        border-radius: 1.05rem;
         padding: 1rem;
-        color: #fff;
+        color: var(--console-ink);
         min-height: 250px;
-        border: none;
-        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.12);
+        border: 1px solid var(--portal-border, var(--console-line));
+        background:
+            radial-gradient(circle at top right, var(--portal-glow, rgba(56, 189, 248, 0.14)), transparent 34%),
+            radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.5), transparent 18%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(240, 246, 251, 0.74));
+        box-shadow:
+            0 22px 40px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.52);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
     }
 
     .portal-card::before {
         content: "";
         position: absolute;
         inset: 0;
-        background: radial-gradient(circle at top right, rgba(255, 255, 255, 0.2), transparent 28%);
+        background:
+            linear-gradient(rgba(111, 168, 220, 0.06) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(111, 168, 220, 0.06) 1px, transparent 1px);
+        background-size: 24px 24px;
         pointer-events: none;
+        opacity: 0.16;
+    }
+
+    .portal-card::after {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--portal-accent, #2563eb), var(--portal-accent-soft, rgba(37, 99, 235, 0.28)));
+        opacity: 0.92;
+        box-shadow: 0 0 18px var(--portal-accent-soft, rgba(37, 99, 235, 0.24));
     }
 
     .portal-card.telegram {
-        background: linear-gradient(135deg, #4f46e5, #2563eb);
+        --portal-accent: #2563eb;
+        --portal-accent-strong: #1d4ed8;
+        --portal-accent-soft: rgba(37, 99, 235, 0.32);
+        --portal-border: rgba(59, 130, 246, 0.22);
+        --portal-glow: rgba(59, 130, 246, 0.22);
     }
 
     .portal-card.file {
-        background: linear-gradient(135deg, #ec4899, #f97316);
+        --portal-accent: #ea580c;
+        --portal-accent-strong: #c2410c;
+        --portal-accent-soft: rgba(234, 88, 12, 0.3);
+        --portal-border: rgba(249, 115, 22, 0.22);
+        --portal-glow: rgba(249, 115, 22, 0.2);
     }
 
     .portal-card.drama {
-        background: linear-gradient(135deg, #0891b2, #2563eb);
+        --portal-accent: #0f766e;
+        --portal-accent-strong: #115e59;
+        --portal-accent-soft: rgba(15, 118, 110, 0.28);
+        --portal-border: rgba(20, 184, 166, 0.22);
+        --portal-glow: rgba(20, 184, 166, 0.18);
+    }
+
+    .portal-card:hover {
+        transform: translateY(-2px);
+        border-color: var(--portal-accent-soft, var(--console-line-strong));
+        box-shadow:
+            0 28px 48px rgba(15, 23, 42, 0.1),
+            inset 0 1px 0 rgba(255, 255, 255, 0.55);
     }
 
     .portal-head {
@@ -170,19 +514,33 @@
         align-items: center;
         justify-content: space-between;
         gap: 0.75rem;
-        margin-bottom: 0.85rem;
+        margin-bottom: 0.95rem;
     }
 
     .portal-title {
         font-size: 0.98rem;
         font-weight: 800;
         letter-spacing: -0.01em;
+        color: var(--console-ink);
+        line-height: 1.2;
     }
 
     .portal-subtitle {
-        color: rgba(255, 255, 255, 0.78);
+        color: var(--console-ink-soft);
         font-size: 0.76rem;
-        line-height: 1.45;
+        line-height: 1.5;
+        max-width: 28ch;
+    }
+
+    .portal-count-badge {
+        padding: 0.42rem 0.62rem;
+        border-radius: 999px;
+        border: 1px solid var(--portal-border, var(--console-line));
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(244, 248, 252, 0.88));
+        color: var(--portal-accent-strong, var(--console-ink));
+        font-weight: 800;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.56);
+        font-family: var(--console-mono);
     }
 
     .portal-meta {
@@ -193,10 +551,11 @@
 
     .portal-meta-item {
         display: flex;
+        align-items: flex-start;
         justify-content: space-between;
         gap: 0.75rem;
-        padding-bottom: 0.4rem;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+        padding-bottom: 0.48rem;
+        border-bottom: 1px solid rgba(111, 168, 220, 0.12);
         font-size: 0.78rem;
     }
 
@@ -206,14 +565,17 @@
     }
 
     .portal-meta-label {
-        color: rgba(255, 255, 255, 0.72);
+        color: var(--console-ink-soft);
+        font-family: var(--console-mono);
+        font-size: 0.72rem;
     }
 
     .portal-meta-value {
         text-align: right;
         font-weight: 800;
-        color: #fff;
+        color: var(--console-ink);
         word-break: break-word;
+        max-width: 55%;
     }
 
     .portal-actions {
@@ -230,6 +592,33 @@
         padding-right: 0.9rem;
     }
 
+    .portal-actions .btn-light {
+        background: linear-gradient(135deg, var(--portal-accent, #2563eb), var(--portal-accent-strong, #1d4ed8));
+        border-color: var(--portal-accent, #2563eb);
+        color: #fff;
+        box-shadow: 0 10px 18px rgba(15, 23, 42, 0.12);
+    }
+
+    .portal-actions .btn-light:hover,
+    .portal-actions .btn-light:focus {
+        background: var(--portal-accent-strong, #1d4ed8);
+        border-color: var(--portal-accent-strong, #1d4ed8);
+        color: #fff;
+    }
+
+    .portal-actions .btn-outline-light {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(244, 248, 252, 0.74));
+        border-color: var(--portal-border, var(--console-line));
+        color: var(--console-ink);
+    }
+
+    .portal-actions .btn-outline-light:hover,
+    .portal-actions .btn-outline-light:focus {
+        background: rgba(255, 255, 255, 0.96);
+        border-color: var(--portal-accent-soft, var(--console-line-strong));
+        color: var(--console-ink);
+    }
+
     .status-grid {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -237,31 +626,75 @@
     }
 
     .status-card {
+        position: relative;
         border-radius: 1rem;
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        background: rgba(255, 255, 255, 0.18);
+        border: 1px solid var(--status-border, var(--console-line));
+        background:
+            radial-gradient(circle at top right, var(--status-glow, rgba(56, 189, 248, 0.12)), transparent 36%),
+            radial-gradient(circle at 18% 10%, rgba(255, 255, 255, 0.52), transparent 20%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(240, 246, 251, 0.74));
         overflow: hidden;
+        box-shadow:
+            0 22px 40px rgba(15, 23, 42, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.52);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+    }
+
+    .status-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 4px;
+        background: var(--status-accent, #2563eb);
+        opacity: 0.9;
+        box-shadow: 0 0 18px var(--status-glow, rgba(56, 189, 248, 0.18));
+    }
+
+    .status-card.telegram {
+        --status-accent: #2563eb;
+        --status-accent-strong: #1d4ed8;
+        --status-border: rgba(59, 130, 246, 0.22);
+        --status-glow: rgba(59, 130, 246, 0.18);
+    }
+
+    .status-card.file {
+        --status-accent: #ea580c;
+        --status-accent-strong: #c2410c;
+        --status-border: rgba(249, 115, 22, 0.22);
+        --status-glow: rgba(249, 115, 22, 0.16);
+    }
+
+    .status-card.bot {
+        --status-accent: #0284c7;
+        --status-accent-strong: #0369a1;
+        --status-border: rgba(14, 165, 233, 0.22);
+        --status-glow: rgba(14, 165, 233, 0.16);
+    }
+
+    .status-card.drama {
+        --status-accent: #0f766e;
+        --status-accent-strong: #115e59;
+        --status-border: rgba(20, 184, 166, 0.22);
+        --status-glow: rgba(20, 184, 166, 0.16);
+    }
+
+    .status-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(124, 182, 235, 0.3);
+        box-shadow:
+            0 28px 48px rgba(15, 23, 42, 0.1),
+            inset 0 1px 0 rgba(255, 255, 255, 0.55);
     }
 
     .status-card-header {
         padding: 0.95rem 1rem 0.75rem;
-        color: #fff;
-    }
-
-    .status-card-header.telegram {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-
-    .status-card-header.file {
-        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    }
-
-    .status-card-header.bot {
-        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-    }
-
-    .status-card-header.drama {
-        background: linear-gradient(135deg, #22c55e 0%, #14b8a6 100%);
+        color: var(--console-ink);
+        background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.22)),
+            rgba(255, 255, 255, 0.08);
+        border-bottom: 1px solid var(--status-border, var(--console-line));
     }
 
     .status-card-title {
@@ -271,6 +704,21 @@
         gap: 0.75rem;
         font-size: 0.95rem;
         font-weight: 800;
+        line-height: 1.2;
+    }
+
+    .status-card-title i {
+        color: var(--status-accent, #2563eb);
+    }
+
+    .status-card-header .badge {
+        box-shadow: none;
+    }
+
+    .status-card-header .badge.bg-light.text-dark {
+        background: rgba(255, 255, 255, 0.88) !important;
+        color: var(--status-accent-strong, var(--console-ink)) !important;
+        border: 1px solid var(--status-border, var(--console-line));
     }
 
     .status-card-body {
@@ -295,11 +743,24 @@
     }
 
     .status-subgrid > div {
+        position: relative;
+        overflow: hidden;
         min-width: 0;
         padding: 0.62rem 0.72rem;
         border-radius: 0.85rem;
-        background: rgba(15, 23, 42, 0.04);
-        border: 1px solid rgba(148, 163, 184, 0.14);
+        background:
+            linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(244, 248, 252, 0.84));
+        border: 1px solid rgba(130, 154, 181, 0.14);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    }
+
+    .status-subgrid > div::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 2px;
+        background: linear-gradient(180deg, var(--status-accent, rgba(56, 189, 248, 0.8)), transparent 70%);
+        opacity: 0.42;
     }
 
     .status-subitem-wide {
@@ -311,7 +772,8 @@
         font-weight: 700;
         letter-spacing: 0.06em;
         text-transform: uppercase;
-        color: #64748b;
+        color: var(--console-ink-soft);
+        font-family: var(--console-mono);
     }
 
     .status-subgrid .status-subitem-value:not(.status-result-badge) {
@@ -324,13 +786,13 @@
     }
 
     .status-subitem-label {
-        color: #64748b;
+        color: var(--console-ink-soft);
         margin-bottom: 0.15rem;
     }
 
     .status-subitem-value {
         font-weight: 700;
-        color: #111827;
+        color: var(--console-ink);
         line-height: 1.35;
         word-break: break-word;
     }
@@ -342,7 +804,7 @@
         padding: 0.28rem 0.65rem;
         border-radius: 999px;
         border: 1px solid rgba(148, 163, 184, 0.16);
-        background: rgba(148, 163, 184, 0.14);
+        background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(241, 245, 249, 0.88));
         font-size: 0.75rem;
         font-weight: 800;
         line-height: 1.2;
@@ -375,7 +837,40 @@
         color: #64748b;
     }
 
+    .status-note {
+        margin-top: 0.1rem;
+        font-size: 0.76rem;
+        color: var(--console-ink-soft);
+        line-height: 1.5;
+    }
+
+    .status-note a {
+        color: #0f5fb8;
+        text-decoration: none;
+        font-weight: 700;
+    }
+
+    .status-note a:hover,
+    .status-note a:focus {
+        text-decoration: underline;
+    }
+
+    .home-dashboard hr {
+        border: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(94, 234, 212, 0.28), transparent);
+        opacity: 1;
+    }
+
+    .home-dashboard .text-danger.opacity-75 {
+        color: #f59e0b !important;
+    }
+
     @media (max-width: 1199.98px) {
+        .overview-grid {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
         .portal-grid {
             grid-template-columns: 1fr;
         }
@@ -389,13 +884,26 @@
     }
 
     @media (max-width: 767.98px) {
-        .home-section-header {
+        .overview-grid,
+        .portal-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .home-section-top {
             flex-direction: column;
             align-items: flex-start;
         }
 
+        .home-section-tools {
+            justify-content: flex-start;
+        }
+
         .status-subgrid {
             grid-template-columns: 1fr;
+        }
+
+        .portal-head {
+            align-items: flex-start;
         }
     }
 </style>
@@ -432,9 +940,8 @@
     {% set risk_status_badge_class = 'is-warning' %}
 {% endif %}
 {% set tg_last_activity = (tg_last_log or {}).get('message') or '暂无' %}
-{% set tg_last_activity_time = (tg_last_log or {}).get('ts') or '暂无' %}
 {% set file_last_blocked_reason = (download_risk_stats or {}).get('last_blocked_reason') or '暂无' %}
-{% set file_last_blocked_at = (download_risk_stats or {}).get('last_blocked_at') or '暂无' %}
+{% set file_blocked_total = (download_risk_stats or {}).get('blocked_total', 0) %}
 {% set bot_last_error = (bot_log_insights or {}).get('last_error', {}).get('message') or '暂无' %}
 {% set bot_error_badge_class = 'is-muted' %}
 {% set bot_error_badge_text = '暂无错误' %}
@@ -443,8 +950,12 @@
     {% set bot_error_badge_text = '最近有错误' %}
 {% endif %}
 {% set bot_last_activity = (bot_last_log or {}).get('message') or '暂无' %}
-{% set bot_last_activity_time = (bot_last_log or {}).get('ts') or '暂无' %}
 {% set window_label = '全部' if (log_window_minutes or 0) == 0 else ('近' ~ log_window_minutes ~ '分钟') %}
+{% set scheduler_next_run = scheduler.get('next_run_at', '未启用') or '未启用' %}
+{% set auth_attention = auth_status == "未认证" or auth_status.startswith("认证失效") %}
+{% set file_attention = file_last_blocked_reason != '暂无' %}
+{% set bot_missing_token = not bot_token_id %}
+{% set scheduler_attention = scheduler_last_status in ['warning', 'error'] %}
 
 <div class="home-dashboard">
     <div class="card shadow-sm home-hero">
@@ -453,14 +964,12 @@
                 <div>
                     <div class="home-kicker">总控台</div>
                     <h2 class="home-hero-title"><i class="bi bi-speedometer2 me-2"></i>配置入口与运行状态一页集中</h2>
-                    <p class="home-hero-desc">上面先找配置中心，下面再看运行情况和启停操作。这样“改设置”和“管进程”不再混在一起。</p>
+                    <p class="home-hero-desc">首页先看总览和最近异常，再决定去配置中心还是运行区处理，避免所有入口重复铺满一整页。</p>
 
                     <div class="home-chip-row">
-                        <span class="home-chip {% if config.get('debug_mode') %}is-on{% else %}is-off{% endif %}">DEBUG {% if config.get('debug_mode') %}开启{% else %}关闭{% endif %}</span>
                         <span class="home-chip {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}is-off{% else %}is-on{% endif %}">Telegram {{ auth_status }}</span>
                         <span class="home-chip {% if risk.get('enabled', True) %}is-on{% else %}is-off{% endif %}">风控 {% if risk.get('enabled', True) %}开启{% else %}关闭{% endif %}</span>
                         <span class="home-chip {% if scheduler.get('enabled') %}is-on{% else %}is-off{% endif %}">追剧调度 {% if scheduler.get('enabled') %}开启{% else %}关闭{% endif %}</span>
-                        <span class="home-chip">版本 v{{ version }}</span>
                     </div>
                 </div>
 
@@ -504,10 +1013,144 @@
     </div>
 
     <div class="home-section-header">
-        <div>
-            <div class="home-section-label">配置中心入口</div>
-            <h3>先进入对应配置中心，再调整细节</h3>
-            <p>这三个入口已经和新整理过的页面结构保持一致，适合直接按模块进入管理。</p>
+        <div class="home-section-top">
+            <div>
+                <div class="home-section-label">总览重点</div>
+                <h3>先看最近异常，再决定进哪个模块处理</h3>
+                <p>{{ window_label }}内优先展示最需要处理的信号，首页保持总览感，不再只是入口堆叠。</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="overview-grid">
+        <div class="overview-card telegram">
+            <div class="overview-card-top">
+                <div>
+                    <div class="overview-card-eyebrow">认证与活动</div>
+                    <div class="overview-card-title"><i class="bi bi-telegram me-2"></i>Telegram</div>
+                </div>
+                <span class="status-result-badge {% if auth_attention %}is-error{% else %}is-success{% endif %}">
+                    {% if auth_attention %}待处理{% else %}正常{% endif %}
+                </span>
+            </div>
+            <div class="overview-card-main">
+                {% if auth_attention %}
+                    需要重新完成 Telegram 认证
+                {% else %}
+                    认证状态正常，可继续接收频道消息
+                {% endif %}
+            </div>
+            <div class="overview-card-note">
+                {% if tg_last_activity != '暂无' %}
+                    最近活动：{{ tg_last_activity }}
+                {% else %}
+                    当前还没有读取到最近活动记录。
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="overview-card file">
+            <div class="overview-card-top">
+                <div>
+                    <div class="overview-card-eyebrow">风控与拦截</div>
+                    <div class="overview-card-title"><i class="bi bi-folder-check me-2"></i>文件同步</div>
+                </div>
+                <span class="status-result-badge {% if file_attention %}is-warning{% else %}is-success{% endif %}">
+                    {% if file_attention %}有拦截{% else %}正常{% endif %}
+                </span>
+            </div>
+            <div class="overview-card-main">
+                {% if file_attention %}
+                    {{ file_last_blocked_reason }}
+                {% else %}
+                    最近没有新的风控拦截
+                {% endif %}
+            </div>
+            <div class="overview-card-note">
+                累计拦截 <strong>{{ file_blocked_total }}</strong> 次，下载风控当前{{ '开启' if risk.get('enabled', True) else '关闭' }}。
+            </div>
+        </div>
+
+        <div class="overview-card bot">
+            <div class="overview-card-top">
+                <div>
+                    <div class="overview-card-eyebrow">错误与消息</div>
+                    <div class="overview-card-title"><i class="bi bi-robot me-2"></i>Bot 监控</div>
+                </div>
+                <span class="status-result-badge {% if bot_last_error != '暂无' %}is-error{% elif bot_missing_token %}is-warning{% else %}is-success{% endif %}">
+                    {% if bot_last_error != '暂无' %}
+                        有错误
+                    {% elif bot_missing_token %}
+                        缺 Token
+                    {% else %}
+                        正常
+                    {% endif %}
+                </span>
+            </div>
+            <div class="overview-card-main">
+                {% if bot_last_error != '暂无' %}
+                    {{ bot_last_error }}
+                {% elif bot_missing_token %}
+                    Bot Token 尚未设置
+                {% else %}
+                    最近没有新的 Bot 错误
+                {% endif %}
+            </div>
+            <div class="overview-card-note">
+                {% if bot_missing_token %}
+                    补充 Token 后，这里会优先展示最近错误和活动。
+                {% elif bot_last_activity != '暂无' %}
+                    最近活动：{{ bot_last_activity }}
+                {% else %}
+                    当前还没有读取到最近活动记录。
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="overview-card drama">
+            <div class="overview-card-top">
+                <div>
+                    <div class="overview-card-eyebrow">调度与结果</div>
+                    <div class="overview-card-title"><i class="bi bi-calendar3 me-2"></i>追剧调度</div>
+                </div>
+                <span class="status-result-badge {% if scheduler_last_status == 'error' %}is-error{% elif scheduler_last_status == 'warning' %}is-warning{% elif scheduler.get('enabled') %}is-success{% else %}is-muted{% endif %}">
+                    {% if scheduler_last_status == 'error' %}
+                        异常
+                    {% elif scheduler_last_status == 'warning' %}
+                        留意
+                    {% elif scheduler.get('enabled') %}
+                        正常
+                    {% else %}
+                        未启用
+                    {% endif %}
+                </span>
+            </div>
+            <div class="overview-card-main">
+                {% if scheduler_attention %}
+                    {{ scheduler_last_result }}
+                {% elif scheduler.get('enabled') %}
+                    下次执行：{{ scheduler_next_run }}
+                {% else %}
+                    自动调度当前未启用
+                {% endif %}
+            </div>
+            <div class="overview-card-note">
+                {% if scheduler.get('enabled') %}
+                    上次结果：<strong>{{ scheduler_last_result }}</strong>
+                {% else %}
+                    启用后会在这里优先展示最近执行结果和异常。
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <div class="home-section-header">
+        <div class="home-section-top">
+            <div>
+                <div class="home-section-label">配置中心入口</div>
+                <h3>先进入对应配置中心，再调整细节</h3>
+                <p>这一块只保留配置入口，不再在卡片里重复放日志按钮。</p>
+            </div>
         </div>
     </div>
 
@@ -518,7 +1161,7 @@
                     <div class="portal-title"><i class="bi bi-telegram me-2"></i>Telegram 配置中心</div>
                     <div class="portal-subtitle">频道管理、全局规则、自助观影、HDHive 和 Bot 凭证。</div>
                 </div>
-                <span class="badge bg-light text-dark">{{ config.get('restricted_channels', []) | length }} 频道</span>
+                <span class="badge portal-count-badge">{{ config.get('restricted_channels', []) | length }} 频道</span>
             </div>
 
             <div class="portal-meta">
@@ -527,18 +1170,13 @@
                     <span class="portal-meta-value">{{ auth_status }}</span>
                 </div>
                 <div class="portal-meta-item">
-                    <span class="portal-meta-label">自助观影</span>
-                    <span class="portal-meta-value">{{ '已开启' if config.get('self_service_enabled', False) else '未开启' }}</span>
-                </div>
-                <div class="portal-meta-item">
                     <span class="portal-meta-label">Bot Token</span>
                     <span class="portal-meta-value">{{ bot_token_id or '未设置' }}</span>
                 </div>
             </div>
 
             <div class="portal-actions">
-                <a href="{{ url_for('manage_config') }}" class="btn btn-light btn-sm">打开配置中心</a>
-                <a href="{{ url_for('monitor_log') }}" class="btn btn-outline-light btn-sm">日志中心</a>
+                <a href="{{ url_for('manage_config') }}" class="btn btn-light btn-sm">进入配置中心</a>
             </div>
         </div>
 
@@ -548,7 +1186,7 @@
                     <div class="portal-title"><i class="bi bi-folder2-open me-2"></i>文件同步配置中心</div>
                     <div class="portal-subtitle">目录任务、根目录限制、115 Cookie、下载风控和队列策略。</div>
                 </div>
-                <span class="badge bg-light text-dark">{{ config.get('file_monitoring_tasks', []) | length }} 任务</span>
+                <span class="badge portal-count-badge">{{ config.get('file_monitoring_tasks', []) | length }} 任务</span>
             </div>
 
             <div class="portal-meta">
@@ -560,15 +1198,10 @@
                     <span class="portal-meta-label">115 凭证</span>
                     <span class="portal-meta-value">{{ '已设置' if config.get('115_cookie') or config.get('web_115_cookie') else '未设置' }}</span>
                 </div>
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">累计拦截</span>
-                    <span class="portal-meta-value">{{ (download_risk_stats or {}).get('blocked_total', 0) }}</span>
-                </div>
             </div>
 
             <div class="portal-actions">
-                <a href="{{ url_for('manage_file_config') }}" class="btn btn-light btn-sm">打开配置中心</a>
-                <a href="{{ url_for('file_monitor_log') }}" class="btn btn-outline-light btn-sm">日志中心</a>
+                <a href="{{ url_for('manage_file_config') }}" class="btn btn-light btn-sm">进入配置中心</a>
             </div>
         </div>
 
@@ -578,7 +1211,7 @@
                     <div class="portal-title"><i class="bi bi-calendar3 me-2"></i>追剧配置中心</div>
                     <div class="portal-subtitle">白名单编辑、来源参数、TMDB 判定和自动调度统一管理。</div>
                 </div>
-                <span class="badge bg-light text-dark">{{ drama_source_count }} 来源</span>
+                <span class="badge portal-count-badge">{{ drama_source_count }} 来源</span>
             </div>
 
             <div class="portal-meta">
@@ -590,29 +1223,31 @@
                     <span class="portal-meta-label">完结判定</span>
                     <span class="portal-meta-value">{{ drama_cfg.get('finish_detect_mode', 'hybrid')|upper }}</span>
                 </div>
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">下次执行</span>
-                    <span class="portal-meta-value">{{ scheduler.get('next_run_at', '未启用') or '未启用' }}</span>
-                </div>
             </div>
 
             <div class="portal-actions">
-                <a href="{{ url_for('drama_calendar_settings') }}" class="btn btn-light btn-sm">打开配置中心</a>
-                <a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-light btn-sm">日志中心</a>
+                <a href="{{ url_for('drama_calendar_settings') }}" class="btn btn-light btn-sm">进入配置中心</a>
             </div>
         </div>
     </div>
 
     <div class="home-section-header">
-        <div>
-            <div class="home-section-label">运行状态</div>
-            <h3>日常启停和最近运行情况</h3>
-            <p>这里保留原来的操作能力，同时把状态卡片跟配置入口分开，减少干扰。</p>
+        <div class="home-section-top">
+            <div>
+                <div class="home-section-label">运行状态</div>
+                <h3>日常启停和最近运行情况</h3>
+                <p>日志入口统一放这里，状态卡里只保留运行相关操作。</p>
+            </div>
+            <div class="home-section-tools">
+                <a href="{{ url_for('monitor_log') }}" class="home-section-tool"><i class="bi bi-card-text"></i>Telegram 日志</a>
+                <a href="{{ url_for('file_monitor_log') }}" class="home-section-tool"><i class="bi bi-journal-text"></i>文件日志</a>
+                <a href="{{ url_for('drama_calendar_log') }}" class="home-section-tool"><i class="bi bi-journal-check"></i>追剧日志</a>
+            </div>
         </div>
     </div>
 
     <div class="status-grid">
-        <div class="status-card">
+        <div class="status-card telegram">
             <div class="status-card-header telegram">
                 <div class="status-card-title">
                     <span><i class="bi bi-telegram me-2"></i>Telegram 监控</span>
@@ -626,20 +1261,12 @@
             <div class="status-card-body">
                 <div class="status-subgrid">
                     <div>
-                        <div class="status-subitem-label">关注频道</div>
-                        <div class="status-subitem-value">{{ config.get('restricted_channels', []) | length }}</div>
-                    </div>
-                    <div>
                         <div class="status-subitem-label">认证状态</div>
                         <div class="status-subitem-value status-result-badge {{ auth_status_badge_class }}">{{ auth_status }}</div>
                     </div>
                     <div>
                         <div class="status-subitem-label">下载队列</div>
                         <div class="status-subitem-value">{{ (download_queue_stats or {}).get('queue_size', 0) }}/{{ (download_queue_stats or {}).get('maxsize', '-') }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">活动时间</div>
-                        <div class="status-subitem-value">{{ tg_last_activity_time }}</div>
                     </div>
                     <div class="status-subitem-wide">
                         <div class="status-subitem-label">最近活动</div>
@@ -659,15 +1286,11 @@
                         {% endif %}
                     </form>
                     {% endif %}
-                    <div class="row g-2">
-                        <div class="col-6"><a href="{{ url_for('manage_config') }}" class="btn btn-outline-info btn-sm w-100">配置中心</a></div>
-                        <div class="col-6"><a href="{{ url_for('monitor_log') }}" class="btn btn-outline-secondary btn-sm w-100">日志中心</a></div>
-                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="status-card">
+        <div class="status-card file">
             <div class="status-card-header file">
                 <div class="status-card-title">
                     <span><i class="bi bi-folder-check me-2"></i>文件同步</span>
@@ -681,32 +1304,12 @@
             <div class="status-card-body">
                 <div class="status-subgrid">
                     <div>
-                        <div class="status-subitem-label">任务数</div>
-                        <div class="status-subitem-value">{{ config.get('file_monitoring_tasks', []) | length }}</div>
-                    </div>
-                    <div>
                         <div class="status-subitem-label">下载风控</div>
                         <div class="status-subitem-value status-result-badge {{ risk_status_badge_class }}">{{ '开启' if risk.get('enabled', True) else '关闭' }}</div>
                     </div>
                     <div>
-                        <div class="status-subitem-label">每频道/分钟</div>
-                        <div class="status-subitem-value">{{ risk.get('per_channel_max_downloads_per_minute', 6) }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">重复冷却</div>
-                        <div class="status-subitem-value">{{ risk.get('duplicate_cooldown_seconds', 300) }}s</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">单文件上限</div>
-                        <div class="status-subitem-value">{{ risk.get('max_single_file_size_mb', 4096) }}MB</div>
-                    </div>
-                    <div>
                         <div class="status-subitem-label">累计拦截</div>
-                        <div class="status-subitem-value">{{ (download_risk_stats or {}).get('blocked_total', 0) }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">最近拦截时间</div>
-                        <div class="status-subitem-value">{{ file_last_blocked_at }}</div>
+                        <div class="status-subitem-value">{{ file_blocked_total }}</div>
                     </div>
                     <div class="status-subitem-wide">
                         <div class="status-subitem-label">最近拦截原因</div>
@@ -722,15 +1325,11 @@
                         <button type="submit" name="action" value="start" class="btn btn-success btn-sm w-100">启动同步</button>
                         {% endif %}
                     </form>
-                    <div class="row g-2">
-                        <div class="col-6"><a href="{{ url_for('manage_file_config') }}" class="btn btn-outline-info btn-sm w-100">配置中心</a></div>
-                        <div class="col-6"><a href="{{ url_for('file_monitor_log') }}" class="btn btn-outline-secondary btn-sm w-100">日志中心</a></div>
-                    </div>
                 </div>
             </div>
         </div>
 
-        <div class="status-card">
+        <div class="status-card bot">
             <div class="status-card-header bot">
                 <div class="status-card-title">
                     <span><i class="bi bi-robot me-2"></i>Bot 监控</span>
@@ -744,28 +1343,12 @@
             <div class="status-card-body">
                 <div class="status-subgrid">
                     <div>
-                        <div class="status-subitem-label">Bot ID</div>
-                        <div class="status-subitem-value">{{ bot_token_id or '未设置' }}</div>
-                    </div>
-                    <div>
                         <div class="status-subitem-label">消息队列</div>
                         <div class="status-subitem-value">{{ bot_queue_size or 0 }}</div>
                     </div>
                     <div>
-                        <div class="status-subitem-label">PID / 运行时长</div>
-                        <div class="status-subitem-value">{{ (bot_process_info or {}).get('pid') or '-' }} / {{ (bot_process_info or {}).get('uptime', '-') }}</div>
-                    </div>
-                    <div>
                         <div class="status-subitem-label">错误状态</div>
                         <div class="status-subitem-value status-result-badge {{ bot_error_badge_class }}">{{ bot_error_badge_text }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">活动时间</div>
-                        <div class="status-subitem-value">{{ bot_last_activity_time }}</div>
-                    </div>
-                    <div class="status-subitem-wide">
-                        <div class="status-subitem-label">{{ window_label }}错误</div>
-                        <div class="status-subitem-value">{{ bot_last_error }}</div>
                     </div>
                     <div class="status-subitem-wide">
                         <div class="status-subitem-label">最近活动</div>
@@ -774,6 +1357,7 @@
                 </div>
 
                 <div class="status-actions">
+                    {% if bot_token_id %}
                     <form action="{{ url_for('bot_monitor_action') }}" method="post" class="w-100">
                         {% if bot_monitor_status == "运行中" %}
                         <button type="submit" name="action" value="stop" class="btn btn-outline-warning btn-sm w-100">停止监控</button>
@@ -781,12 +1365,14 @@
                         <button type="submit" name="action" value="start" class="btn btn-success btn-sm w-100">启动监控</button>
                         {% endif %}
                     </form>
-                    <a href="{{ url_for('manage_config') }}" class="btn btn-outline-info btn-sm w-100">前往 Telegram 配置中心更新 Token</a>
+                    {% else %}
+                    <div class="status-note">Bot Token 可在上方 <a href="{{ url_for('manage_config') }}">Telegram 配置中心</a> 设置。</div>
+                    {% endif %}
                 </div>
             </div>
         </div>
 
-        <div class="status-card">
+        <div class="status-card drama">
             <div class="status-card-header drama">
                 <div class="status-card-title">
                     <span><i class="bi bi-calendar3 me-2"></i>追剧调度</span>
@@ -808,31 +1394,12 @@
                         <div class="status-subitem-value">{% if 'all' in drama_sources %}全部来源{% else %}{{ drama_source_count }} 项{% endif %}</div>
                     </div>
                     <div>
-                        <div class="status-subitem-label">调度模式</div>
-                        <div class="status-subitem-value">{{ 'Cron' if scheduler.get('schedule_mode') == 'cron' else '间隔分钟' }}</div>
-                    </div>
-                    <div>
                         <div class="status-subitem-label">下次执行</div>
-                        <div class="status-subitem-value">{{ scheduler.get('next_run_at', '未启用') or '未启用' }}</div>
+                        <div class="status-subitem-value">{{ scheduler_next_run }}</div>
                     </div>
-                    <div>
-                        <div class="status-subitem-label">上次执行</div>
-                        <div class="status-subitem-value">{{ scheduler.get('last_run_at', '') or '暂无' }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">完结判定</div>
-                        <div class="status-subitem-value">{{ drama_cfg.get('finish_detect_mode', 'hybrid')|upper }}</div>
-                    </div>
-                    <div>
+                    <div class="status-subitem-wide">
                         <div class="status-subitem-label">上次结果</div>
                         <div class="status-subitem-value status-result-badge {{ scheduler_last_result_class }}">{{ scheduler_last_result }}</div>
-                    </div>
-                </div>
-
-                <div class="status-actions">
-                    <div class="row g-2">
-                        <div class="col-6"><a href="{{ url_for('drama_calendar_settings') }}" class="btn btn-outline-info btn-sm w-100">配置中心</a></div>
-                        <div class="col-6"><a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-secondary btn-sm w-100">日志中心</a></div>
                     </div>
                 </div>
             </div>

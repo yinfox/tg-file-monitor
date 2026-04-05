@@ -194,24 +194,26 @@
                 </div>
             </div>
             <div class="proxy-card-body">
-                <form action="{{ url_for('proxy_config') }}" method="post">
+                <form action="{{ url_for('proxy_config') }}" method="post" autocomplete="off">
                     <input type="hidden" name="action" value="update_proxy">
                     <input type="hidden" name="proxy_scope" value="telegram">
+                    <input type="text" name="fake_username" autocomplete="username" class="d-none" tabindex="-1" aria-hidden="true">
+                    <input type="password" name="fake_password" autocomplete="current-password" class="d-none" tabindex="-1" aria-hidden="true">
                     <div class="mb-2">
                         <label class="form-label" for="telegram_proxy_addr">代理地址</label>
-                        <input class="form-control form-control-sm" id="telegram_proxy_addr" type="text" name="proxy_addr" value="{{ telegram_proxy_cfg.get('addr', '') }}" placeholder="127.0.0.1 或 proxy.example.com">
+                        <input class="form-control form-control-sm" id="telegram_proxy_addr" type="text" name="proxy_addr" value="{{ telegram_proxy_cfg.get('addr', '') }}" placeholder="127.0.0.1 或 proxy.example.com" autocomplete="off" autocapitalize="off" spellcheck="false">
                     </div>
                     <div class="mb-2">
                         <label class="form-label" for="telegram_proxy_port">代理端口</label>
-                        <input class="form-control form-control-sm" id="telegram_proxy_port" type="text" name="proxy_port" value="{{ telegram_proxy_cfg.get('port', '') }}" placeholder="7890">
+                        <input class="form-control form-control-sm" id="telegram_proxy_port" type="text" name="proxy_port" value="{{ telegram_proxy_cfg.get('port', '') }}" placeholder="7890" autocomplete="off" inputmode="numeric">
                     </div>
                     <div class="mb-2">
                         <label class="form-label" for="telegram_proxy_username">用户名</label>
-                        <input class="form-control form-control-sm" id="telegram_proxy_username" type="text" name="proxy_username" value="{{ telegram_proxy_cfg.get('username', '') }}" placeholder="可选">
+                        <input class="form-control form-control-sm" id="telegram_proxy_username" type="text" name="proxy_username" value="{{ telegram_proxy_cfg.get('username', '') }}" placeholder="可选" autocomplete="new-password" autocapitalize="off" spellcheck="false">
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="telegram_proxy_password">密码</label>
-                        <input class="form-control form-control-sm" id="telegram_proxy_password" type="password" name="proxy_password" value="{{ telegram_proxy_cfg.get('password', '') }}" placeholder="可选">
+                        <input class="form-control form-control-sm" id="telegram_proxy_password" type="password" name="proxy_password" value="{{ telegram_proxy_cfg.get('password', '') }}" placeholder="可选" autocomplete="new-password">
                     </div>
                     <button type="submit" class="btn btn-outline-primary btn-sm w-100">保存 Telegram 代理</button>
                 </form>
@@ -232,24 +234,26 @@
                 </div>
             </div>
             <div class="proxy-card-body">
-                <form action="{{ url_for('proxy_config') }}" method="post">
+                <form action="{{ url_for('proxy_config') }}" method="post" autocomplete="off">
                     <input type="hidden" name="action" value="update_proxy">
                     <input type="hidden" name="proxy_scope" value="service">
+                    <input type="text" name="fake_username" autocomplete="username" class="d-none" tabindex="-1" aria-hidden="true">
+                    <input type="password" name="fake_password" autocomplete="current-password" class="d-none" tabindex="-1" aria-hidden="true">
                     <div class="mb-2">
                         <label class="form-label" for="service_proxy_addr">代理地址</label>
-                        <input class="form-control form-control-sm" id="service_proxy_addr" type="text" name="proxy_addr" value="{{ service_proxy_cfg.get('addr', '') }}" placeholder="127.0.0.1 或 proxy.example.com">
+                        <input class="form-control form-control-sm" id="service_proxy_addr" type="text" name="proxy_addr" value="{{ service_proxy_cfg.get('addr', '') }}" placeholder="127.0.0.1 或 proxy.example.com" autocomplete="off" autocapitalize="off" spellcheck="false">
                     </div>
                     <div class="mb-2">
                         <label class="form-label" for="service_proxy_port">代理端口</label>
-                        <input class="form-control form-control-sm" id="service_proxy_port" type="text" name="proxy_port" value="{{ service_proxy_cfg.get('port', '') }}" placeholder="7890">
+                        <input class="form-control form-control-sm" id="service_proxy_port" type="text" name="proxy_port" value="{{ service_proxy_cfg.get('port', '') }}" placeholder="7890" autocomplete="off" inputmode="numeric">
                     </div>
                     <div class="mb-2">
                         <label class="form-label" for="service_proxy_username">用户名</label>
-                        <input class="form-control form-control-sm" id="service_proxy_username" type="text" name="proxy_username" value="{{ service_proxy_cfg.get('username', '') }}" placeholder="可选">
+                        <input class="form-control form-control-sm" id="service_proxy_username" type="text" name="proxy_username" value="{{ service_proxy_cfg.get('username', '') }}" placeholder="可选" autocomplete="new-password" autocapitalize="off" spellcheck="false">
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="service_proxy_password">密码</label>
-                        <input class="form-control form-control-sm" id="service_proxy_password" type="password" name="proxy_password" value="{{ service_proxy_cfg.get('password', '') }}" placeholder="可选">
+                        <input class="form-control form-control-sm" id="service_proxy_password" type="password" name="proxy_password" value="{{ service_proxy_cfg.get('password', '') }}" placeholder="可选" autocomplete="new-password">
                     </div>
                     <button type="submit" class="btn btn-outline-primary btn-sm w-100">保存 HDHive / TMDB 代理</button>
                 </form>
@@ -270,24 +274,26 @@
                 </div>
             </div>
             <div class="proxy-card-body">
-                <form action="{{ url_for('proxy_config') }}" method="post">
+                <form action="{{ url_for('proxy_config') }}" method="post" autocomplete="off">
                     <input type="hidden" name="action" value="update_proxy">
                     <input type="hidden" name="proxy_scope" value="downloader">
+                    <input type="text" name="fake_username" autocomplete="username" class="d-none" tabindex="-1" aria-hidden="true">
+                    <input type="password" name="fake_password" autocomplete="current-password" class="d-none" tabindex="-1" aria-hidden="true">
                     <div class="mb-2">
                         <label class="form-label" for="downloader_proxy_addr">代理地址</label>
-                        <input class="form-control form-control-sm" id="downloader_proxy_addr" type="text" name="proxy_addr" value="{{ downloader_proxy_cfg.get('addr', '') }}" placeholder="127.0.0.1 或 proxy.example.com">
+                        <input class="form-control form-control-sm" id="downloader_proxy_addr" type="text" name="proxy_addr" value="{{ downloader_proxy_cfg.get('addr', '') }}" placeholder="127.0.0.1 或 proxy.example.com" autocomplete="off" autocapitalize="off" spellcheck="false">
                     </div>
                     <div class="mb-2">
                         <label class="form-label" for="downloader_proxy_port">代理端口</label>
-                        <input class="form-control form-control-sm" id="downloader_proxy_port" type="text" name="proxy_port" value="{{ downloader_proxy_cfg.get('port', '') }}" placeholder="7890">
+                        <input class="form-control form-control-sm" id="downloader_proxy_port" type="text" name="proxy_port" value="{{ downloader_proxy_cfg.get('port', '') }}" placeholder="7890" autocomplete="off" inputmode="numeric">
                     </div>
                     <div class="mb-2">
                         <label class="form-label" for="downloader_proxy_username">用户名</label>
-                        <input class="form-control form-control-sm" id="downloader_proxy_username" type="text" name="proxy_username" value="{{ downloader_proxy_cfg.get('username', '') }}" placeholder="可选">
+                        <input class="form-control form-control-sm" id="downloader_proxy_username" type="text" name="proxy_username" value="{{ downloader_proxy_cfg.get('username', '') }}" placeholder="可选" autocomplete="new-password" autocapitalize="off" spellcheck="false">
                     </div>
                     <div class="mb-3">
                         <label class="form-label" for="downloader_proxy_password">密码</label>
-                        <input class="form-control form-control-sm" id="downloader_proxy_password" type="password" name="proxy_password" value="{{ downloader_proxy_cfg.get('password', '') }}" placeholder="可选">
+                        <input class="form-control form-control-sm" id="downloader_proxy_password" type="password" name="proxy_password" value="{{ downloader_proxy_cfg.get('password', '') }}" placeholder="可选" autocomplete="new-password">
                     </div>
                     <button type="submit" class="btn btn-outline-primary btn-sm w-100">保存下载器代理</button>
                 </form>

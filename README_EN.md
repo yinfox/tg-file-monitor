@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.4.90-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.41-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.36`
+Latest image: `y1nf0x/tg-file-monitor:0.5.41`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.36
+y1nf0x/tg-file-monitor:0.5.41
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,27 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.36 (2026-03-20) - Current
+### v0.5.41 (2026-03-21) - Current
+- ✅ The homepage leans further into an overview-first layout with a recent-issues summary strip instead of repeating entry points
+- ✅ Config and runtime sections are trimmed again so log links are centralized and runtime cards only keep operational signals
+
+### v0.5.40 (2026-03-20)
+- ✅ Added autofill suppression on the proxy settings page so browsers stop injecting saved admin credentials into proxy username/password fields
+- ✅ Keeps the recent 115 upload-chain diagnostic, newest-first logs, and mid-copy second-transfer fixes
+
+### v0.5.39 (2026-03-20)
+- ✅ Fixed mid-copy second-transfer error handling so transient 115 failures no longer abort the local copy flow
+- ✅ Fixed copy-and-delete / mid-copy second-transfer completion logic to fall back to local sync if 115 target-folder completion does not finish
+
+### v0.5.38 (2026-03-20)
+- ✅ File Sync settings now include a dedicated 115 upload-chain test button for upload credential/init diagnostics
+- ✅ All log pages now show newest entries first and default back to the top after load/refresh
+
+### v0.5.37 (2026-03-20)
+- ✅ 115 second-transfer initialization now uses the p115client native upload-init flow instead of the fragile manual uploadinfo path
+- ✅ 115 relogin responses (`errno=99`) now surface a clearer “refresh your Cookie” message
+
+### v0.5.36 (2026-03-20)
 - ✅ Proxy settings now have a dedicated admin sidebar entry and standalone settings page
 - ✅ Proxy handling is split into Telegram, HDHive/TMDB, and downloader scopes, while 115 stays direct
 

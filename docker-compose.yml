@@ -1,7 +1,7 @@
 services:
   telegram-file-monitor:
     # 镜像名称：服务器测试时直接拉固定版本，避免 latest 漂移导致不可预期变更。
-    image: y1nf0x/tg-file-monitor:0.5.36
+    image: y1nf0x/tg-file-monitor:0.5.41
     # 容器名：便于 docker logs / docker exec / docker restart 快速定位。
     container_name: tg-file-monitor
     ports:

@@ -182,6 +182,63 @@ def resolve_destination_path(destination_dir, filename, handle_duplicate="rename
             return candidate
         index += 1
 
+
+def _extract_target_cid(target):
+    raw = str(target or '').strip()
+    if not raw:
+        return ''
+    if raw.startswith('U_'):
+        parts = raw.split('_')
+        return parts[-1] if parts else ''
+    return raw
+
+
+def _delete_source_after_second_transfer(filepath, filename, action_type, delete_source_after_transfer):
+    should_delete_after_115 = (action_type in ["move", "copy_and_delete"]) or delete_source_after_transfer
+    if not should_delete_after_115 or not os.path.exists(filepath):
+        return
+    try:
+        if os.path.isdir(filepath):
+            shutil.rmtree(filepath)
+        else:
+            os.remove(filepath)
+        log_message(f"🗑️  已根据策略 ( {action_type} ) 删除源文件: {filename}")
+        debug_log(f"删除文件路径: {filepath}")
+    except Exception as e:
+        log_message(f"⚠️  根据策略删除源文件失败: {filename}, 原因: {e}", level="ERROR")
+
+
+def _complete_second_transfer_hit(check, filepath, filename, action_type, delete_source_after_transfer, client_115, target):
+    if not (check and check.get('success') and check.get('can_transfer') and check.get('already_exists')):
+        return False
+
+    if check.get('transferred'):
+        log_message(f"✅ 秒传成功！文件已秒传到目标文件夹: {filename} ({action_type})")
+        _delete_source_after_second_transfer(filepath, filename, action_type, delete_source_after_transfer)
+        return True
+
+    file_id = check.get('file_id')
+    target_cid = _extract_target_cid(target)
+    if file_id and target_cid:
+        log_message(f"📋 找到File ID: {file_id}，开始复制到目标文件夹...")
+        copy_result = client_115.copy_file_to_folder(
+            file_id=file_id,
+            target_cid=target_cid,
+            file_name=filename
+        )
+        if copy_result.get('success') and copy_result.get('transferred'):
+            log_message(f"✅ 完整秒传成功！文件已添加到目标文件夹: {filename}")
+            _delete_source_after_second_transfer(filepath, filename, action_type, delete_source_after_transfer)
+            return True
+        error_msg = copy_result.get('message', '未知错误')
+        log_message(f"❌ 文件复制失败: {filename}\n原因: {error_msg}", level="ERROR")
+        log_message("⚠️  115 目标目录补全失败，回退到本地同步。")
+        return False
+
+    log_message(f"⚠️  秒传命中但未返回可用 file_id/target_cid，回退到本地同步: {filename}")
+    return False
+
+
 def copy_with_mid_check(filepath, filename, destination_dir, handle_duplicate, client_115, file_sha1, file_size, target, check_interval, chunk_size):
     target_path = resolve_destination_path(destination_dir, filename, handle_duplicate)
     temp_path = f"{target_path}.part"
@@ -198,13 +255,17 @@ def copy_with_mid_check(filepath, filename, destination_dir, handle_duplicate, c
                 now = time.monotonic()
                 if now - last_check >= check_interval:
                     last_check = now
-                    check = client_115.check_file_exists(
-                        file_sha1,
-                        file_size,
-                        filename,
-                        target=target,
-                        file_path=filepath
-                    )
+                    try:
+                        check = client_115.check_file_exists(
+                            file_sha1,
+                            file_size,
+                            filename,
+                            target=target,
+                            file_path=filepath
+                        )
+                    except Exception as e:
+                        log_message(f"⚠️  复制中秒传检测失败，继续本地复制: {filename}\n原因: {e}", level="ERROR")
+                        continue
                     if check.get('success') and check.get('can_transfer') and check.get('already_exists'):
                         log_message(f"⚡ 复制过程中检测到可秒传，停止本地复制: {filename}")
                         dst.close()
@@ -242,7 +303,7 @@ def perform_local_action(filepath, filename, destination_dir, action_type, handl
             and file_sha1
             and file_size
             and target
-            and action_type in ("copy", "move")
+            and action_type in ("copy", "move", "copy_and_delete")
         )
 
         if use_mid_check:
@@ -259,16 +320,33 @@ def perform_local_action(filepath, filename, destination_dir, action_type, handl
                 chunk_size
             )
             if result.get("stopped"):
-                log_message(f"✅ 已停止本地复制（秒传可用）: {filename}")
-                # 即使停止了复制，如果是移动或设置了删除源，也要删除
-                should_delete_stopped = (action_type in ["move", "copy_and_delete"]) or delete_source_after_transfer
-                if should_delete_stopped and os.path.exists(filepath):
-                    if os.path.isdir(filepath):
-                        shutil.rmtree(filepath)
-                    else:
-                        os.remove(filepath)
-                    log_message(f"🗑️  秒传成功及停止本地复制后已删除源: {filename}")
-                return True
+                log_message(f"✅ 已停止本地复制（检测到可秒传）: {filename}")
+                if _complete_second_transfer_hit(
+                    result.get("check"),
+                    filepath,
+                    filename,
+                    action_type,
+                    delete_source_after_transfer,
+                    client_115,
+                    target,
+                ):
+                    return True
+                log_message(f"⚠️  中途秒传命中但未能完成 115 入目标，回退到完整本地{action_type}: {filename}")
+                return perform_local_action(
+                    filepath,
+                    filename,
+                    destination_dir,
+                    action_type,
+                    handle_duplicate,
+                    enable_mid_copy_check=False,
+                    client_115=client_115,
+                    file_sha1=file_sha1,
+                    file_size=file_size,
+                    target=target,
+                    check_interval=check_interval,
+                    chunk_size=chunk_size,
+                    delete_source_after_transfer=delete_source_after_transfer
+                )
             target_path = result.get("target_path")
         else:
             target_path = resolve_destination_path(destination_dir, filename, handle_duplicate)
@@ -538,55 +616,34 @@ def monitor_files():
                                 # 秒传成功（文件已在115服务器）
                                 if check.get('success') and check.get('can_transfer') and check.get('already_exists'):
                                     delete_source_after_transfer = task.get('delete_source_after_transfer', False)
-                                    # 检查是否已经传输到目标文件夹
-                                    if check.get('transferred'):
-                                        # 新的秒传方式：upload_file已经直接传到目标文件夹了
-                                        log_message(f"✅ 秒传成功！文件已秒传到目标文件夹: {filename} ({action_type})")
+                                    if _complete_second_transfer_hit(
+                                        check,
+                                        filepath,
+                                        filename,
+                                        action_type,
+                                        delete_source_after_transfer,
+                                        client_115,
+                                        target,
+                                    ):
                                         monitored_file_states[filepath] = {"completed": True}
-                                        
-                                        # 核心逻辑：如果是 'move' / 'copy_and_delete' 或者是 'copy' 且配置了“删除源文件”，则执行删除
-                                        should_delete_after_115 = (action_type in ["move", "copy_and_delete"]) or delete_source_after_transfer
-                                        if should_delete_after_115 and os.path.exists(filepath):
-                                            try:
-                                                os.remove(filepath)
-                                                log_message(f"🗑️  已根据策略 ( {action_type} ) 删除源文件: {filename}")
-                                                debug_log(f"删除文件路径: {filepath}")
-                                            except Exception as e:
-                                                log_message(f"⚠️  根据策略删除源文件失败: {filename}, 原因: {e}", level="ERROR")
                                     else:
-                                        # 旧方式：需要复制
-                                        log_message(f"✅ 秒传成功，文件已在115: {filename} ({action_type})")
-                                        
-                                        # 获取file_id并复制到目标文件夹
-                                        file_id = check.get('file_id')
-                                        if file_id:
-                                            log_message(f"📋 找到File ID: {file_id}，开始复制到目标文件夹...")
-                                            
-                                            # 调用copy_file_to_folder将文件添加到目标文件夹
-                                            copy_result = client_115.copy_file_to_folder(
-                                                file_id=file_id,
-                                                target_cid=target_cid,  # 使用原始CID
-                                                file_name=filename
-                                            )
-                                            
-                                            if copy_result.get('success') and copy_result.get('transferred'):
-                                                log_message(f"✅ 完整秒传成功！文件已添加到目标文件夹: {filename}")
-                                                monitored_file_states[filepath] = {"completed": True}
-                                                
-                                                # 秒传成功后删除源文件
-                                                if should_delete_after_115 and os.path.exists(filepath):
-                                                    try:
-                                                        os.remove(filepath)
-                                                        log_message(f"🗑️  已根据策略 ( {action_type} ) 删除源文件: {filename}")
-                                                        debug_log(f"删除文件路径: {filepath}")
-                                                    except Exception as e:
-                                                        log_message(f"⚠️  根据策略删除源文件失败: {filename}, 原因: {e}", level="ERROR")
-                                            else:
-                                                error_msg = copy_result.get('message', '未知错误')
-                                                log_message(f"❌ 文件复制失败: {filename}\n原因: {error_msg}", level="ERROR")
-                                                log_message(f"⚠️  文件ID已找到但未能添加到目标文件夹，保留源文件")
-                                        else:
-                                            log_message(f"⚠️  秒传成功但未返回file_id，保留源文件: {filename}")
+                                        log_message(f"⚠️  秒传命中但未能完成 115 目标目录同步，改为执行本地 {action_type}: {filename}")
+                                        if perform_local_action(
+                                            filepath,
+                                            filename,
+                                            destination_dir,
+                                            action_type,
+                                            handle_duplicate,
+                                            enable_mid_copy_check=False,
+                                            client_115=client_115,
+                                            file_sha1=sha1,
+                                            file_size=file_size,
+                                            target=target,
+                                            check_interval=mid_copy_check_interval,
+                                            chunk_size=mid_copy_chunk_size,
+                                            delete_source_after_transfer=delete_source_after_transfer
+                                        ):
+                                            monitored_file_states[filepath] = {"completed": True}
                                         
                                 else:
                                     # 秒传失败（文件不在115），执行本地同步

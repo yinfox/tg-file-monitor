@@ -3,6 +3,9 @@ import requests
 import json
 import time
 import os
+import re
+import hashlib
+import tempfile
 from typing import Optional, Dict, Any
 from urllib.parse import urlencode
 
@@ -76,6 +79,89 @@ class Client115:
         
         # 如果无法从Cookie中提取，返回None，将使用其他方式
         return None
+
+    def _read_range_bytes_for_upload_init(self, file_path: str, sign_check: str):
+        """Read the requested byte range for p115client.upload_file_init second-pass verification."""
+        if not file_path or not os.path.exists(file_path):
+            raise FileNotFoundError(f"文件路径无效: {file_path}")
+
+        text = str(sign_check or "").strip()
+        match = re.search(r"(\d+)-(\d+)", text)
+        if not match:
+            raise ValueError(f"无法解析 sign_check: {sign_check}")
+
+        start = int(match.group(1))
+        end = int(match.group(2))
+        if end < start:
+            raise ValueError(f"非法字节范围: {sign_check}")
+
+        with open(file_path, 'rb') as f:
+            f.seek(start)
+            return f.read(end - start + 1)
+
+    def _extract_upload_credentials(self, payload: Dict[str, Any]) -> tuple[str, str]:
+        candidates = []
+        if isinstance(payload, dict):
+            candidates.append(payload)
+            data = payload.get('data')
+            if isinstance(data, dict):
+                candidates.append(data)
+
+        user_id = ""
+        user_key = ""
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            if not user_id:
+                user_id = str(item.get('userid') or item.get('user_id') or item.get('uid') or '').strip()
+            if not user_key:
+                user_key = str(item.get('userkey') or item.get('user_key') or '').strip()
+            if user_id and user_key:
+                break
+        return user_id, user_key
+
+    def _run_upload_init_with_credentials(
+        self,
+        *,
+        file_name: str,
+        file_size: int,
+        file_sha1: str,
+        target: str,
+        file_path: str,
+        user_id: str = "",
+        user_key: str = "",
+    ) -> Dict[str, Any]:
+        payload = {
+            'filename': file_name,
+            'fileid': file_sha1.upper(),
+            'filesize': file_size,
+            'target': target,
+        }
+        if user_id:
+            payload['userid'] = user_id
+        if user_key:
+            payload['userkey'] = user_key
+
+        resp = self.p115_client.upload_init(payload)
+        status = resp.get('status') if isinstance(resp, dict) else None
+
+        if status == 7:
+            if not file_path or not os.path.exists(file_path):
+                raise FileNotFoundError(f"文件路径无效: {file_path}")
+            sign_key = str(resp.get('sign_key') or '').strip()
+            sign_check = str(resp.get('sign_check') or '').strip()
+            if not sign_key or not sign_check:
+                raise ValueError(f"二次校验信息缺失: {resp}")
+            chunk = self._read_range_bytes_for_upload_init(file_path, sign_check)
+            payload['sign_key'] = sign_key
+            payload['sign_val'] = hashlib.sha1(chunk).hexdigest().upper()
+            resp = self.p115_client.upload_init(payload)
+            status = resp.get('status') if isinstance(resp, dict) else None
+
+        if isinstance(resp, dict):
+            resp['reuse'] = status == 2
+            resp['state'] = status in (1, 2)
+        return resp
     
     def check_file_exists(self, file_sha1: str, file_size: int, file_name: str, target: str = 'U_1_0', file_path: str = None) -> Dict[str, Any]:
         """
@@ -117,137 +203,121 @@ class Client115:
         print("="*60)
         
         try:
-            # ======== 步骤1：获取userkey ========
-            print("\n[步骤1] 获取上传凭证（userkey）...")
-            
-            headers = {
-                'Cookie': self.cookie,
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-            }
-            
-            # 提取target中的CID
-            target_cid = target.split('_')[-1] if '_' in target else target
-            
-            data = {
-                'app_ver': '25.2.0',
-                'filename': file_name,
-                'filesize': file_size,
-                'fileid': file_sha1,
-                'target': target,
-            }
-            
-            resp = self.session.post(
-                'https://proapi.115.com/app/uploadinfo',
-                headers=headers,
-                data=data,
-                timeout=10
+            # ======== 步骤1：刷新 user_key（交给 p115client 原生处理） ========
+            print("\n[步骤1] 刷新上传凭证（p115client.upload_key）...")
+            key_result = self.p115_client.upload_key(app='android')
+            print(f"[凭证结果] {json.dumps(key_result, ensure_ascii=False, indent=2)}")
+
+            user_id, user_key = self._extract_upload_credentials(key_result if isinstance(key_result, dict) else {})
+            credential_source = 'upload_key'
+            last_credential_error = key_result if isinstance(key_result, dict) else {"error": "upload_key returned invalid response"}
+
+            if not user_key:
+                print("\n[步骤1-回退] upload_key 不可用，尝试 p115client.upload_info()...")
+                info_result = self.p115_client.upload_info()
+                print(f"[上传信息结果] {json.dumps(info_result, ensure_ascii=False, indent=2)}")
+                info_user_id, info_user_key = self._extract_upload_credentials(info_result if isinstance(info_result, dict) else {})
+                if info_user_key:
+                    user_id = info_user_id
+                    user_key = info_user_key
+                    credential_source = 'upload_info'
+                else:
+                    last_credential_error = info_result if isinstance(info_result, dict) else last_credential_error
+
+            if not user_key:
+                errno = last_credential_error.get('errno') if isinstance(last_credential_error, dict) else ''
+                raw_error = str((last_credential_error or {}).get('error') or (last_credential_error or {}).get('message') or '').strip() if isinstance(last_credential_error, dict) else ''
+                if str(errno) == '99' or '重新登录' in raw_error:
+                    return {
+                        'success': False,
+                        'message': f"115 登录态已失效，请重新登录 115 后更新 Cookie。{f'（接口返回：{raw_error}）' if raw_error else ''}",
+                        'can_transfer': False,
+                        'error': 'COOKIE_RELOGIN_REQUIRED',
+                        'errno': errno,
+                        'response': last_credential_error,
+                    }
+                return {
+                    'success': False,
+                    'message': f"获取上传凭证失败: {raw_error or '未知错误'}",
+                    'can_transfer': False,
+                    'error': 'GET_USERKEY_FAILED',
+                    'errno': errno,
+                    'response': last_credential_error,
+                }
+
+            # ======== 步骤2：初始化上传（只判断是否可秒传，不直接上传） ========
+            print(f"\n[步骤2] 初始化上传（凭证来源: {credential_source}）...")
+
+            init_result = self._run_upload_init_with_credentials(
+                file_name=file_name,
+                file_size=file_size,
+                file_sha1=file_sha1,
+                target=target,
+                file_path=file_path,
+                user_id=user_id,
+                user_key=user_key,
             )
-            
-            upload_info = resp.json()
-            
-            if not upload_info.get('state'):
-                print(f"❌ 获取上传凭证失败: {upload_info}")
+
+            print(f"[初始化结果] {json.dumps(init_result, ensure_ascii=False, indent=2)}")
+
+            if not isinstance(init_result, dict):
                 return {
                     'success': False,
-                    'message': '获取上传凭证失败',
+                    'message': '上传初始化返回格式异常',
                     'can_transfer': False,
-                    'error': 'GET_USERKEY_FAILED'
+                    'error': 'UNEXPECTED_INIT_RESULT',
+                    'response': init_result,
                 }
-            
-            userkey = upload_info.get('userkey')
-            if not userkey:
-                print(f"❌ 响应中没有userkey")
-                return {
-                    'success': False,
-                    'message': '获取userkey失败',
-                    'can_transfer': False,
-                    'error': 'NO_USERKEY'
-                }
-            
-            print(f"✅ 获取到userkey: {userkey[:20]}...")
-            
-            # ======== 步骤2：设置userkey并上传（自动秒传）========
-            print(f"\n[步骤2] 执行上传（自动判断秒传）...")
-            
-            # 将userkey设置到p115client
-            self.p115_client.__dict__['user_key'] = userkey
-            
-            # 调用upload_file - 如果文件存在会自动秒传（status=2）
-            if not file_path or not os.path.exists(file_path):
-                print(f"❌ 文件路径无效: {file_path}")
-                return {
-                    'success': False,
-                    'message': '文件路径无效',
-                    'can_transfer': False,
-                    'error': 'INVALID_FILE_PATH'
-                }
-            
-            upload_result = self.p115_client.upload_file(
-                file_path,
-                pid=target_cid,
-                filesha1=file_sha1,
-                filesize=file_size
-            )
-            
-            print(f"[上传结果] {json.dumps(upload_result, ensure_ascii=False, indent=2)}")
-            
-            # 检查结果
-            upload_status = upload_result.get('status')
-            print(f"[DEBUG] upload_status type: {type(upload_status)}, value: {upload_status}")
-            
-            if upload_status == 2:
-                # 秒传成功！
-                print(f"🎉 秒传成功！文件已存在无需上传")
-                pickcode = upload_result.get('pickcode', '')
-                file_id = upload_result.get('data', {}).get('id', '')
-                
+
+            init_status = init_result.get('status')
+            status_msg = str(init_result.get('statusmsg') or init_result.get('message') or init_result.get('error') or '').strip()
+            errno = init_result.get('errno')
+
+            if init_result.get('reuse') or init_status == 2:
+                print("🎉 秒传成功！文件已存在无需上传")
+                data = init_result.get('data') if isinstance(init_result.get('data'), dict) else {}
+                pickcode = init_result.get('pickcode') or data.get('pickcode') or data.get('pick_code') or ''
+                file_id = data.get('id') or data.get('file_id') or ''
                 return {
                     'success': True,
                     'message': f'✅ 秒传成功！\n文件：{file_name}\n大小：{file_size/1024/1024:.2f}MB',
                     'can_transfer': True,
                     'already_exists': True,
-                    'transferred': True,  # 已经传到目标文件夹了
+                    'transferred': True,
                     'pickcode': pickcode,
                     'file_id': file_id,
-                    'response': upload_result
+                    'response': init_result
                 }
-            elif upload_status == 1:
-                # 需要真实上传
-                print(f"⚠️  文件不存在，需要真实上传")
+
+            if init_result.get('state') is True:
+                print("⚠️  文件不存在，需要真实上传")
                 return {
                     'success': False,
-                    'message': f'文件不存在于115服务器，需要真实上传',
+                    'message': '文件不存在于115服务器，需要真实上传',
                     'can_transfer': False,
                     'need_upload': True,
-                    'response': upload_result
+                    'response': init_result,
                 }
-            # 检查是否是实际上传成功（非秒传）
-            elif upload_result.get('state') == True and upload_result.get('data', {}).get('file_id'):
-                # 实际上传成功了
-                print(f"📤 实际上传成功（非秒传）")
-                file_id = upload_result['data']['file_id']
-                pickcode = upload_result['data'].get('pick_code', '')
-                return {
-                    'success': True,
-                    'message': f'✅ 实际上传成功\n文件：{file_name}\n大小：{file_size/1024/1024:.2f}MB',
-                    'can_transfer': True,
-                    'already_exists': False,
-                    'transferred': True,  # 已经传到目标文件夹了
-                    'pickcode': pickcode,
-                    'file_id': file_id,
-                    'response': upload_result
-                }
-            else:
-                # 其他状态
-                status_msg = upload_result.get('statusmsg', '') or upload_result.get('message', '')
-                print(f"⚠️  上传状态: {upload_result.get('status')} - {status_msg}")
+
+            if str(errno) == '99' or '重新登录' in status_msg:
                 return {
                     'success': False,
-                    'message': f'上传失败: {status_msg}',
+                    'message': f"115 登录态已失效，请重新登录 115 后更新 Cookie。{f'（接口返回：{status_msg}）' if status_msg else ''}",
                     'can_transfer': False,
-                    'error': status_msg,
-                    'response': upload_result
+                    'error': 'COOKIE_RELOGIN_REQUIRED',
+                    'errno': errno,
+                    'response': init_result,
                 }
+
+            print(f"⚠️  上传初始化失败: {init_status} - {status_msg}")
+            return {
+                'success': False,
+                'message': f'上传初始化失败: {status_msg or "未知错误"}',
+                'can_transfer': False,
+                'error': status_msg or 'UPLOAD_INIT_FAILED',
+                'errno': errno,
+                'response': init_result
+            }
             
         except Exception as e:
             print(f"[异常] {str(e)}")
@@ -259,6 +329,128 @@ class Client115:
                 'can_transfer': False,
                 'error': str(e)
             }
+
+    def test_upload_chain(self, target: str = 'U_1_0') -> Dict[str, Any]:
+        """
+        检测 115 上传初始化链路是否可用，但不执行真实上传。
+
+        检测内容：
+        1. 获取上传凭证（upload_key / upload_info fallback）
+        2. 执行 upload_init / upload_file_init
+
+        注意：
+        - 这里只做初始化，不会真的上传文件
+        - 如果返回 state=True 且 status 为 1/2，就认为上传链路可用
+        """
+        if not self.cookie:
+            return {
+                'success': False,
+                'message': '未设置 115 Cookie',
+                'error': 'NO_COOKIE',
+            }
+
+        if not self.p115_client:
+            return {
+                'success': False,
+                'message': 'p115client 未初始化，无法检测上传链路',
+                'error': 'P115CLIENT_NOT_AVAILABLE',
+            }
+
+        probe_content = b'codex-upload-chain-probe'
+        probe_sha1 = hashlib.sha1(probe_content).hexdigest()
+        target_value = target if isinstance(target, str) and target.startswith('U_') else f"U_1_{target or '0'}"
+
+        temp_path = ""
+        try:
+            with tempfile.NamedTemporaryFile('wb', delete=False, suffix='.txt') as tmp:
+                tmp.write(probe_content)
+                temp_path = tmp.name
+
+            key_result = self.p115_client.upload_key(app='android')
+            user_id, user_key = self._extract_upload_credentials(key_result if isinstance(key_result, dict) else {})
+            credential_source = 'upload_key'
+            last_credential_error = key_result if isinstance(key_result, dict) else {"error": "upload_key returned invalid response"}
+
+            if not user_key:
+                info_result = self.p115_client.upload_info()
+                info_user_id, info_user_key = self._extract_upload_credentials(info_result if isinstance(info_result, dict) else {})
+                if info_user_key:
+                    user_id = info_user_id
+                    user_key = info_user_key
+                    credential_source = 'upload_info'
+                else:
+                    last_credential_error = info_result if isinstance(info_result, dict) else last_credential_error
+
+            if not user_key:
+                errno = last_credential_error.get('errno') if isinstance(last_credential_error, dict) else ''
+                raw_error = str((last_credential_error or {}).get('error') or (last_credential_error or {}).get('message') or '').strip() if isinstance(last_credential_error, dict) else ''
+                if str(errno) == '99' or '重新登录' in raw_error:
+                    return {
+                        'success': False,
+                        'message': f"115 登录态已失效，请重新登录 115 后更新 Cookie。{f'（接口返回：{raw_error}）' if raw_error else ''}",
+                        'error': 'COOKIE_RELOGIN_REQUIRED',
+                        'errno': errno,
+                        'credential_source': credential_source,
+                        'credential_response': last_credential_error,
+                    }
+                return {
+                    'success': False,
+                    'message': f"获取上传凭证失败: {raw_error or '未知错误'}",
+                    'error': 'GET_USERKEY_FAILED',
+                    'errno': errno,
+                    'credential_source': credential_source,
+                    'credential_response': last_credential_error,
+                }
+
+            init_result = self._run_upload_init_with_credentials(
+                file_name='codex-upload-chain-probe.txt',
+                file_size=len(probe_content),
+                file_sha1=probe_sha1,
+                target=target_value,
+                file_path=temp_path,
+                user_id=user_id,
+                user_key=user_key,
+            )
+
+            status = init_result.get('status') if isinstance(init_result, dict) else None
+            if isinstance(init_result, dict) and init_result.get('state') is True:
+                if init_result.get('reuse') or status == 2:
+                    msg = '上传链路可用：已通过初始化并命中秒传'
+                else:
+                    msg = '上传链路可用：已通过初始化，可进入真实上传'
+                return {
+                    'success': True,
+                    'message': msg,
+                    'credential_source': credential_source,
+                    'init_status': status,
+                    'reuse': bool(init_result.get('reuse')),
+                    'target': target_value,
+                    'response': init_result,
+                }
+
+            errno = init_result.get('errno') if isinstance(init_result, dict) else ''
+            raw_error = str((init_result or {}).get('error') or (init_result or {}).get('message') or (init_result or {}).get('statusmsg') or '').strip() if isinstance(init_result, dict) else ''
+            return {
+                'success': False,
+                'message': f"上传初始化失败: {raw_error or '未知错误'}",
+                'error': 'UPLOAD_INIT_FAILED',
+                'errno': errno,
+                'credential_source': credential_source,
+                'target': target_value,
+                'response': init_result,
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f'上传链路检测异常: {e}',
+                'error': 'UPLOAD_CHAIN_TEST_EXCEPTION',
+            }
+        finally:
+            if temp_path:
+                try:
+                    os.remove(temp_path)
+                except Exception:
+                    pass
     
     def copy_file_to_folder(self, file_id: str, target_cid: str, file_name: str = "") -> Dict[str, Any]:
         """
@@ -758,7 +950,7 @@ class Client115:
         print(f"{'='*60}")
         
         # 1. 检查是否可以秒传
-        check_result = self.check_file_exists(file_sha1, file_size, file_name, target)
+        check_result = self.check_file_exists(file_sha1, file_size, file_name, target, file_path=file_path)
         
         # 如果秒传成功（文件已存在）
         if check_result.get('success') and check_result.get('can_transfer'):

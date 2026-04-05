@@ -39,7 +39,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.36"
+VERSION = "0.5.41"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -5873,7 +5873,7 @@ def _downloader_log_output(max_lines: int, max_bytes: int) -> str:
     if not logs:
         return "暂无日志。"
     colored = [colorize_log_line(str(line)) for line in logs]
-    return "\n".join(colored)
+    return "\n".join(reversed(colored))
 
 
 def _drama_scheduler_loop():
@@ -8126,7 +8126,7 @@ def drama_calendar_log():
     interval, auto_refresh, max_lines, max_bytes = _resolve_log_view_config(cfg)
     log_lines = _read_drama_calendar_log_lines(max_lines=max_lines, max_bytes=max_bytes)
     colored_log_lines = [colorize_log_line(line) for line in log_lines]
-    log_output = "\n".join(colored_log_lines) if colored_log_lines else "暂无追剧日志。"
+    log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无追剧日志。"
     return render_template(
         'drama_calendar_log.html',
         log_output=log_output,
@@ -8146,7 +8146,7 @@ def drama_calendar_log_data():
         return jsonify({"changed": False, "key": current_key})
     log_lines = _read_drama_calendar_log_lines(max_lines=max_lines, max_bytes=max_bytes)
     colored_log_lines = [colorize_log_line(line) for line in log_lines]
-    log_output = "\n".join(colored_log_lines) if colored_log_lines else "暂无追剧日志。"
+    log_output = "\n".join(reversed(colored_log_lines)) if colored_log_lines else "暂无追剧日志。"
     return jsonify({"changed": True, "key": current_key, "log_output": log_output})
 
 @app.route('/file_config', methods=['GET', 'POST'])
@@ -9169,6 +9169,45 @@ def api_set_downloader_default_path():
         "default_path": downloader_cfg.get('default_path', ''),
         "quality_mode": quality_mode,
     })
+
+
+@app.route('/api/115/test_upload_chain', methods=['POST'])
+@login_required
+def api_test_115_upload_chain():
+    config = load_config()
+    payload = request.get_json(silent=True) or {}
+
+    cookie = (payload.get('cookie_115') or config.get('115_cookie') or config.get('web_115_cookie') or '').strip()
+    target_cid = (payload.get('target_115_cid') or config.get('115_target_cid') or '').strip()
+
+    if not cookie:
+        return jsonify({
+            'success': False,
+            'message': '未填写 115 Cookie，无法检测上传链路。',
+            'error': 'NO_COOKIE',
+        }), 400
+
+    target = f"U_1_{target_cid}" if target_cid else 'U_1_0'
+
+    if not Client115:
+        return jsonify({
+            'success': False,
+            'message': '115 组件不可用，无法检测上传链路。',
+            'error': 'CLIENT_NOT_AVAILABLE',
+        }), 503
+
+    try:
+        client = Client115(cookie=cookie)
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'初始化 115 客户端失败: {e}',
+            'error': 'CLIENT_INIT_FAILED',
+        }), 500
+
+    result = client.test_upload_chain(target=target)
+    status_code = 200 if result.get('success') else (401 if result.get('error') == 'COOKIE_RELOGIN_REQUIRED' else 400)
+    return jsonify(result), status_code
 
 # HDHive 资源请求功能已移除
 

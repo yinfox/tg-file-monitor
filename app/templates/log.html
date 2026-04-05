@@ -266,7 +266,7 @@
                             <div class="log-viewer-title"><i class="bi bi-terminal me-2"></i>实时日志输出</div>
                             <div class="log-meta-row mt-1">
                                 <span>来源: Telegram 采集进程</span>
-                                <span>自动滚动到底部</span>
+                                <span>默认定位顶部</span>
                                 <span>支持增量刷新</span>
                             </div>
                         </div>
@@ -303,9 +303,9 @@ const queueUpdatedAtEl = document.getElementById('queueUpdatedAt');
 const queueThrottleBadge = document.getElementById('queueThrottleBadge');
 const manualRefreshBtn = document.getElementById('manualRefreshBtn');
 
-function scrollToBottom() {
+function scrollToTop() {
     if (!logContainer) return;
-    logContainer.scrollTop = logContainer.scrollHeight;
+    logContainer.scrollTop = 0;
 }
 
 function updateQueueStats(stats) {
@@ -339,7 +339,7 @@ function refreshLog() {
             }
             if (data && data.changed && typeof data.log_output === 'string' && logContent) {
                 logContent.innerHTML = data.log_output;
-                scrollToBottom();
+                scrollToTop();
             }
         })
         .catch(error => console.error('日志刷新失败:', error));
@@ -388,7 +388,7 @@ if (manualRefreshBtn) {
     });
 }
 
-scrollToBottom();
+scrollToTop();
 updateQueueStats(initialQueueStats);
 
 if (autoRefresh) {
