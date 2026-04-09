@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.41-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.42-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.41`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.42`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.41
+y1nf0x/tg-file-monitor:0.5.42
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -395,7 +395,14 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.41 (2026-03-21) - 当前版本
+### v0.5.42 (2026-04-09) - 当前版本
+- ✅ 后台首页、配置页、文件同步页、追剧页与公共壳层继续统一为更轻的浅色玻璃风，登录/认证页也切回浅色样式
+- ✅ HDHive 链接解析补强 Open API 失败诊断；开启“允许 Open API 直链解锁”后，detail 接口失效时可直接走 unlock 兜底
+- ✅ Bot 修复 YouTube 等普通链接被误判为 115 分享码的问题，不再错误提示必须携带 `cid=123456`
+- ✅ 代理作用域归一化、URL 构造与 Telethon 代理构造收敛为共享模块，减少多入口逻辑漂移
+- ✅ 补充覆盖 HDHive / Proxy / Bot 链接识别 / UI smoke 的回归测试，发布前完整测试 discover 全部通过
+
+### v0.5.41 (2026-03-21)
 - ✅ 首页继续收口为“总览优先”，新增最近异常概览区，减少首页入口堆叠感
 - ✅ 配置区与运行区进一步去重，日志入口统一上收，运行卡只保留运行相关信息
 

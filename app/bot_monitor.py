@@ -13,11 +13,25 @@ from telethon import TelegramClient, events, functions, types
 from telethon.sessions import SQLiteSession
 import sys
 from dotenv import load_dotenv
-from urllib.parse import urlparse, urlunparse, quote
+from urllib.parse import urlparse, urlunparse
 
 # Add current directory to sys.path to find downloader_module when running from app directory
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 import re
+try:
+    from .proxy_helpers import (
+        build_proxy_url_from_scope_config as _build_proxy_url_from_scope_cfg,
+        build_telethon_proxy_from_scope_config as _build_telethon_proxy_from_scope_cfg,
+        extract_proxy_scope_config as _extract_proxy_scope_config,
+        normalize_proxy_scope as _shared_normalize_proxy_scope,
+    )
+except ImportError:
+    from proxy_helpers import (
+        build_proxy_url_from_scope_config as _build_proxy_url_from_scope_cfg,
+        build_telethon_proxy_from_scope_config as _build_telethon_proxy_from_scope_cfg,
+        extract_proxy_scope_config as _extract_proxy_scope_config,
+        normalize_proxy_scope as _shared_normalize_proxy_scope,
+    )
 
 from downloader_module import downloader
 try:
@@ -87,78 +101,21 @@ def load_config():
 
 
 def _normalize_proxy_scope(scope: str) -> str:
-    value = str(scope or "service").strip().lower()
-    aliases = {
-        "telegram": "telegram",
-        "tg": "telegram",
-        "telethon": "telegram",
-        "service": "service",
-        "hdhive": "service",
-        "tmdb": "service",
-        "downloader": "downloader",
-        "download": "downloader",
-    }
-    return aliases.get(value, "service")
+    return _shared_normalize_proxy_scope(scope)
 
 
 def _get_proxy_scope_config(config: dict, scope: str) -> dict:
-    proxy_cfg = config.get('proxy', {}) if isinstance(config, dict) else {}
-    if not isinstance(proxy_cfg, dict):
-        return {}
-
-    normalized_scope = _normalize_proxy_scope(scope)
-    legacy_keys = {"addr", "port", "username", "password"}
-    if legacy_keys & set(proxy_cfg.keys()):
-        if normalized_scope in ("telegram", "service"):
-            return {
-                "addr": str(proxy_cfg.get("addr") or "").strip(),
-                "port": str(proxy_cfg.get("port") or "").strip(),
-                "username": str(proxy_cfg.get("username") or "").strip(),
-                "password": str(proxy_cfg.get("password") or "").strip(),
-            }
-        return {}
-
-    scoped_cfg = proxy_cfg.get(normalized_scope, {})
-    if not isinstance(scoped_cfg, dict):
-        return {}
-    return {
-        "addr": str(scoped_cfg.get("addr") or "").strip(),
-        "port": str(scoped_cfg.get("port") or "").strip(),
-        "username": str(scoped_cfg.get("username") or "").strip(),
-        "password": str(scoped_cfg.get("password") or "").strip(),
-    }
+    return _extract_proxy_scope_config(config, scope, allow_legacy_proxy=True)
 
 
 def _build_proxy_url_from_config(config: dict, scope: str) -> str:
     proxy_cfg = _get_proxy_scope_config(config, scope)
-    addr = proxy_cfg.get('addr') or ''
-    port = proxy_cfg.get('port') or ''
-    if not addr or not port:
-        return ''
-    username = proxy_cfg.get('username') or ''
-    password = proxy_cfg.get('password') or ''
-    if username and password:
-        return f"http://{quote(username, safe='')}:{quote(password, safe='')}@{addr}:{port}"
-    if username:
-        return f"http://{quote(username, safe='')}@{addr}:{port}"
-    return f"http://{addr}:{port}"
+    return _build_proxy_url_from_scope_cfg(proxy_cfg) or ''
 
 
 def _build_telethon_proxy_from_config(config: dict):
     proxy_cfg = _get_proxy_scope_config(config, "telegram")
-    addr = proxy_cfg.get('addr') or ''
-    port = proxy_cfg.get('port') or ''
-    if not addr or not port:
-        return None
-    try:
-        return (
-            addr,
-            int(port),
-            proxy_cfg.get('username') or None,
-            proxy_cfg.get('password') or None,
-        )
-    except Exception:
-        return None
+    return _build_telethon_proxy_from_scope_cfg(proxy_cfg)
 
 
 def _should_send_queue_via_bot(cfg: dict) -> bool:
@@ -346,7 +303,11 @@ def _extract_115_share_link(text: str) -> str:
     m = _115_SHARE_URL_RE.search(text)
     if m:
         return m.group(0).rstrip(')>,.;!\"\'')
-    m = _115_SHARE_CODE_RE.search(text)
+
+    # Avoid treating non-115 URLs (for example YouTube share params like si=xxxx-xxxx)
+    # as bare 115 share codes. We only scan the non-URL remainder for raw share codes.
+    bare_text = re.sub(r'https?://\S+', ' ', text)
+    m = _115_SHARE_CODE_RE.search(bare_text)
     if m:
         return m.group(0)
     return ''

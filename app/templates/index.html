@@ -5,19 +5,19 @@
 {% block extra_head %}
 <style>
     .home-dashboard {
-        --home-page-ink: #132842;
-        --home-page-muted: #5f748b;
-        --console-ink: #10213a;
-        --console-ink-soft: #5f748b;
-        --console-line: rgba(108, 138, 171, 0.18);
-        --console-line-strong: rgba(77, 140, 202, 0.26);
-        --console-panel: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(241, 247, 252, 0.68));
-        --console-panel-soft: linear-gradient(180deg, rgba(255, 255, 255, 0.8), rgba(240, 246, 251, 0.66));
-        --console-shadow: 0 20px 38px rgba(15, 23, 42, 0.08);
+        --home-page-ink: #e8fbff;
+        --home-page-muted: #7da4c2;
+        --console-ink: #f4fdff;
+        --console-ink-soft: #7da4c2;
+        --console-line: rgba(63, 224, 255, 0.14);
+        --console-line-strong: rgba(0, 255, 198, 0.24);
+        --console-panel: linear-gradient(180deg, rgba(10, 19, 35, 0.92), rgba(8, 15, 28, 0.84));
+        --console-panel-soft: linear-gradient(180deg, rgba(12, 22, 40, 0.9), rgba(7, 14, 28, 0.82));
+        --console-shadow: 0 24px 44px rgba(0, 0, 0, 0.32);
         --console-mono: "JetBrains Mono", "SFMono-Regular", "SF Mono", "Roboto Mono", Consolas, "Liberation Mono", Menlo, monospace;
         display: flex;
         flex-direction: column;
-        gap: 1rem;
+        gap: 0.85rem;
         padding-bottom: 0.35rem;
     }
 
@@ -25,16 +25,15 @@
         position: relative;
         overflow: hidden;
         background:
-            radial-gradient(circle at 86% 14%, rgba(56, 189, 248, 0.24), transparent 24%),
-            radial-gradient(circle at 14% 16%, rgba(16, 185, 129, 0.16), transparent 22%),
-            radial-gradient(circle at 50% -12%, rgba(250, 204, 21, 0.09), transparent 24%),
-            radial-gradient(circle at 72% 84%, rgba(59, 130, 246, 0.16), transparent 24%),
-            linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 241, 249, 0.82));
-        border: 1px solid rgba(56, 189, 248, 0.16);
+            radial-gradient(circle at 86% 14%, rgba(0, 234, 255, 0.18), transparent 24%),
+            radial-gradient(circle at 14% 16%, rgba(0, 255, 198, 0.12), transparent 22%),
+            radial-gradient(circle at 72% 84%, rgba(255, 94, 207, 0.08), transparent 24%),
+            linear-gradient(135deg, rgba(9, 18, 34, 0.96), rgba(7, 13, 26, 0.92));
+        border: 1px solid rgba(63, 224, 255, 0.14);
         box-shadow:
-            0 24px 46px rgba(15, 23, 42, 0.08),
-            inset 0 1px 0 rgba(255, 255, 255, 0.56),
-            inset 0 -1px 0 rgba(14, 165, 233, 0.04);
+            0 26px 48px rgba(0, 0, 0, 0.34),
+            inset 0 1px 0 rgba(148, 224, 255, 0.06),
+            inset 0 -1px 0 rgba(0, 234, 255, 0.04);
     }
 
     .home-hero::before,
@@ -49,21 +48,21 @@
     .home-hero::before {
         inset: 0;
         background:
-            linear-gradient(rgba(111, 168, 220, 0.08) 1px, transparent 1px),
-            linear-gradient(90deg, rgba(111, 168, 220, 0.08) 1px, transparent 1px);
+            linear-gradient(rgba(44, 214, 255, 0.1) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(44, 214, 255, 0.1) 1px, transparent 1px);
         background-size: 28px 28px;
         mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.34), transparent 92%);
         -webkit-mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.34), transparent 92%);
-        opacity: 0.18;
+        opacity: 0.14;
     }
 
     .home-hero::after {
         inset: auto 0 0 0;
         height: 132px;
         background:
-            linear-gradient(180deg, transparent, rgba(14, 165, 233, 0.08)),
-            linear-gradient(90deg, transparent, rgba(94, 234, 212, 0.12), transparent);
-        opacity: 0.82;
+            linear-gradient(180deg, transparent, rgba(0, 234, 255, 0.08)),
+            linear-gradient(90deg, transparent, rgba(0, 255, 198, 0.1), transparent);
+        opacity: 0.64;
     }
 
     .home-hero .card-body {
@@ -72,175 +71,290 @@
     }
 
     .home-kicker {
-        font-size: 0.72rem;
+        font-size: 0.64rem;
         font-weight: 700;
         letter-spacing: 0.12em;
         text-transform: uppercase;
-        color: #0f766e;
+        color: #00ffc6;
         font-family: var(--console-mono);
-        margin-bottom: 0.25rem;
+        margin: 0;
+        padding: 0.16rem 0.42rem;
+        border-radius: 999px;
+        background: rgba(8, 18, 34, 0.82);
+        border: 1px solid rgba(0, 255, 198, 0.12);
         text-shadow: none;
     }
 
     .home-hero-title {
         margin: 0;
-        font-size: 1.5rem;
-        line-height: 1.12;
+        font-size: 1.22rem;
+        line-height: 1.06;
         font-weight: 800;
         color: var(--console-ink);
         text-shadow: none;
-        max-width: 16ch;
+        max-width: none;
     }
 
     .home-hero-desc {
-        margin-top: 0.45rem;
+        margin: 0;
         color: var(--console-ink-soft);
-        font-size: 0.86rem;
-        line-height: 1.5;
-        max-width: 58ch;
-        text-wrap: balance;
+        font-size: 0.76rem;
+        line-height: 1.34;
+        max-width: 44ch;
+        text-align: center;
+        align-self: center;
     }
 
     .home-hero-grid {
-        display: grid;
-        grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
-        gap: 1rem;
-        align-items: start;
+        display: flex;
+        flex-direction: column;
+        gap: 0.65rem;
     }
 
-    .home-chip-row {
+    .home-hero-head {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.45rem;
-        margin-top: 0.75rem;
+        align-items: center;
+        justify-content: center;
+        gap: 0.7rem;
     }
 
-    .home-chip {
+    .home-hero-copy {
+        min-width: 0;
         display: inline-flex;
         align-items: center;
-        gap: 0.32rem;
-        padding: 0.28rem 0.68rem;
-        border-radius: 999px;
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(243, 247, 251, 0.74));
-        border: 1px solid rgba(130, 154, 181, 0.16);
-        box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.5),
-            0 8px 16px rgba(15, 23, 42, 0.05);
-        color: #31465c;
-        font-size: 0.74rem;
-        font-weight: 700;
-        font-family: var(--console-mono);
-        letter-spacing: 0.02em;
+        gap: 0.45rem;
     }
 
-    .home-chip.is-on {
-        background: linear-gradient(180deg, rgba(16, 185, 129, 0.12), rgba(16, 185, 129, 0.08));
-        border-color: rgba(16, 185, 129, 0.18);
-        color: #047857;
-    }
-
-    .home-chip.is-off {
-        background: linear-gradient(180deg, rgba(241, 245, 249, 0.88), rgba(241, 245, 249, 0.74));
-        border-color: rgba(148, 163, 184, 0.16);
-        color: #64748b;
-    }
-
-    .home-control-card {
+    .home-hero-visual {
         position: relative;
         overflow: hidden;
-        border: 1px solid var(--console-line);
-        background: var(--console-panel-soft);
-        border-radius: 1rem;
-        padding: 1rem;
+        border-radius: 0.95rem;
+        border: 1px solid rgba(63, 224, 255, 0.14);
+        background:
+            radial-gradient(circle at top right, rgba(0, 234, 255, 0.14), transparent 32%),
+            linear-gradient(180deg, rgba(10, 20, 38, 0.94), rgba(7, 14, 28, 0.86));
         box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.56),
-            0 14px 28px rgba(15, 23, 42, 0.06);
-        backdrop-filter: blur(16px);
-        -webkit-backdrop-filter: blur(16px);
+            inset 0 1px 0 rgba(148, 224, 255, 0.06),
+            0 14px 30px rgba(0, 0, 0, 0.22);
+        padding: 0.7rem;
+        width: 100%;
     }
 
-    .home-control-card::before {
+    .home-hero-visual::before {
         content: "";
         position: absolute;
-        inset: 0 0 auto 0;
-        height: 3px;
-        background: linear-gradient(90deg, #22d3ee, rgba(34, 211, 238, 0));
-        opacity: 0.9;
-    }
-
-    .home-control-card::after {
-        content: "";
-        position: absolute;
-        inset: auto 1rem 1rem auto;
-        width: 110px;
-        height: 110px;
-        border-radius: 50%;
-        background: radial-gradient(circle, rgba(56, 189, 248, 0.12), transparent 72%);
-        opacity: 0.64;
+        inset: 0;
+        background:
+            linear-gradient(rgba(44, 214, 255, 0.08) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(44, 214, 255, 0.08) 1px, transparent 1px);
+        background-size: 24px 24px;
+        opacity: 0.18;
         pointer-events: none;
     }
 
-    .home-control-title {
-        margin-bottom: 0.7rem;
-        font-size: 0.82rem;
-        font-weight: 800;
-        color: var(--console-ink);
+    .hero-system-map {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.5rem;
+        z-index: 1;
+    }
+
+    .hero-node {
+        position: relative;
+        overflow: hidden;
+        border-radius: 0.9rem;
+        padding: 0.62rem 0.68rem;
+        border: 1px solid rgba(63, 224, 255, 0.1);
+        background: linear-gradient(180deg, rgba(12, 24, 44, 0.92), rgba(9, 18, 34, 0.86));
+        box-shadow: inset 0 1px 0 rgba(148, 224, 255, 0.04);
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        min-height: 76px;
+    }
+
+    .hero-node::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 3px;
+        background: linear-gradient(180deg, var(--hero-accent, rgba(56, 189, 248, 0.8)), transparent 78%);
+        opacity: 0.8;
+    }
+
+    .hero-node.is-ok {
+        --hero-accent: #10b981;
+    }
+
+    .hero-node.is-warn {
+        --hero-accent: #f59e0b;
+    }
+
+    .hero-node.is-alert {
+        --hero-accent: #ef4444;
+    }
+
+    .hero-node-label {
+        font-size: 0.6rem;
+        font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
+        color: var(--console-ink-soft);
         font-family: var(--console-mono);
     }
 
-    .home-control-stack {
+    .hero-node-value {
         display: flex;
-        flex-direction: column;
-        gap: 0.75rem;
-    }
-
-    .home-control-card .text-muted,
-    .home-control-card label {
-        color: var(--console-ink-soft) !important;
-    }
-
-    .home-control-card .text-dark {
-        color: var(--console-ink) !important;
-    }
-
-    .home-control-card .form-select {
-        border-color: rgba(111, 168, 220, 0.18);
-        background-color: rgba(255, 255, 255, 0.84);
+        align-items: center;
+        gap: 0.38rem;
+        font-size: 0.84rem;
+        font-weight: 800;
         color: var(--console-ink);
+    }
+
+    .hero-node-value i {
+        color: var(--hero-accent, #38bdf8);
+    }
+
+    .hero-node-track {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.14rem;
+    }
+
+    .hero-node-track span {
+        height: 5px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+    }
+
+    .hero-node-track span.is-on {
+        background: linear-gradient(90deg, var(--hero-accent, #38bdf8), rgba(255, 255, 255, 0.82));
+    }
+
+    .home-hero-toolbar {
+        display: inline-flex;
+        flex-wrap: nowrap;
+        justify-content: center;
+        align-items: center;
+        align-self: center;
+        width: fit-content;
+        max-width: 100%;
+        gap: 0;
+        padding: 0.18rem;
+        border-radius: 999px;
+        border: 1px solid rgba(63, 224, 255, 0.14);
+        background: linear-gradient(180deg, rgba(10, 21, 39, 0.94), rgba(8, 16, 30, 0.88));
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.26);
+        flex-shrink: 0;
+    }
+
+    .home-toolbar-item {
+        display: flex;
+        align-items: center;
+        gap: 0.34rem;
+        min-height: 32px;
+        padding: 0.18rem 0.46rem;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        border-radius: 0;
+        position: relative;
+    }
+
+    .home-toolbar-item + .home-toolbar-item {
+        margin-left: 0.14rem;
+        padding-left: 0.62rem;
+    }
+
+    .home-toolbar-item + .home-toolbar-item::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 0.28rem;
+        bottom: 0.28rem;
+        width: 1px;
+        background: rgba(63, 224, 255, 0.14);
+    }
+
+    .home-toolbar-item label,
+    .home-toolbar-item .text-muted {
+        margin: 0;
+        color: #d9f8ff !important;
+        font-size: 0.64rem;
+        white-space: nowrap;
+    }
+
+    .home-hero-toolbar .form-check {
+        margin: 0;
+    }
+
+    .home-hero-toolbar .form-check-input {
+        width: 2rem;
+        height: 1rem;
+        background-color: rgba(15, 29, 51, 0.96);
+        border-color: rgba(63, 224, 255, 0.22);
+        box-shadow: inset 0 0 0 1px rgba(0, 234, 255, 0.06);
+    }
+
+    .home-hero-toolbar .form-check-input:checked {
+        background-color: #00eaff;
+        border-color: #00eaff;
+        box-shadow: 0 0 12px rgba(0, 234, 255, 0.22);
+    }
+
+    .home-hero-toolbar .badge.bg-secondary {
+        background: rgba(27, 42, 67, 0.96) !important;
+        color: #eefcff !important;
+        border: 1px solid rgba(63, 224, 255, 0.12);
+    }
+
+    .home-hero-toolbar .badge.bg-success {
+        background: rgba(0, 255, 198, 0.18) !important;
+        color: #ecfff8 !important;
+        border: 1px solid rgba(0, 255, 198, 0.18);
+    }
+
+    .home-toolbar-item .form-select {
+        width: auto;
+        min-width: 74px;
+        padding-top: 0.12rem;
+        padding-bottom: 0.12rem;
+        font-size: 0.88rem;
+        border-color: rgba(63, 224, 255, 0.14);
+        background-color: rgba(7, 14, 28, 0.86);
+        color: #ecfdff;
         box-shadow: none;
     }
 
-    .home-control-card .form-select:focus {
+    .home-toolbar-item .form-select:focus {
         border-color: rgba(34, 211, 238, 0.34);
-        box-shadow: 0 0 0 0.18rem rgba(34, 211, 238, 0.12);
+        box-shadow: 0 0 0 0.16rem rgba(34, 211, 238, 0.12);
     }
 
-    .home-control-card .form-check-input {
-        background-color: rgba(255, 255, 255, 0.92);
-        border-color: rgba(111, 168, 220, 0.26);
+    .home-toolbar-item.is-status {
+        align-items: center;
+        gap: 0.28rem;
+        min-height: 32px;
+        padding: 0.14rem 0.4rem 0.14rem 0.58rem;
+        background: transparent;
+    }
+
+    .home-toolbar-item.is-status strong {
+        color: var(--console-ink);
+        font-size: 0.64rem;
+        font-weight: 800;
+    }
+
+    .home-toolbar-item.is-status .badge {
+        border: 1px solid rgba(63, 224, 255, 0.14);
+        background: rgba(0, 234, 255, 0.16) !important;
+        color: #dbfbff !important;
         box-shadow: none;
-    }
-
-    .home-control-card .form-check-input:checked {
-        background-color: #06b6d4;
-        border-color: #06b6d4;
-    }
-
-    .home-control-card .badge {
-        border: 1px solid rgba(111, 168, 220, 0.16);
-        box-shadow: none;
-    }
-
-    .home-control-card .badge.bg-success {
-        background: rgba(16, 185, 129, 0.12) !important;
-        color: #047857;
-    }
-
-    .home-control-card .badge.bg-secondary {
-        background: rgba(148, 163, 184, 0.18) !important;
-        color: #64748b;
+        padding: 0.15rem 0.36rem;
+        font-size: 0.62rem;
     }
 
     .home-section-header {
@@ -262,7 +376,7 @@
         bottom: 0;
         width: min(240px, 100%);
         height: 1px;
-        background: linear-gradient(90deg, rgba(15, 118, 110, 0.34), transparent);
+        background: linear-gradient(90deg, rgba(0, 255, 198, 0.34), transparent);
     }
 
     .home-section-label {
@@ -271,13 +385,13 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #0f766e;
+        color: #00ffc6;
         font-family: var(--console-mono);
     }
 
     .home-section-header h3 {
         margin: 0;
-        font-size: 1.05rem;
+        font-size: 0.96rem;
         font-weight: 800;
         color: var(--home-page-ink);
     }
@@ -302,20 +416,260 @@
         gap: 0.42rem;
         padding: 0.42rem 0.72rem;
         border-radius: 999px;
-        border: 1px solid rgba(130, 154, 181, 0.18);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(243, 247, 251, 0.8));
-        color: #29435d;
+        border: 1px solid rgba(63, 224, 255, 0.14);
+        background: linear-gradient(180deg, rgba(10, 21, 39, 0.92), rgba(8, 16, 30, 0.84));
+        color: #9ec8e8;
         text-decoration: none;
         font-size: 0.74rem;
         font-weight: 700;
-        box-shadow: 0 8px 16px rgba(15, 23, 42, 0.04);
+        box-shadow: 0 12px 22px rgba(0, 0, 0, 0.2);
     }
 
     .home-section-tool:hover,
     .home-section-tool:focus {
-        color: #10213a;
-        border-color: rgba(14, 165, 233, 0.22);
-        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(247, 250, 252, 0.9));
+        color: #f0fdff;
+        border-color: rgba(0, 234, 255, 0.2);
+        background: linear-gradient(180deg, rgba(13, 29, 52, 0.96), rgba(10, 20, 38, 0.9));
+    }
+
+    .module-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 1rem;
+    }
+
+    .module-card {
+        position: relative;
+        overflow: hidden;
+        border-radius: 1rem;
+        border: 1px solid var(--module-border, rgba(63, 224, 255, 0.14));
+        background:
+            radial-gradient(circle at top right, var(--module-glow, rgba(0, 234, 255, 0.14)), transparent 34%),
+            linear-gradient(180deg, rgba(10, 19, 35, 0.94), rgba(7, 14, 28, 0.88));
+        box-shadow:
+            0 22px 40px rgba(0, 0, 0, 0.28),
+            inset 0 1px 0 rgba(148, 224, 255, 0.05);
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+        min-height: 100%;
+    }
+
+    .module-card::before {
+        content: "";
+        position: absolute;
+        inset: 0 0 auto 0;
+        height: 4px;
+        background: linear-gradient(90deg, var(--module-accent, #2563eb), rgba(255, 255, 255, 0.2));
+        opacity: 0.95;
+    }
+
+    .module-card.telegram {
+        --module-accent: #2563eb;
+        --module-border: rgba(59, 130, 246, 0.22);
+        --module-glow: rgba(59, 130, 246, 0.18);
+    }
+
+    .module-card.file {
+        --module-accent: #ea580c;
+        --module-border: rgba(249, 115, 22, 0.22);
+        --module-glow: rgba(249, 115, 22, 0.16);
+    }
+
+    .module-card.bot {
+        --module-accent: #0284c7;
+        --module-border: rgba(14, 165, 233, 0.22);
+        --module-glow: rgba(14, 165, 233, 0.16);
+    }
+
+    .module-card.drama {
+        --module-accent: #0f766e;
+        --module-border: rgba(20, 184, 166, 0.22);
+        --module-glow: rgba(20, 184, 166, 0.16);
+    }
+
+    .module-card-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.8rem;
+    }
+
+    .module-card-head {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        min-width: 0;
+    }
+
+    .module-card-icon {
+        width: 46px;
+        height: 46px;
+        flex-shrink: 0;
+        border-radius: 1rem;
+        display: grid;
+        place-items: center;
+        background:
+            radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.12)),
+            linear-gradient(135deg, var(--module-accent, #2563eb), rgba(255, 255, 255, 0.1));
+        color: #fff;
+        box-shadow: 0 14px 24px rgba(15, 23, 42, 0.1);
+    }
+
+    .module-card-icon i {
+        font-size: 1.02rem;
+    }
+
+    .module-card-kicker {
+        font-size: 0.64rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--console-ink-soft);
+        font-family: var(--console-mono);
+        margin-bottom: 0.14rem;
+    }
+
+    .module-card-title {
+        font-size: 0.98rem;
+        font-weight: 800;
+        color: var(--console-ink);
+        line-height: 1.15;
+    }
+
+    .module-summary {
+        font-size: 0.86rem;
+        font-weight: 800;
+        color: #f0fdff;
+        line-height: 1.35;
+        min-height: 2.5em;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+    }
+
+    .module-track {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.22rem;
+    }
+
+    .module-track span {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+    }
+
+    .module-track span.is-on {
+        background: linear-gradient(90deg, var(--module-accent, #2563eb), rgba(255, 255, 255, 0.92));
+    }
+
+    .module-metrics {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.55rem;
+    }
+
+    .module-metric {
+        position: relative;
+        overflow: hidden;
+        min-width: 0;
+        padding: 0.62rem 0.72rem;
+        border-radius: 0.85rem;
+        background: linear-gradient(180deg, rgba(12, 24, 44, 0.92), rgba(8, 16, 30, 0.84));
+        border: 1px solid rgba(63, 224, 255, 0.1);
+        box-shadow: inset 0 1px 0 rgba(148, 224, 255, 0.04);
+    }
+
+    .module-metric::before {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 2px;
+        background: linear-gradient(180deg, var(--module-accent, rgba(56, 189, 248, 0.8)), transparent 74%);
+        opacity: 0.46;
+    }
+
+    .module-metric-label {
+        font-size: 0.66rem;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--console-ink-soft);
+        font-family: var(--console-mono);
+    }
+
+    .module-metric-value {
+        margin-top: 0.16rem;
+        font-size: 0.8rem;
+        font-weight: 800;
+        color: #f0fdff;
+        line-height: 1.35;
+        word-break: break-word;
+    }
+
+    .module-metric-value.status-result-badge {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.22rem 0.52rem;
+        border-radius: 999px;
+        font-size: 0.72rem;
+        line-height: 1.2;
+    }
+
+    .status-result-badge {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0.24rem 0.56rem;
+        border-radius: 999px;
+        border: 1px solid rgba(63, 224, 255, 0.14);
+        background: rgba(10, 21, 39, 0.96);
+        color: #eefcff;
+        font-size: 0.72rem;
+        font-weight: 800;
+        line-height: 1.2;
+        box-shadow: inset 0 1px 0 rgba(148, 224, 255, 0.04);
+    }
+
+    .status-result-badge.is-success {
+        background: rgba(0, 255, 198, 0.14);
+        border-color: rgba(0, 255, 198, 0.2);
+        color: #e6fff7;
+    }
+
+    .status-result-badge.is-warning {
+        background: rgba(255, 198, 87, 0.18);
+        border-color: rgba(255, 198, 87, 0.24);
+        color: #fff1cf;
+    }
+
+    .status-result-badge.is-error {
+        background: rgba(255, 94, 207, 0.16);
+        border-color: rgba(255, 94, 207, 0.22);
+        color: #ffe2f4;
+    }
+
+    .status-result-badge.is-muted {
+        background: rgba(39, 58, 83, 0.92);
+        border-color: rgba(130, 177, 210, 0.16);
+        color: #d3e6f5;
+    }
+
+    .module-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: auto;
+    }
+
+    .module-actions .btn {
+        border-radius: 999px;
+        font-weight: 700;
+        padding-left: 0.8rem;
+        padding-right: 0.8rem;
     }
 
     .overview-grid {
@@ -380,17 +734,56 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: 0.75rem;
-        margin-bottom: 0.8rem;
+        margin-bottom: 0.55rem;
     }
 
-    .overview-card-eyebrow {
-        margin-bottom: 0.18rem;
-        font-size: 0.7rem;
+    .overview-card-head {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        min-width: 0;
+    }
+
+    .overview-card-icon {
+        position: relative;
+        width: 46px;
+        height: 46px;
+        flex-shrink: 0;
+        border-radius: 1rem;
+        display: grid;
+        place-items: center;
+        background:
+            linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(241, 247, 252, 0.84)),
+            rgba(255, 255, 255, 0.8);
+        border: 1px solid rgba(130, 154, 181, 0.16);
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.72),
+            0 12px 22px rgba(15, 23, 42, 0.05);
+    }
+
+    .overview-card-icon::after {
+        content: "";
+        position: absolute;
+        inset: 6px;
+        border-radius: 0.8rem;
+        background: radial-gradient(circle, var(--overview-glow, rgba(56, 189, 248, 0.18)), transparent 72%);
+        opacity: 0.9;
+    }
+
+    .overview-card-icon i {
+        position: relative;
+        z-index: 1;
+        font-size: 1.05rem;
+    }
+
+    .overview-card-kicker {
+        font-size: 0.64rem;
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
         color: var(--console-ink-soft);
         font-family: var(--console-mono);
+        margin-bottom: 0.14rem;
     }
 
     .overview-card-title {
@@ -409,24 +802,69 @@
         box-shadow: none;
     }
 
+    .overview-card-signal {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.22rem;
+        margin-top: 0.72rem;
+    }
+
+    .overview-card-signal span {
+        height: 7px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+    }
+
+    .overview-card-signal span.is-on {
+        background: linear-gradient(90deg, var(--overview-accent, #2563eb), rgba(255, 255, 255, 0.92));
+    }
+
     .overview-card-main {
-        min-height: 2.6em;
-        font-size: 0.92rem;
+        min-height: 0;
+        font-size: 0.88rem;
         font-weight: 800;
         color: var(--console-ink);
-        line-height: 1.38;
+        line-height: 1.42;
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
     }
 
-    .overview-card-note {
-        margin-top: 0.42rem;
-        font-size: 0.78rem;
+    .overview-card-chipline {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.38rem;
+        margin-top: 0.62rem;
+    }
+
+    .overview-card-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        padding: 0.28rem 0.55rem;
+        border-radius: 999px;
+        border: 1px solid rgba(130, 154, 181, 0.14);
+        background: rgba(255, 255, 255, 0.76);
+        min-width: 0;
+        max-width: 100%;
+    }
+
+    .overview-card-chip span {
         color: var(--console-ink-soft);
-        line-height: 1.5;
+        font-family: var(--console-mono);
+        font-size: 0.68rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        flex-shrink: 0;
     }
 
-    .overview-card-note strong {
+    .overview-card-chip strong {
         color: var(--console-ink);
         font-weight: 800;
+        font-size: 0.74rem;
+        word-break: break-word;
+        min-width: 0;
     }
 
     .portal-grid {
@@ -439,9 +877,9 @@
         position: relative;
         overflow: hidden;
         border-radius: 1.05rem;
-        padding: 1rem;
+        padding: 0.9rem;
         color: var(--console-ink);
-        min-height: 250px;
+        min-height: 0;
         border: 1px solid var(--portal-border, var(--console-line));
         background:
             radial-gradient(circle at top right, var(--portal-glow, rgba(56, 189, 248, 0.14)), transparent 34%),
@@ -514,7 +952,32 @@
         align-items: center;
         justify-content: space-between;
         gap: 0.75rem;
-        margin-bottom: 0.95rem;
+        margin-bottom: 0.72rem;
+    }
+
+    .portal-head-main {
+        display: flex;
+        align-items: center;
+        gap: 0.78rem;
+        min-width: 0;
+    }
+
+    .portal-icon {
+        width: 48px;
+        height: 48px;
+        flex-shrink: 0;
+        border-radius: 1rem;
+        display: grid;
+        place-items: center;
+        background:
+            radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.18)),
+            linear-gradient(135deg, var(--portal-accent, #2563eb), var(--portal-accent-strong, #1d4ed8));
+        color: #fff;
+        box-shadow: 0 14px 24px rgba(15, 23, 42, 0.12);
+    }
+
+    .portal-icon i {
+        font-size: 1.05rem;
     }
 
     .portal-title {
@@ -527,9 +990,26 @@
 
     .portal-subtitle {
         color: var(--console-ink-soft);
-        font-size: 0.76rem;
-        line-height: 1.5;
-        max-width: 28ch;
+        font-size: 0.74rem;
+        line-height: 1.42;
+        max-width: 24ch;
+    }
+
+    .portal-visual {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.22rem;
+        margin-top: 0.72rem;
+    }
+
+    .portal-visual span {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+    }
+
+    .portal-visual span.is-on {
+        background: linear-gradient(90deg, var(--portal-accent, #2563eb), rgba(255, 255, 255, 0.94));
     }
 
     .portal-count-badge {
@@ -545,8 +1025,8 @@
 
     .portal-meta {
         display: grid;
-        gap: 0.45rem;
-        margin-top: 0.85rem;
+        gap: 0.35rem;
+        margin-top: 0.65rem;
     }
 
     .portal-meta-item {
@@ -582,7 +1062,7 @@
         display: flex;
         flex-wrap: wrap;
         gap: 0.55rem;
-        margin-top: 1rem;
+        margin-top: 0.8rem;
     }
 
     .portal-actions .btn {
@@ -725,6 +1205,48 @@
         padding: 0.95rem 1rem 1rem;
     }
 
+    .status-visual-row {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        margin-bottom: 0.85rem;
+    }
+
+    .status-orb {
+        width: 48px;
+        height: 48px;
+        flex-shrink: 0;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background:
+            radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.12)),
+            linear-gradient(135deg, var(--status-accent, #2563eb), var(--status-accent-strong, #1d4ed8));
+        color: #fff;
+        box-shadow: 0 14px 26px rgba(15, 23, 42, 0.12);
+    }
+
+    .status-orb i {
+        font-size: 1rem;
+    }
+
+    .status-track {
+        flex: 1;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 0.24rem;
+    }
+
+    .status-track span {
+        height: 8px;
+        border-radius: 999px;
+        background: rgba(148, 163, 184, 0.18);
+    }
+
+    .status-track span.is-on {
+        background: linear-gradient(90deg, var(--status-accent, #2563eb), rgba(255, 255, 255, 0.94));
+    }
+
     .status-actions {
         display: grid;
         gap: 0.5rem;
@@ -798,43 +1320,11 @@
     }
 
     .status-subitem-value.status-result-badge {
-        display: inline-flex;
-        align-items: center;
-        justify-content: flex-start;
         padding: 0.28rem 0.65rem;
-        border-radius: 999px;
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        background: linear-gradient(180deg, rgba(248, 250, 252, 0.92), rgba(241, 245, 249, 0.88));
         font-size: 0.75rem;
-        font-weight: 800;
-        line-height: 1.2;
         max-width: 100%;
         text-align: left;
         white-space: normal;
-    }
-
-    .status-subitem-value.status-result-badge.is-success {
-        background: rgba(16, 185, 129, 0.14);
-        border-color: rgba(16, 185, 129, 0.18);
-        color: #047857;
-    }
-
-    .status-subitem-value.status-result-badge.is-warning {
-        background: rgba(245, 158, 11, 0.16);
-        border-color: rgba(245, 158, 11, 0.18);
-        color: #b45309;
-    }
-
-    .status-subitem-value.status-result-badge.is-error {
-        background: rgba(239, 68, 68, 0.14);
-        border-color: rgba(239, 68, 68, 0.18);
-        color: #b91c1c;
-    }
-
-    .status-subitem-value.status-result-badge.is-muted {
-        background: rgba(148, 163, 184, 0.16);
-        border-color: rgba(148, 163, 184, 0.18);
-        color: #64748b;
     }
 
     .status-note {
@@ -863,10 +1353,252 @@
     }
 
     .home-dashboard .text-danger.opacity-75 {
-        color: #f59e0b !important;
+        color: #dc2626 !important;
+    }
+
+    /* Light glass readability pass */
+    .home-dashboard {
+        --home-page-ink: #17314c;
+        --home-page-muted: #617a93;
+        --console-ink: #16304a;
+        --console-ink-soft: #69829a;
+        --console-line: rgba(125, 160, 190, 0.16);
+        --console-line-strong: rgba(14, 165, 233, 0.22);
+    }
+
+    .home-dashboard .text-muted {
+        color: var(--home-page-muted) !important;
+    }
+
+    .home-hero {
+        background:
+            radial-gradient(circle at 86% 14%, rgba(84, 208, 255, 0.18), transparent 24%),
+            radial-gradient(circle at 14% 16%, rgba(94, 242, 202, 0.1), transparent 22%),
+            radial-gradient(circle at 72% 84%, rgba(255, 182, 214, 0.08), transparent 24%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(236, 244, 252, 0.88));
+        border: 1px solid rgba(125, 160, 190, 0.18);
+        box-shadow:
+            0 18px 36px rgba(37, 78, 122, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.68);
+    }
+
+    .home-hero::before {
+        background:
+            linear-gradient(rgba(120, 163, 201, 0.08) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(120, 163, 201, 0.08) 1px, transparent 1px);
+        opacity: 0.22;
+    }
+
+    .home-hero::after {
+        background:
+            linear-gradient(180deg, transparent, rgba(84, 208, 255, 0.08)),
+            linear-gradient(90deg, transparent, rgba(84, 208, 255, 0.1), transparent);
+        opacity: 0.42;
+    }
+
+    .home-kicker {
+        color: #0b7bb5;
+        background: rgba(255, 255, 255, 0.72);
+        border-color: rgba(14, 165, 233, 0.14);
+    }
+
+    .home-hero-title {
+        color: #16304a;
+    }
+
+    .home-hero-title i,
+    .home-section-tool i {
+        color: #2563eb;
+    }
+
+    .home-hero-desc {
+        color: #5f7892;
+    }
+
+    .home-hero-visual {
+        border: 1px solid rgba(125, 160, 190, 0.16);
+        background:
+            radial-gradient(circle at top right, rgba(84, 208, 255, 0.14), transparent 32%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(238, 245, 252, 0.8));
+        box-shadow:
+            inset 0 1px 0 rgba(255, 255, 255, 0.66),
+            0 14px 28px rgba(37, 78, 122, 0.06);
+    }
+
+    .home-hero-visual::before {
+        background:
+            linear-gradient(rgba(120, 163, 201, 0.07) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(120, 163, 201, 0.07) 1px, transparent 1px);
+        opacity: 0.22;
+    }
+
+    .hero-node {
+        border: 1px solid rgba(125, 160, 190, 0.16);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(241, 247, 252, 0.8));
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.66);
+    }
+
+    .home-hero-toolbar {
+        border: 1px solid rgba(125, 160, 190, 0.18);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(241, 247, 252, 0.82));
+        box-shadow: 0 12px 22px rgba(37, 78, 122, 0.08);
+    }
+
+    .home-toolbar-item + .home-toolbar-item::before {
+        background: rgba(125, 160, 190, 0.18);
+    }
+
+    .home-toolbar-item label,
+    .home-toolbar-item .text-muted {
+        color: #45607c !important;
+    }
+
+    .home-hero-toolbar .form-check-input {
+        background-color: rgba(255, 255, 255, 0.9);
+        border-color: rgba(125, 160, 190, 0.22);
+        box-shadow: none;
+    }
+
+    .home-hero-toolbar .badge.bg-secondary {
+        background: rgba(235, 242, 249, 0.92) !important;
+        color: #23405d !important;
+        border: 1px solid rgba(125, 160, 190, 0.16);
+    }
+
+    .home-hero-toolbar .badge.bg-success {
+        background: rgba(16, 185, 129, 0.14) !important;
+        color: #0f8b6a !important;
+        border: 1px solid rgba(16, 185, 129, 0.18);
+    }
+
+    .home-toolbar-item .form-select {
+        background-color: rgba(255, 255, 255, 0.84);
+        color: #23405d;
+        border-color: rgba(125, 160, 190, 0.18);
+    }
+
+    .home-toolbar-item.is-status strong {
+        color: #17314c;
+    }
+
+    .home-toolbar-item.is-status .badge {
+        border: 1px solid rgba(125, 160, 190, 0.16);
+        background: rgba(84, 208, 255, 0.12) !important;
+        color: #17314c !important;
+    }
+
+    .home-section-header::after {
+        background: linear-gradient(90deg, rgba(14, 165, 233, 0.24), transparent);
+    }
+
+    .home-section-label {
+        color: #64748b;
+    }
+
+    .home-section-tool {
+        border: 1px solid rgba(125, 160, 190, 0.18);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(242, 247, 252, 0.78));
+        color: #4d667f;
+        box-shadow: 0 10px 20px rgba(37, 78, 122, 0.08);
+    }
+
+    .home-section-tool:hover,
+    .home-section-tool:focus {
+        color: #17314c;
+        border-color: rgba(14, 165, 233, 0.22);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(238, 245, 252, 0.86));
+    }
+
+    .module-card {
+        background:
+            radial-gradient(circle at top right, var(--module-glow, rgba(84, 208, 255, 0.12)), transparent 34%),
+            linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(240, 246, 252, 0.82));
+        box-shadow:
+            0 18px 34px rgba(37, 78, 122, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.66);
+    }
+
+    .module-card.telegram,
+    .module-card.file,
+    .module-card.bot,
+    .module-card.drama {
+        --module-accent: #64748b;
+        --module-border: rgba(125, 160, 190, 0.18);
+        --module-glow: rgba(125, 160, 190, 0.1);
+    }
+
+    .module-card-icon {
+        background:
+            radial-gradient(circle at 30% 30%, rgba(255, 255, 255, 0.9), rgba(255, 255, 255, 0.16)),
+            linear-gradient(135deg, #2563eb, #1d4ed8);
+    }
+
+    .module-card-kicker {
+        color: #69829a;
+    }
+
+    .module-summary,
+    .module-metric-value {
+        color: #17314c;
+    }
+
+    .module-metric {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(241, 247, 252, 0.76));
+        border: 1px solid rgba(125, 160, 190, 0.16);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.64);
+    }
+
+    .module-metric-label {
+        color: #69829a;
+    }
+
+    .status-result-badge {
+        border: 1px solid rgba(125, 160, 190, 0.16);
+        background: rgba(243, 248, 253, 0.96);
+        color: #23405d;
+        box-shadow: none;
+    }
+
+    .status-result-badge.is-success {
+        background: rgba(16, 185, 129, 0.14);
+        border-color: rgba(16, 185, 129, 0.18);
+        color: #0f8b6a;
+    }
+
+    .status-result-badge.is-warning {
+        background: rgba(220, 38, 38, 0.1);
+        border-color: rgba(220, 38, 38, 0.16);
+        color: #dc2626;
+    }
+
+    .status-result-badge.is-error {
+        background: rgba(220, 38, 38, 0.1);
+        border-color: rgba(220, 38, 38, 0.16);
+        color: #dc2626;
+    }
+
+    .status-result-badge.is-muted {
+        background: rgba(220, 38, 38, 0.08);
+        border-color: rgba(220, 38, 38, 0.14);
+        color: #dc2626;
+    }
+
+    .hero-node-track,
+    .module-track,
+    .overview-card-signal,
+    .portal-visual,
+    .status-track {
+        display: none;
+    }
+
+    .portal-card,
+    .status-card {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
     }
 
     @media (max-width: 1199.98px) {
+        .module-grid,
         .overview-grid {
             grid-template-columns: repeat(2, minmax(0, 1fr));
         }
@@ -877,13 +1609,27 @@
     }
 
     @media (max-width: 991.98px) {
-        .home-hero-grid,
         .status-grid {
             grid-template-columns: 1fr;
+        }
+
+        .home-hero-head {
+            flex-direction: column;
+        }
+
+        .home-hero-toolbar {
+            justify-content: flex-start;
+            align-self: flex-start;
+            flex-wrap: wrap;
+        }
+
+        .hero-system-map {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
     }
 
     @media (max-width: 767.98px) {
+        .module-grid,
         .overview-grid,
         .portal-grid {
             grid-template-columns: 1fr;
@@ -896,6 +1642,15 @@
 
         .home-section-tools {
             justify-content: flex-start;
+        }
+
+        .home-toolbar-item {
+            width: auto;
+            justify-content: flex-start;
+        }
+
+        .hero-system-map {
+            grid-template-columns: 1fr;
         }
 
         .status-subgrid {
@@ -923,12 +1678,10 @@
 {% set scheduler_summary = scheduler.get('last_summary') or {} %}
 {% set scheduler_last_result = scheduler_summary.get('result') or scheduler.get('last_message', '暂无') or '暂无' %}
 {% set scheduler_last_status = scheduler.get('last_status', '') %}
-{% set scheduler_last_result_class = 'is-muted' %}
+{% set scheduler_last_result_class = 'is-error' %}
 {% if scheduler_last_status == 'success' %}
     {% set scheduler_last_result_class = 'is-success' %}
-{% elif scheduler_last_status == 'warning' %}
-    {% set scheduler_last_result_class = 'is-warning' %}
-{% elif scheduler_last_status == 'error' %}
+{% elif scheduler_last_status == 'warning' or scheduler_last_status == 'error' %}
     {% set scheduler_last_result_class = 'is-error' %}
 {% endif %}
 {% set auth_status_badge_class = 'is-success' %}
@@ -937,49 +1690,52 @@
 {% endif %}
 {% set risk_status_badge_class = 'is-success' %}
 {% if not risk.get('enabled', True) %}
-    {% set risk_status_badge_class = 'is-warning' %}
+    {% set risk_status_badge_class = 'is-error' %}
 {% endif %}
 {% set tg_last_activity = (tg_last_log or {}).get('message') or '暂无' %}
 {% set file_last_blocked_reason = (download_risk_stats or {}).get('last_blocked_reason') or '暂无' %}
 {% set file_blocked_total = (download_risk_stats or {}).get('blocked_total', 0) %}
 {% set bot_last_error = (bot_log_insights or {}).get('last_error', {}).get('message') or '暂无' %}
-{% set bot_error_badge_class = 'is-muted' %}
+{% set bot_error_badge_class = 'is-success' %}
 {% set bot_error_badge_text = '暂无错误' %}
 {% if bot_last_error != '暂无' %}
     {% set bot_error_badge_class = 'is-error' %}
     {% set bot_error_badge_text = '最近有错误' %}
 {% endif %}
 {% set bot_last_activity = (bot_last_log or {}).get('message') or '暂无' %}
+{% set tg_last_activity_compact = tg_last_activity|replace('\n', ' ')|truncate(42, True) %}
+{% set file_last_blocked_reason_compact = file_last_blocked_reason|replace('\n', ' ')|truncate(42, True) %}
+{% set bot_last_error_compact = bot_last_error|replace('\n', ' ')|truncate(42, True) %}
+{% set bot_last_activity_compact = bot_last_activity|replace('\n', ' ')|truncate(42, True) %}
 {% set window_label = '全部' if (log_window_minutes or 0) == 0 else ('近' ~ log_window_minutes ~ '分钟') %}
 {% set scheduler_next_run = scheduler.get('next_run_at', '未启用') or '未启用' %}
+{% set scheduler_next_run_compact = scheduler_next_run|replace('\n', ' ')|truncate(32, True) %}
+{% set scheduler_last_result_compact = scheduler_last_result|replace('\n', ' ')|truncate(42, True) %}
 {% set auth_attention = auth_status == "未认证" or auth_status.startswith("认证失效") %}
 {% set file_attention = file_last_blocked_reason != '暂无' %}
 {% set bot_missing_token = not bot_token_id %}
 {% set scheduler_attention = scheduler_last_status in ['warning', 'error'] %}
+{% set bot_attention = bot_last_error != '暂无' or bot_missing_token %}
+{% set attention = namespace(total=0) %}
+{% if auth_attention %}{% set attention.total = attention.total + 1 %}{% endif %}
+{% if file_attention %}{% set attention.total = attention.total + 1 %}{% endif %}
+{% if bot_attention %}{% set attention.total = attention.total + 1 %}{% endif %}
+{% if scheduler_attention %}{% set attention.total = attention.total + 1 %}{% endif %}
 
 <div class="home-dashboard">
     <div class="card shadow-sm home-hero">
         <div class="card-body p-3 p-lg-4">
             <div class="home-hero-grid">
-                <div>
-                    <div class="home-kicker">总控台</div>
-                    <h2 class="home-hero-title"><i class="bi bi-speedometer2 me-2"></i>配置入口与运行状态一页集中</h2>
-                    <p class="home-hero-desc">首页先看总览和最近异常，再决定去配置中心还是运行区处理，避免所有入口重复铺满一整页。</p>
-
-                    <div class="home-chip-row">
-                        <span class="home-chip {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}is-off{% else %}is-on{% endif %}">Telegram {{ auth_status }}</span>
-                        <span class="home-chip {% if risk.get('enabled', True) %}is-on{% else %}is-off{% endif %}">风控 {% if risk.get('enabled', True) %}开启{% else %}关闭{% endif %}</span>
-                        <span class="home-chip {% if scheduler.get('enabled') %}is-on{% else %}is-off{% endif %}">追剧调度 {% if scheduler.get('enabled') %}开启{% else %}关闭{% endif %}</span>
+                <div class="home-hero-head">
+                    <div class="home-hero-copy">
+                        <h2 class="home-hero-title"><i class="bi bi-speedometer2 me-2"></i>控制台</h2>
                     </div>
-                </div>
 
-                <div class="home-control-card">
-                    <div class="home-control-title">快速控制</div>
-                    <div class="home-control-stack">
-                        <form action="{{ url_for('update_log_insights_window') }}" method="post" class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="small text-muted" for="logWindowSelect">统计窗口</label>
+                    <div class="home-hero-toolbar">
+                        <form action="{{ url_for('update_log_insights_window') }}" method="post" class="home-toolbar-item">
+                            <label for="logWindowSelect">窗口</label>
                             <select id="logWindowSelect" name="log_insights_window_minutes" class="form-select form-select-sm"
-                                    style="max-width: 110px;" onchange="this.form.submit()">
+                                    onchange="this.form.submit()">
                                 {% set current_window = log_window_minutes or 0 %}
                                 <option value="0" {% if current_window == 0 %}selected{% endif %}>全部</option>
                                 <option value="5" {% if current_window == 5 %}selected{% endif %}>5分钟</option>
@@ -989,8 +1745,8 @@
                             </select>
                         </form>
 
-                        <form action="{{ url_for('toggle_debug') }}" method="post" class="d-flex align-items-center justify-content-between gap-2">
-                            <label class="small text-muted" for="debug_mode_switch">调试日志</label>
+                        <form action="{{ url_for('toggle_debug') }}" method="post" class="home-toolbar-item">
+                            <label for="debug_mode_switch">调试</label>
                             <div class="d-flex align-items-center gap-2">
                                 <div class="form-check form-switch mb-0">
                                     <input class="form-check-input" type="checkbox" name="debug_mode" id="debug_mode_switch"
@@ -1003,405 +1759,221 @@
                             </div>
                         </form>
 
-                        <div class="small text-muted">
-                            当前主页统计窗口为 <span class="fw-bold text-dark">{{ window_label }}</span>。
+                        <div class="home-toolbar-item is-status">
+                            <span class="text-muted">{{ window_label }}</span>
+                            <span class="badge">待处理 {{ attention.total }}</span>
                         </div>
                     </div>
                 </div>
+
             </div>
         </div>
     </div>
 
-    <div class="home-section-header">
-        <div class="home-section-top">
-            <div>
-                <div class="home-section-label">总览重点</div>
-                <h3>先看最近异常，再决定进哪个模块处理</h3>
-                <p>{{ window_label }}内优先展示最需要处理的信号，首页保持总览感，不再只是入口堆叠。</p>
-            </div>
-        </div>
-    </div>
-
-    <div class="overview-grid">
-        <div class="overview-card telegram">
-            <div class="overview-card-top">
-                <div>
-                    <div class="overview-card-eyebrow">认证与活动</div>
-                    <div class="overview-card-title"><i class="bi bi-telegram me-2"></i>Telegram</div>
+    <div class="module-grid">
+        <div class="module-card telegram">
+            <div class="module-card-top">
+                <div class="module-card-head">
+                    <div class="module-card-icon"><i class="bi bi-telegram"></i></div>
+                    <div>
+                        <div class="module-card-title">Telegram</div>
+                    </div>
                 </div>
-                <span class="status-result-badge {% if auth_attention %}is-error{% else %}is-success{% endif %}">
-                    {% if auth_attention %}待处理{% else %}正常{% endif %}
+                <span class="status-result-badge {% if auth_attention or monitor_status != '运行中' %}is-error{% else %}is-success{% endif %}">
+                    {% if auth_attention %}待认证{% elif monitor_status == '运行中' %}运行中{% else %}待启动{% endif %}
                 </span>
             </div>
-            <div class="overview-card-main">
+            <div class="module-summary">
                 {% if auth_attention %}
                     需要重新完成 Telegram 认证
+                {% elif monitor_status == "运行中" %}
+                    监控运行中，最近活动已接入首页统计
                 {% else %}
-                    认证状态正常，可继续接收频道消息
+                    认证正常，但监控当前未启动
                 {% endif %}
             </div>
-            <div class="overview-card-note">
-                {% if tg_last_activity != '暂无' %}
-                    最近活动：{{ tg_last_activity }}
-                {% else %}
-                    当前还没有读取到最近活动记录。
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="overview-card file">
-            <div class="overview-card-top">
-                <div>
-                    <div class="overview-card-eyebrow">风控与拦截</div>
-                    <div class="overview-card-title"><i class="bi bi-folder-check me-2"></i>文件同步</div>
+            <div class="module-metrics">
+                <div class="module-metric">
+                    <div class="module-metric-label">认证状态</div>
+                    <div class="module-metric-value status-result-badge {{ auth_status_badge_class }}">{{ auth_status }}</div>
                 </div>
-                <span class="status-result-badge {% if file_attention %}is-warning{% else %}is-success{% endif %}">
-                    {% if file_attention %}有拦截{% else %}正常{% endif %}
-                </span>
-            </div>
-            <div class="overview-card-main">
-                {% if file_attention %}
-                    {{ file_last_blocked_reason }}
-                {% else %}
-                    最近没有新的风控拦截
-                {% endif %}
-            </div>
-            <div class="overview-card-note">
-                累计拦截 <strong>{{ file_blocked_total }}</strong> 次，下载风控当前{{ '开启' if risk.get('enabled', True) else '关闭' }}。
-            </div>
-        </div>
-
-        <div class="overview-card bot">
-            <div class="overview-card-top">
-                <div>
-                    <div class="overview-card-eyebrow">错误与消息</div>
-                    <div class="overview-card-title"><i class="bi bi-robot me-2"></i>Bot 监控</div>
+                <div class="module-metric">
+                    <div class="module-metric-label">下载队列</div>
+                    <div class="module-metric-value">{{ (download_queue_stats or {}).get('queue_size', 0) }}/{{ (download_queue_stats or {}).get('maxsize', '-') }}</div>
                 </div>
-                <span class="status-result-badge {% if bot_last_error != '暂无' %}is-error{% elif bot_missing_token %}is-warning{% else %}is-success{% endif %}">
-                    {% if bot_last_error != '暂无' %}
-                        有错误
-                    {% elif bot_missing_token %}
-                        缺 Token
+                <div class="module-metric" style="grid-column: 1 / -1;">
+                    <div class="module-metric-label">最近活动</div>
+                    <div class="module-metric-value">{{ tg_last_activity_compact }}</div>
+                </div>
+            </div>
+            <div class="module-actions">
+                <a href="{{ url_for('manage_config') }}" class="btn btn-light btn-sm">配置中心</a>
+                <a href="{{ url_for('monitor_log') }}" class="btn btn-outline-light btn-sm">日志</a>
+                {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}
+                <a href="{{ url_for('login') }}" class="btn btn-primary btn-sm">认证</a>
+                {% else %}
+                <form action="{{ url_for('monitor_action') }}" method="post" class="m-0">
+                    {% if monitor_status == "运行中" %}
+                    <button type="submit" name="action" value="stop" class="btn btn-outline-warning btn-sm">停止</button>
                     {% else %}
-                        正常
+                    <button type="submit" name="action" value="start" class="btn btn-success btn-sm">启动</button>
                     {% endif %}
+                </form>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="module-card file">
+            <div class="module-card-top">
+                <div class="module-card-head">
+                    <div class="module-card-icon"><i class="bi bi-folder-check"></i></div>
+                    <div>
+                        <div class="module-card-title">文件同步</div>
+                    </div>
+                </div>
+                <span class="status-result-badge {% if file_attention or file_monitor_status != '运行中' %}is-error{% else %}is-success{% endif %}">
+                    {% if file_attention %}有拦截{% elif file_monitor_status == '运行中' %}运行中{% else %}未启动{% endif %}
                 </span>
             </div>
-            <div class="overview-card-main">
+            <div class="module-summary">
+                {% if file_attention %}
+                    {{ file_last_blocked_reason_compact }}
+                {% elif file_monitor_status == '运行中' %}
+                    同步运行中，最近没有新的风控拦截
+                {% else %}
+                    文件同步当前未启动
+                {% endif %}
+            </div>
+            <div class="module-metrics">
+                <div class="module-metric">
+                    <div class="module-metric-label">监控任务</div>
+                    <div class="module-metric-value">{{ config.get('file_monitoring_tasks', []) | length }}</div>
+                </div>
+                <div class="module-metric">
+                    <div class="module-metric-label">累计拦截</div>
+                    <div class="module-metric-value">{{ file_blocked_total }}</div>
+                </div>
+                <div class="module-metric">
+                    <div class="module-metric-label">下载风控</div>
+                    <div class="module-metric-value status-result-badge {{ risk_status_badge_class }}">{{ '开启' if risk.get('enabled', True) else '关闭' }}</div>
+                </div>
+                <div class="module-metric">
+                    <div class="module-metric-label">115 凭证</div>
+                    <div class="module-metric-value">{{ '已设置' if config.get('115_cookie') or config.get('web_115_cookie') else '未设置' }}</div>
+                </div>
+            </div>
+            <div class="module-actions">
+                <a href="{{ url_for('manage_file_config') }}" class="btn btn-light btn-sm">配置中心</a>
+                <a href="{{ url_for('file_monitor_log') }}" class="btn btn-outline-light btn-sm">日志</a>
+                <form action="{{ url_for('file_monitor_action') }}" method="post" class="m-0">
+                    {% if file_monitor_status == "运行中" %}
+                    <button type="submit" name="action" value="stop" class="btn btn-outline-warning btn-sm">停止</button>
+                    {% else %}
+                    <button type="submit" name="action" value="start" class="btn btn-success btn-sm">启动</button>
+                    {% endif %}
+                </form>
+            </div>
+        </div>
+
+        <div class="module-card bot">
+            <div class="module-card-top">
+                <div class="module-card-head">
+                    <div class="module-card-icon"><i class="bi bi-robot"></i></div>
+                    <div>
+                        <div class="module-card-title">Bot 监控</div>
+                    </div>
+                </div>
+                <span class="status-result-badge {% if bot_last_error != '暂无' or bot_missing_token or bot_monitor_status != '运行中' %}is-error{% else %}is-success{% endif %}">
+                    {% if bot_last_error != '暂无' %}有错误{% elif bot_missing_token %}缺 Token{% elif bot_monitor_status == '运行中' %}运行中{% else %}待启动{% endif %}
+                </span>
+            </div>
+            <div class="module-summary">
                 {% if bot_last_error != '暂无' %}
-                    {{ bot_last_error }}
+                    {{ bot_last_error_compact }}
                 {% elif bot_missing_token %}
                     Bot Token 尚未设置
+                {% elif bot_monitor_status == '运行中' %}
+                    Bot 监控运行中，最近没有新的错误
                 {% else %}
-                    最近没有新的 Bot 错误
+                    Bot 监控当前未启动
                 {% endif %}
             </div>
-            <div class="overview-card-note">
-                {% if bot_missing_token %}
-                    补充 Token 后，这里会优先展示最近错误和活动。
-                {% elif bot_last_activity != '暂无' %}
-                    最近活动：{{ bot_last_activity }}
+            <div class="module-metrics">
+                <div class="module-metric">
+                    <div class="module-metric-label">Token</div>
+                    <div class="module-metric-value">{{ bot_token_id or '未设置' }}</div>
+                </div>
+                <div class="module-metric">
+                    <div class="module-metric-label">消息队列</div>
+                    <div class="module-metric-value">{{ bot_queue_size or 0 }}</div>
+                </div>
+                <div class="module-metric">
+                    <div class="module-metric-label">错误状态</div>
+                    <div class="module-metric-value status-result-badge {{ bot_error_badge_class }}">{{ bot_error_badge_text }}</div>
+                </div>
+                <div class="module-metric">
+                    <div class="module-metric-label">最近活动</div>
+                    <div class="module-metric-value">{{ bot_last_activity_compact }}</div>
+                </div>
+            </div>
+            <div class="module-actions">
+                <a href="{{ url_for('manage_config') }}" class="btn btn-light btn-sm">配置中心</a>
+                {% if bot_token_id %}
+                <form action="{{ url_for('bot_monitor_action') }}" method="post" class="m-0">
+                    {% if bot_monitor_status == "运行中" %}
+                    <button type="submit" name="action" value="stop" class="btn btn-outline-warning btn-sm">停止</button>
+                    {% else %}
+                    <button type="submit" name="action" value="start" class="btn btn-success btn-sm">启动</button>
+                    {% endif %}
+                </form>
                 {% else %}
-                    当前还没有读取到最近活动记录。
+                <a href="{{ url_for('manage_config') }}" class="btn btn-outline-light btn-sm">设置 Token</a>
                 {% endif %}
             </div>
         </div>
 
-        <div class="overview-card drama">
-            <div class="overview-card-top">
-                <div>
-                    <div class="overview-card-eyebrow">调度与结果</div>
-                    <div class="overview-card-title"><i class="bi bi-calendar3 me-2"></i>追剧调度</div>
+        <div class="module-card drama">
+            <div class="module-card-top">
+                <div class="module-card-head">
+                    <div class="module-card-icon"><i class="bi bi-calendar3"></i></div>
+                    <div>
+                        <div class="module-card-title">追剧调度</div>
+                    </div>
                 </div>
-                <span class="status-result-badge {% if scheduler_last_status == 'error' %}is-error{% elif scheduler_last_status == 'warning' %}is-warning{% elif scheduler.get('enabled') %}is-success{% else %}is-muted{% endif %}">
-                    {% if scheduler_last_status == 'error' %}
-                        异常
-                    {% elif scheduler_last_status == 'warning' %}
-                        留意
-                    {% elif scheduler.get('enabled') %}
-                        正常
-                    {% else %}
-                        未启用
-                    {% endif %}
+                <span class="status-result-badge {% if scheduler_last_status == 'warning' or scheduler_last_status == 'error' or not scheduler.get('enabled') %}is-error{% else %}is-success{% endif %}">
+                    {% if scheduler_last_status == 'error' %}异常{% elif scheduler_last_status == 'warning' %}留意{% elif scheduler.get('enabled') %}正常{% else %}未启用{% endif %}
                 </span>
             </div>
-            <div class="overview-card-main">
+            <div class="module-summary">
                 {% if scheduler_attention %}
-                    {{ scheduler_last_result }}
+                    {{ scheduler_last_result_compact }}
                 {% elif scheduler.get('enabled') %}
-                    下次执行：{{ scheduler_next_run }}
+                    下次执行：{{ scheduler_next_run_compact }}
                 {% else %}
                     自动调度当前未启用
                 {% endif %}
             </div>
-            <div class="overview-card-note">
-                {% if scheduler.get('enabled') %}
-                    上次结果：<strong>{{ scheduler_last_result }}</strong>
-                {% else %}
-                    启用后会在这里优先展示最近执行结果和异常。
-                {% endif %}
-            </div>
-        </div>
-    </div>
-
-    <div class="home-section-header">
-        <div class="home-section-top">
-            <div>
-                <div class="home-section-label">配置中心入口</div>
-                <h3>先进入对应配置中心，再调整细节</h3>
-                <p>这一块只保留配置入口，不再在卡片里重复放日志按钮。</p>
-            </div>
-        </div>
-    </div>
-
-    <div class="portal-grid">
-        <div class="portal-card telegram">
-            <div class="portal-head">
-                <div>
-                    <div class="portal-title"><i class="bi bi-telegram me-2"></i>Telegram 配置中心</div>
-                    <div class="portal-subtitle">频道管理、全局规则、自助观影、HDHive 和 Bot 凭证。</div>
+            <div class="module-metrics">
+                <div class="module-metric">
+                    <div class="module-metric-label">数据来源</div>
+                    <div class="module-metric-value">{% if 'all' in drama_sources %}全部来源{% else %}{{ drama_source_count }} 项{% endif %}</div>
                 </div>
-                <span class="badge portal-count-badge">{{ config.get('restricted_channels', []) | length }} 频道</span>
-            </div>
-
-            <div class="portal-meta">
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">Telegram 认证</span>
-                    <span class="portal-meta-value">{{ auth_status }}</span>
+                <div class="module-metric">
+                    <div class="module-metric-label">自动调度</div>
+                    <div class="module-metric-value">{{ '已开启' if scheduler.get('enabled') else '未开启' }}</div>
                 </div>
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">Bot Token</span>
-                    <span class="portal-meta-value">{{ bot_token_id or '未设置' }}</span>
+                <div class="module-metric">
+                    <div class="module-metric-label">下次执行</div>
+                    <div class="module-metric-value">{{ scheduler_next_run_compact }}</div>
+                </div>
+                <div class="module-metric">
+                    <div class="module-metric-label">上次结果</div>
+                    <div class="module-metric-value status-result-badge {{ scheduler_last_result_class }}">{{ scheduler_last_result_compact }}</div>
                 </div>
             </div>
-
-            <div class="portal-actions">
-                <a href="{{ url_for('manage_config') }}" class="btn btn-light btn-sm">进入配置中心</a>
-            </div>
-        </div>
-
-        <div class="portal-card file">
-            <div class="portal-head">
-                <div>
-                    <div class="portal-title"><i class="bi bi-folder2-open me-2"></i>文件同步配置中心</div>
-                    <div class="portal-subtitle">目录任务、根目录限制、115 Cookie、下载风控和队列策略。</div>
-                </div>
-                <span class="badge portal-count-badge">{{ config.get('file_monitoring_tasks', []) | length }} 任务</span>
-            </div>
-
-            <div class="portal-meta">
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">下载风控</span>
-                    <span class="portal-meta-value">{{ '已开启' if risk.get('enabled', True) else '已关闭' }}</span>
-                </div>
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">115 凭证</span>
-                    <span class="portal-meta-value">{{ '已设置' if config.get('115_cookie') or config.get('web_115_cookie') else '未设置' }}</span>
-                </div>
-            </div>
-
-            <div class="portal-actions">
-                <a href="{{ url_for('manage_file_config') }}" class="btn btn-light btn-sm">进入配置中心</a>
-            </div>
-        </div>
-
-        <div class="portal-card drama">
-            <div class="portal-head">
-                <div>
-                    <div class="portal-title"><i class="bi bi-calendar3 me-2"></i>追剧配置中心</div>
-                    <div class="portal-subtitle">白名单编辑、来源参数、TMDB 判定和自动调度统一管理。</div>
-                </div>
-                <span class="badge portal-count-badge">{{ drama_source_count }} 来源</span>
-            </div>
-
-            <div class="portal-meta">
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">自动调度</span>
-                    <span class="portal-meta-value">{{ '已开启' if scheduler.get('enabled') else '未开启' }}</span>
-                </div>
-                <div class="portal-meta-item">
-                    <span class="portal-meta-label">完结判定</span>
-                    <span class="portal-meta-value">{{ drama_cfg.get('finish_detect_mode', 'hybrid')|upper }}</span>
-                </div>
-            </div>
-
-            <div class="portal-actions">
-                <a href="{{ url_for('drama_calendar_settings') }}" class="btn btn-light btn-sm">进入配置中心</a>
-            </div>
-        </div>
-    </div>
-
-    <div class="home-section-header">
-        <div class="home-section-top">
-            <div>
-                <div class="home-section-label">运行状态</div>
-                <h3>日常启停和最近运行情况</h3>
-                <p>日志入口统一放这里，状态卡里只保留运行相关操作。</p>
-            </div>
-            <div class="home-section-tools">
-                <a href="{{ url_for('monitor_log') }}" class="home-section-tool"><i class="bi bi-card-text"></i>Telegram 日志</a>
-                <a href="{{ url_for('file_monitor_log') }}" class="home-section-tool"><i class="bi bi-journal-text"></i>文件日志</a>
-                <a href="{{ url_for('drama_calendar_log') }}" class="home-section-tool"><i class="bi bi-journal-check"></i>追剧日志</a>
-            </div>
-        </div>
-    </div>
-
-    <div class="status-grid">
-        <div class="status-card telegram">
-            <div class="status-card-header telegram">
-                <div class="status-card-title">
-                    <span><i class="bi bi-telegram me-2"></i>Telegram 监控</span>
-                    {% if monitor_status == "运行中" %}
-                    <span class="badge bg-success">运行中</span>
-                    {% else %}
-                    <span class="badge bg-light text-dark">{{ monitor_status }}</span>
-                    {% endif %}
-                </div>
-            </div>
-            <div class="status-card-body">
-                <div class="status-subgrid">
-                    <div>
-                        <div class="status-subitem-label">认证状态</div>
-                        <div class="status-subitem-value status-result-badge {{ auth_status_badge_class }}">{{ auth_status }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">下载队列</div>
-                        <div class="status-subitem-value">{{ (download_queue_stats or {}).get('queue_size', 0) }}/{{ (download_queue_stats or {}).get('maxsize', '-') }}</div>
-                    </div>
-                    <div class="status-subitem-wide">
-                        <div class="status-subitem-label">最近活动</div>
-                        <div class="status-subitem-value">{{ tg_last_activity }}</div>
-                    </div>
-                </div>
-
-                <div class="status-actions">
-                    {% if auth_status == "未认证" or auth_status.startswith("认证失效") %}
-                    <a href="{{ url_for('login') }}" class="btn btn-primary btn-sm">前往 Telegram 认证</a>
-                    {% else %}
-                    <form action="{{ url_for('monitor_action') }}" method="post" class="w-100">
-                        {% if monitor_status == "运行中" %}
-                        <button type="submit" name="action" value="stop" class="btn btn-outline-warning btn-sm w-100">停止监控</button>
-                        {% else %}
-                        <button type="submit" name="action" value="start" class="btn btn-success btn-sm w-100">启动监控</button>
-                        {% endif %}
-                    </form>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-
-        <div class="status-card file">
-            <div class="status-card-header file">
-                <div class="status-card-title">
-                    <span><i class="bi bi-folder-check me-2"></i>文件同步</span>
-                    {% if file_monitor_status == "运行中" %}
-                    <span class="badge bg-success">运行中</span>
-                    {% else %}
-                    <span class="badge bg-light text-dark">{{ file_monitor_status }}</span>
-                    {% endif %}
-                </div>
-            </div>
-            <div class="status-card-body">
-                <div class="status-subgrid">
-                    <div>
-                        <div class="status-subitem-label">下载风控</div>
-                        <div class="status-subitem-value status-result-badge {{ risk_status_badge_class }}">{{ '开启' if risk.get('enabled', True) else '关闭' }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">累计拦截</div>
-                        <div class="status-subitem-value">{{ file_blocked_total }}</div>
-                    </div>
-                    <div class="status-subitem-wide">
-                        <div class="status-subitem-label">最近拦截原因</div>
-                        <div class="status-subitem-value">{{ file_last_blocked_reason }}</div>
-                    </div>
-                </div>
-
-                <div class="status-actions">
-                    <form action="{{ url_for('file_monitor_action') }}" method="post" class="w-100">
-                        {% if file_monitor_status == "运行中" %}
-                        <button type="submit" name="action" value="stop" class="btn btn-outline-warning btn-sm w-100">停止同步</button>
-                        {% else %}
-                        <button type="submit" name="action" value="start" class="btn btn-success btn-sm w-100">启动同步</button>
-                        {% endif %}
-                    </form>
-                </div>
-            </div>
-        </div>
-
-        <div class="status-card bot">
-            <div class="status-card-header bot">
-                <div class="status-card-title">
-                    <span><i class="bi bi-robot me-2"></i>Bot 监控</span>
-                    {% if bot_monitor_status == "运行中" %}
-                    <span class="badge bg-success">运行中</span>
-                    {% else %}
-                    <span class="badge bg-light text-dark">{{ bot_monitor_status }}</span>
-                    {% endif %}
-                </div>
-            </div>
-            <div class="status-card-body">
-                <div class="status-subgrid">
-                    <div>
-                        <div class="status-subitem-label">消息队列</div>
-                        <div class="status-subitem-value">{{ bot_queue_size or 0 }}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">错误状态</div>
-                        <div class="status-subitem-value status-result-badge {{ bot_error_badge_class }}">{{ bot_error_badge_text }}</div>
-                    </div>
-                    <div class="status-subitem-wide">
-                        <div class="status-subitem-label">最近活动</div>
-                        <div class="status-subitem-value">{{ bot_last_activity }}</div>
-                    </div>
-                </div>
-
-                <div class="status-actions">
-                    {% if bot_token_id %}
-                    <form action="{{ url_for('bot_monitor_action') }}" method="post" class="w-100">
-                        {% if bot_monitor_status == "运行中" %}
-                        <button type="submit" name="action" value="stop" class="btn btn-outline-warning btn-sm w-100">停止监控</button>
-                        {% else %}
-                        <button type="submit" name="action" value="start" class="btn btn-success btn-sm w-100">启动监控</button>
-                        {% endif %}
-                    </form>
-                    {% else %}
-                    <div class="status-note">Bot Token 可在上方 <a href="{{ url_for('manage_config') }}">Telegram 配置中心</a> 设置。</div>
-                    {% endif %}
-                </div>
-            </div>
-        </div>
-
-        <div class="status-card drama">
-            <div class="status-card-header drama">
-                <div class="status-card-title">
-                    <span><i class="bi bi-calendar3 me-2"></i>追剧调度</span>
-                    {% if scheduler.get('enabled') %}
-                        {% if scheduler.get('running') %}
-                        <span class="badge bg-warning text-dark">执行中</span>
-                        {% else %}
-                        <span class="badge bg-success">已启用</span>
-                        {% endif %}
-                    {% else %}
-                    <span class="badge bg-light text-dark">未启用</span>
-                    {% endif %}
-                </div>
-            </div>
-            <div class="status-card-body">
-                <div class="status-subgrid">
-                    <div>
-                        <div class="status-subitem-label">数据来源</div>
-                        <div class="status-subitem-value">{% if 'all' in drama_sources %}全部来源{% else %}{{ drama_source_count }} 项{% endif %}</div>
-                    </div>
-                    <div>
-                        <div class="status-subitem-label">下次执行</div>
-                        <div class="status-subitem-value">{{ scheduler_next_run }}</div>
-                    </div>
-                    <div class="status-subitem-wide">
-                        <div class="status-subitem-label">上次结果</div>
-                        <div class="status-subitem-value status-result-badge {{ scheduler_last_result_class }}">{{ scheduler_last_result }}</div>
-                    </div>
-                </div>
+            <div class="module-actions">
+                <a href="{{ url_for('drama_calendar_settings') }}" class="btn btn-light btn-sm">配置中心</a>
+                <a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-light btn-sm">日志</a>
             </div>
         </div>
     </div>

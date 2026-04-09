@@ -26,6 +26,22 @@ from croniter import croniter
 
 # Add current directory to path so we can import modules from app/
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+try:
+    from .proxy_helpers import (
+        build_proxy_url_from_scope_config as _build_proxy_url_from_scope_cfg,
+        build_requests_proxies_from_scope_config as _build_requests_proxies_from_scope_cfg,
+        build_telethon_proxy_from_scope_config as _build_telethon_proxy_from_scope_cfg,
+        normalize_proxy_scope as _shared_normalize_proxy_scope,
+        sanitize_proxy_scope_config as _sanitize_proxy_scope_config,
+    )
+except ImportError:
+    from proxy_helpers import (
+        build_proxy_url_from_scope_config as _build_proxy_url_from_scope_cfg,
+        build_requests_proxies_from_scope_config as _build_requests_proxies_from_scope_cfg,
+        build_telethon_proxy_from_scope_config as _build_telethon_proxy_from_scope_cfg,
+        normalize_proxy_scope as _shared_normalize_proxy_scope,
+        sanitize_proxy_scope_config as _sanitize_proxy_scope_config,
+    )
 
 from downloader_module import downloader
 try:
@@ -39,7 +55,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.41"
+VERSION = "0.5.42"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -88,6 +104,14 @@ TELEGRAM_SESSION_NAME = "telegram_monitor" # This must match what telegram_monit
 @app.context_processor
 def inject_version():
     return dict(version=VERSION)
+
+
+def _normalize_self_service_storage_mode(mode) -> str:
+    normalized = str(mode or "any").strip().lower()
+    if normalized not in ("any", "115", "123", "115_123"):
+        return "any"
+    return normalized
+
 
 def load_config():
     """Loads configuration from config.json with environment variable overrides."""
@@ -304,8 +328,8 @@ def load_config():
                     legacy_only_115 = bool(config.get("self_service_only_115", False))
                     config["self_service_storage_mode"] = "115" if legacy_only_115 else default_config["self_service_storage_mode"]
                 else:
-                    mode = str(config.get("self_service_storage_mode") or "any").lower()
-                    if mode not in ("any", "115", "123", "115_123"):
+                    mode = _normalize_self_service_storage_mode(config.get("self_service_storage_mode"))
+                    if mode != str(config.get("self_service_storage_mode") or "").strip().lower():
                         config["self_service_storage_mode"] = default_config["self_service_storage_mode"]
                 if "self_service_public_enabled" not in config:
                     config["self_service_public_enabled"] = default_config["self_service_public_enabled"]
@@ -438,9 +462,9 @@ def load_config():
     
     # 115 Cookie
     if os.environ.get('COOKIE_115'):
-        config['115_cookie'] = os.environ.get('COOKIE_115')
+        _set_115_cookie(config, os.environ.get('COOKIE_115'))
     elif os.environ.get('WEB_115_COOKIE'):
-        config['115_cookie'] = os.environ.get('WEB_115_COOKIE')
+        _set_115_cookie(config, os.environ.get('WEB_115_COOKIE'))
     
     # 移除 HDHive 配置
 
@@ -448,20 +472,7 @@ def load_config():
 
 
 def _normalize_proxy_scope(scope: Optional[str]) -> str:
-    value = str(scope or "service").strip().lower()
-    aliases = {
-        "telegram": "telegram",
-        "tg": "telegram",
-        "telethon": "telegram",
-        "service": "service",
-        "hdhive": "service",
-        "tmdb": "service",
-        "hdhive_tmdb": "service",
-        "downloader": "downloader",
-        "download": "downloader",
-        "yt": "downloader",
-    }
-    return aliases.get(value, "service")
+    return _shared_normalize_proxy_scope(scope)
 
 
 def _proxy_scope_label(scope: Optional[str]) -> str:
@@ -497,12 +508,7 @@ def _ensure_proxy_config_structure(config: dict) -> dict:
 
     legacy_keys = {"addr", "port", "username", "password"}
     if legacy_keys & set(proxy_cfg.keys()):
-        legacy_proxy = {
-            "addr": str(proxy_cfg.get("addr") or "").strip(),
-            "port": str(proxy_cfg.get("port") or "").strip(),
-            "username": str(proxy_cfg.get("username") or "").strip(),
-            "password": str(proxy_cfg.get("password") or "").strip(),
-        }
+        legacy_proxy = _sanitize_proxy_scope_config(proxy_cfg)
         normalized = {
             "telegram": dict(legacy_proxy),
             "service": dict(legacy_proxy),
@@ -520,12 +526,7 @@ def _ensure_proxy_config_structure(config: dict) -> dict:
         scope_cfg = proxy_cfg.get(scope)
         if not isinstance(scope_cfg, dict):
             continue
-        normalized[scope] = {
-            "addr": str(scope_cfg.get("addr") or "").strip(),
-            "port": str(scope_cfg.get("port") or "").strip(),
-            "username": str(scope_cfg.get("username") or "").strip(),
-            "password": str(scope_cfg.get("password") or "").strip(),
-        }
+        normalized[scope] = _sanitize_proxy_scope_config(scope_cfg)
     config["proxy"] = normalized
     return normalized
 
@@ -538,14 +539,7 @@ def _get_proxy_scope_config(config: Optional[dict] = None, scope: Optional[str] 
         proxy_cfg = {}
     normalized_scope = _normalize_proxy_scope(scope)
     scoped_cfg = proxy_cfg.get(normalized_scope, {})
-    if not isinstance(scoped_cfg, dict):
-        return {}
-    return {
-        "addr": str(scoped_cfg.get("addr") or "").strip(),
-        "port": str(scoped_cfg.get("port") or "").strip(),
-        "username": str(scoped_cfg.get("username") or "").strip(),
-        "password": str(scoped_cfg.get("password") or "").strip(),
-    }
+    return _sanitize_proxy_scope_config(scoped_cfg)
 
 
 def _set_proxy_scope(config: dict, scope: Optional[str], *, addr: str = "", port: str = "", username: str = "", password: str = "") -> str:
@@ -571,47 +565,17 @@ def _clear_proxy_scope(config: dict, scope: Optional[str]) -> str:
 
 def _build_proxy_url_from_config(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[str]:
     proxy_cfg = _get_proxy_scope_config(config, scope)
-    addr = proxy_cfg.get("addr") or ""
-    port = proxy_cfg.get("port") or ""
-    if not addr or not port:
-        return None
-
-    username = str(proxy_cfg.get("username") or "").strip()
-    password = str(proxy_cfg.get("password") or "").strip()
-    auth = ""
-    if username:
-        auth = quote(username, safe="")
-        if password:
-            auth += ":" + quote(password, safe="")
-        auth += "@"
-    return f"http://{auth}{addr}:{port}"
+    return _build_proxy_url_from_scope_cfg(proxy_cfg)
 
 
 def _build_requests_proxies(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[dict]:
-    proxy_url = _build_proxy_url_from_config(config, scope)
-    if not proxy_url:
-        return None
-    return {
-        "http": proxy_url,
-        "https": proxy_url,
-    }
+    proxy_cfg = _get_proxy_scope_config(config, scope)
+    return _build_requests_proxies_from_scope_cfg(proxy_cfg)
 
 
 def _build_telethon_proxy_from_config(config: Optional[dict] = None) -> Optional[tuple]:
     proxy_cfg = _get_proxy_scope_config(config, "telegram")
-    addr = proxy_cfg.get("addr") or ""
-    port = proxy_cfg.get("port") or ""
-    if not addr or not port:
-        return None
-    try:
-        return (
-            addr,
-            int(port),
-            proxy_cfg.get("username") or None,
-            proxy_cfg.get("password") or None,
-        )
-    except Exception:
-        return None
+    return _build_telethon_proxy_from_scope_cfg(proxy_cfg)
 
 
 def _requests_request(method: str, url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
@@ -2743,6 +2707,7 @@ _HDHIVE_COOKIE_MONITOR_STATE = {
     "last_message": "",
     "last_notified_at": "",
 }
+_HDHIVE_CHECKIN_ENDPOINT_404_MESSAGE = "签到接口返回 404，站点接口可能已改版"
 _HDHIVE_CHECKIN_ACTION_ID_DEFAULT = "409539c7faa0ad25d3e3e8c21465c10661896ca5a2"
 _HDHIVE_CHECKIN_ACTION_ID = _HDHIVE_CHECKIN_ACTION_ID_DEFAULT
 _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS = 0.0
@@ -2917,11 +2882,26 @@ def _extract_hdhive_current_points_from_html(html_text: str) -> Optional[int]:
     return None
 
 
-def _get_hdhive_home_router_state_tree_json(base_url: str, cookie: str = "") -> str:
+def _extract_hdhive_checkin_action_id_from_js(js_text: str) -> str:
+    if not js_text:
+        return ""
+    patterns = [
+        re.compile(r'createServerReference\("([0-9a-f]{40,})".{0,320}?"checkIn"'),
+        re.compile(r'createServerReference\)\("([0-9a-f]{40,})".{0,320}?"checkIn"'),
+    ]
+    for pattern in patterns:
+        match = pattern.search(js_text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _get_hdhive_home_router_state_tree_json(base_url: str, cookie: str = "", force_refresh: bool = False) -> str:
     global _HDHIVE_HOME_ROUTER_STATE_JSON, _HDHIVE_HOME_ROUTER_STATE_LAST_REFRESH_TS
     now = time.time()
     if (
-        _HDHIVE_HOME_ROUTER_STATE_JSON
+        not force_refresh
+        and _HDHIVE_HOME_ROUTER_STATE_JSON
         and _HDHIVE_HOME_ROUTER_STATE_JSON != "[]"
         and (now - _HDHIVE_HOME_ROUTER_STATE_LAST_REFRESH_TS) < _HDHIVE_HOME_ROUTER_STATE_TTL_SECONDS
     ):
@@ -2943,10 +2923,14 @@ def _get_hdhive_home_router_state_tree_json(base_url: str, cookie: str = "") -> 
     return _HDHIVE_HOME_ROUTER_STATE_JSON
 
 
-def _refresh_hdhive_checkin_action_id_if_needed(base_url: str, cookie: str = "") -> str:
+def _refresh_hdhive_checkin_action_id_if_needed(base_url: str, cookie: str = "", force_refresh: bool = False) -> str:
     global _HDHIVE_CHECKIN_ACTION_ID, _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS
     now = time.time()
-    if _HDHIVE_CHECKIN_ACTION_ID and (now - _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS) < _HDHIVE_CHECKIN_ACTION_REFRESH_TTL_SECONDS:
+    if (
+        not force_refresh
+        and _HDHIVE_CHECKIN_ACTION_ID
+        and (now - _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS) < _HDHIVE_CHECKIN_ACTION_REFRESH_TTL_SECONDS
+    ):
         return _HDHIVE_CHECKIN_ACTION_ID
 
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -2956,15 +2940,14 @@ def _refresh_hdhive_checkin_action_id_if_needed(base_url: str, cookie: str = "")
     try:
         html_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + "/", timeout=20, headers=headers, proxy_scope="service").content)
         chunk_paths = sorted(set(re.findall(r'/_next/static/[^"<> ]+\.js', html_text)))
-        pat_checkin = re.compile(r'createServerReference\("([0-9a-f]{40,})"[^)]*"checkIn"\)')
         for path in chunk_paths[:80]:
             try:
                 js_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + path, timeout=15, headers={"User-Agent": "Mozilla/5.0"}, proxy_scope="service").content)
             except Exception:
                 continue
-            match = pat_checkin.search(js_text)
-            if match:
-                _HDHIVE_CHECKIN_ACTION_ID = match.group(1)
+            action_id = _extract_hdhive_checkin_action_id_from_js(js_text)
+            if action_id:
+                _HDHIVE_CHECKIN_ACTION_ID = action_id
                 _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS = now
                 return _HDHIVE_CHECKIN_ACTION_ID
     except Exception:
@@ -2980,6 +2963,66 @@ def _normalize_hdhive_checkin_path(base_url: str, path: str) -> str:
     if path.startswith("http://") or path.startswith("https://"):
         return path
     return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
+
+
+def _reset_hdhive_checkin_runtime_cache(clear_action_id: bool = False) -> None:
+    global _HDHIVE_CHECKIN_ACTION_ID, _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS
+    global _HDHIVE_HOME_ROUTER_STATE_JSON, _HDHIVE_HOME_ROUTER_STATE_LAST_REFRESH_TS
+    if clear_action_id:
+        _HDHIVE_CHECKIN_ACTION_ID = ""
+    elif not _HDHIVE_CHECKIN_ACTION_ID:
+        _HDHIVE_CHECKIN_ACTION_ID = _HDHIVE_CHECKIN_ACTION_ID_DEFAULT
+    _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS = 0.0
+    _HDHIVE_HOME_ROUTER_STATE_JSON = "[]"
+    _HDHIVE_HOME_ROUTER_STATE_LAST_REFRESH_TS = 0.0
+
+
+def _compact_hdhive_response_text(text: str, limit: int = 120) -> str:
+    s = _normalize_hdhive_message_text(text)
+    if not s:
+        return ""
+    s = re.sub(r"<[^>]+>", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:limit]
+
+
+def _hdhive_response_is_missing_endpoint(
+    *,
+    status_code: Optional[int] = None,
+    payload: Optional[dict] = None,
+    text: str = "",
+) -> bool:
+    if status_code == 404:
+        return True
+
+    parts: List[str] = []
+    if isinstance(payload, dict):
+        for key in ("message", "description", "code"):
+            val = payload.get(key)
+            if isinstance(val, (str, int, float)):
+                parts.append(str(val))
+        err = payload.get("error")
+        if isinstance(err, dict):
+            for key in ("message", "description", "code", "digest"):
+                val = err.get(key)
+                if isinstance(val, (str, int, float)):
+                    parts.append(str(val))
+        elif isinstance(err, (str, int, float)):
+            parts.append(str(err))
+    if text:
+        parts.append(text)
+
+    merged = _compact_hdhive_response_text(" ".join(parts), limit=400).lower()
+    if not merged:
+        return False
+    return (
+        merged == "404"
+        or "404 not found" in merged
+        or "cannot post /" in merged
+        or "cannot get /" in merged
+        or "failed to find server action" in merged
+        or ("server action" in merged and "not found" in merged)
+    )
 
 
 def _extract_points_from_payload(payload) -> Optional[int]:
@@ -3012,19 +3055,19 @@ def _hdhive_request_json(
     headers: dict,
     json_body: Optional[dict] = None,
     params: Optional[dict] = None,
-) -> Tuple[Optional[dict], str]:
+) -> Tuple[Optional[dict], str, Optional[int]]:
     try:
         resp = _requests_request(method, url, headers=headers, json=json_body, params=params, timeout=20, proxy_scope="service")
     except Exception as e:
-        return None, f"{type(e).__name__}: {e}"
+        return None, f"{type(e).__name__}: {e}", None
     text = resp.text or ""
     try:
         data = resp.json()
     except Exception:
         data = None
     if isinstance(data, dict):
-        return data, text
-    return None, text
+        return data, text, getattr(resp, "status_code", None)
+    return None, text, getattr(resp, "status_code", None)
 
 
 def _parse_next_action_rsc_result_text(text: str):
@@ -3064,22 +3107,30 @@ def _hdhive_next_action_call_sync(
     }
     body = json.dumps(action_args, ensure_ascii=False).encode("utf-8")
     rsc_token = int(time.time() * 1000)
+    last_status_code = None
+    last_text = ""
     try:
         resp = _requests_post(f"{base_url}/?_rsc={rsc_token}", data=body, timeout=25, headers=headers, proxy_scope="service")
-        parsed = _parse_next_action_rsc_result_text(_decode_hdhive_text(resp.content))
+        last_status_code = getattr(resp, "status_code", None)
+        last_text = _decode_hdhive_text(resp.content)
+        parsed = _parse_next_action_rsc_result_text(last_text)
         if parsed is not None:
-            return parsed
-    except Exception:
-        pass
+            return parsed, last_status_code, last_text
+    except Exception as e:
+        last_text = f"{type(e).__name__}: {e}"
     try:
         alt_url = f"{base_url}{page_path}?_rsc={rsc_token}"
         resp = _requests_post(alt_url, data=body, timeout=25, headers=headers, proxy_scope="service")
-        return _parse_next_action_rsc_result_text(_decode_hdhive_text(resp.content))
-    except Exception:
-        return None
+        last_status_code = getattr(resp, "status_code", None)
+        last_text = _decode_hdhive_text(resp.content)
+        return _parse_next_action_rsc_result_text(last_text), last_status_code, last_text
+    except Exception as e:
+        if not last_text:
+            last_text = f"{type(e).__name__}: {e}"
+        return None, last_status_code, last_text
 
 
-def _hdhive_is_checkin_success(data: Optional[dict], text: str = "") -> Tuple[bool, str]:
+def _hdhive_is_checkin_success(data: Optional[dict], text: str = "", status_code: Optional[int] = None) -> Tuple[bool, str]:
     msg = ""
     if isinstance(data, dict):
         msg = str(data.get("message") or data.get("description") or "")
@@ -3088,7 +3139,9 @@ def _hdhive_is_checkin_success(data: Optional[dict], text: str = "") -> Tuple[bo
     merged = (msg + " " + (text or "")).lower()
     if any(token in merged for token in ("已签到", "已经签到", "已簽到", "signed", "already signed", "already check", "重复签到")):
         return True, msg or "already"
-    return False, msg or (text or "")[:120]
+    if _hdhive_response_is_missing_endpoint(status_code=status_code, payload=data, text=text):
+        return False, _HDHIVE_CHECKIN_ENDPOINT_404_MESSAGE
+    return False, msg or _compact_hdhive_response_text(text)
 
 
 def _normalize_hdhive_message_text(text: str) -> str:
@@ -3119,7 +3172,7 @@ def _hdhive_fetch_points(base_url: str, cookie: str) -> Optional[int]:
         "Cookie": cookie_header,
     }
     for path in ("/go-api/customer/points", "/go-api/customer/info", "/go-api/customer"):
-        data, _ = _hdhive_request_json("GET", f"{base_url}{path}", headers=api_headers)
+        data, _, _ = _hdhive_request_json("GET", f"{base_url}{path}", headers=api_headers)
         pts = _extract_points_from_payload(data)
         if pts is not None:
             return pts
@@ -3147,19 +3200,36 @@ def _hdhive_do_checkin_via_server_action(base_url: str, cookie: str, mode: str) 
     cookie_header = _normalize_hdhive_cookie(cookie)
     if not cookie_header:
         return False, "未配置 HDHive Cookie", None
-    action_id = _refresh_hdhive_checkin_action_id_if_needed(base_url, cookie_header)
-    router_state_tree_json = _get_hdhive_home_router_state_tree_json(base_url, cookie_header)
     gamble = mode == "gamble"
-    parsed = _hdhive_next_action_call_sync(
-        base_url=base_url,
-        cookie_header=cookie_header,
-        action_id=action_id,
-        page_path="/",
-        router_state_tree_json=router_state_tree_json,
-        action_args=[gamble],
-    )
+    parsed = None
+    status_code = None
+    raw_text = ""
+    for attempt in range(2):
+        force_refresh = attempt > 0
+        if force_refresh:
+            _reset_hdhive_checkin_runtime_cache(clear_action_id=True)
+        action_id = _refresh_hdhive_checkin_action_id_if_needed(base_url, cookie_header, force_refresh=force_refresh)
+        router_state_tree_json = _get_hdhive_home_router_state_tree_json(base_url, cookie_header, force_refresh=force_refresh)
+        if not action_id:
+            raw_text = "未能定位签到动作"
+            status_code = None
+            break
+        parsed, status_code, raw_text = _hdhive_next_action_call_sync(
+            base_url=base_url,
+            cookie_header=cookie_header,
+            action_id=action_id,
+            page_path="/",
+            router_state_tree_json=router_state_tree_json,
+            action_args=[gamble],
+        )
+        if attempt == 0 and _hdhive_response_is_missing_endpoint(status_code=status_code, payload=parsed, text=raw_text):
+            continue
+        break
+
     if not isinstance(parsed, dict):
-        return False, "签到响应异常", _hdhive_fetch_points(base_url, cookie)
+        if _hdhive_response_is_missing_endpoint(status_code=status_code, payload=parsed, text=raw_text):
+            return False, _HDHIVE_CHECKIN_ENDPOINT_404_MESSAGE, _hdhive_fetch_points(base_url, cookie)
+        return False, _compact_hdhive_response_text(raw_text) or "签到响应异常", _hdhive_fetch_points(base_url, cookie)
 
     if isinstance(parsed.get("response"), dict):
         response = parsed.get("response") or {}
@@ -3180,6 +3250,8 @@ def _hdhive_do_checkin_via_server_action(base_url: str, cookie: str, mode: str) 
             token in lowered for token in ("already signed", "already check")
         ):
             return True, description or message or "今天已签到", points
+        if _hdhive_response_is_missing_endpoint(status_code=status_code, payload=parsed, text=merged):
+            return False, _HDHIVE_CHECKIN_ENDPOINT_404_MESSAGE, points
         return False, merged or "签到失败", points
 
     return False, "签到失败", _hdhive_fetch_points(base_url, cookie)
@@ -3192,11 +3264,13 @@ def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tupl
 
     mode = (mode or "normal").strip().lower()
     custom_path = (cfg.get("gamble_path") or "").strip() if mode == "gamble" else (cfg.get("normal_path") or "").strip()
+    server_action_msg = ""
 
     if not custom_path:
         ok, msg, points = _hdhive_do_checkin_via_server_action(base_url, cookie, mode)
         if ok:
             return ok, msg, points
+        server_action_msg = msg or ""
 
     headers = {
         "User-Agent": "Mozilla/5.0",
@@ -3233,11 +3307,11 @@ def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tupl
         {"lucky": 1},
     ] if mode == "gamble" else []
 
-    last_msg = ""
+    last_msg = server_action_msg
     for path in paths:
         for payload in payloads:
-            data, text = _hdhive_request_json("POST", path, headers=headers, json_body=payload)
-            ok, msg = _hdhive_is_checkin_success(data, text)
+            data, text, status_code = _hdhive_request_json("POST", path, headers=headers, json_body=payload)
+            ok, msg = _hdhive_is_checkin_success(data, text, status_code=status_code)
             last_msg = msg or last_msg
             if ok:
                 points = _extract_points_from_payload(data)
@@ -3245,8 +3319,8 @@ def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tupl
                     points = _hdhive_fetch_points(base_url, cookie)
                 return True, msg or "签到成功", points
             if payload is None:
-                data, text = _hdhive_request_json("GET", path, headers=headers)
-                ok, msg = _hdhive_is_checkin_success(data, text)
+                data, text, status_code = _hdhive_request_json("GET", path, headers=headers)
+                ok, msg = _hdhive_is_checkin_success(data, text, status_code=status_code)
                 last_msg = msg or last_msg
                 if ok:
                     points = _extract_points_from_payload(data)
@@ -3255,8 +3329,8 @@ def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tupl
                     return True, msg or "签到成功", points
             if mode == "gamble":
                 for params in gamble_params:
-                    data, text = _hdhive_request_json("GET", path, headers=headers, params=params)
-                    ok, msg = _hdhive_is_checkin_success(data, text)
+                    data, text, status_code = _hdhive_request_json("GET", path, headers=headers, params=params)
+                    ok, msg = _hdhive_is_checkin_success(data, text, status_code=status_code)
                     last_msg = msg or last_msg
                     if ok:
                         points = _extract_points_from_payload(data)
@@ -3957,7 +4031,17 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
         data = None
     if isinstance(data, dict):
         return data
-    return {"success": False, "code": str(resp.status_code), "message": "Invalid JSON response"}
+
+    try:
+        raw_text = (resp.text or "").strip()
+    except Exception:
+        raw_text = ""
+    compact_text = re.sub(r"\s+", " ", raw_text)[:240]
+    if "Attention Required!" in compact_text and "Cloudflare" in compact_text:
+        compact_text = "Cloudflare challenge blocked request"
+    if not compact_text:
+        compact_text = "Invalid JSON response"
+    return {"success": False, "code": str(resp.status_code), "message": compact_text}
 
 
 def _hdhive_open_api_resources(base_url: str, api_key: str, media_type: str, tmdb_id: str) -> dict:
@@ -3980,8 +4064,23 @@ def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
 
 def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> dict:
     api_base = base_url.rstrip("/") + "/api/open"
-    url = f"{api_base}/resources/{slug}"
-    return _hdhive_open_api_request("GET", url, api_key)
+    legacy_url = f"{api_base}/resources/{slug}"
+    legacy_resp = _hdhive_open_api_request("GET", legacy_url, api_key)
+    if isinstance(legacy_resp, dict) and legacy_resp.get("success") is True:
+        return legacy_resp
+
+    detail_url = f"{api_base}/resources/detail/{slug}"
+    detail_resp = _hdhive_open_api_request("GET", detail_url, api_key)
+    if isinstance(detail_resp, dict) and detail_resp.get("success") is True:
+        return detail_resp
+
+    legacy_msg = str((legacy_resp or {}).get("message") or "").strip()
+    detail_msg = str((detail_resp or {}).get("message") or (detail_resp or {}).get("description") or "").strip()
+    if detail_msg and detail_msg != "Invalid JSON response":
+        return detail_resp
+    if legacy_msg:
+        return legacy_resp
+    return detail_resp if isinstance(detail_resp, dict) else legacy_resp
 
 
 def _hdhive_open_api_extract_unlock_points(data: dict) -> Optional[int]:
@@ -4540,11 +4639,191 @@ def _get_self_service_notify_targets(config: dict) -> list:
     return notify_targets or targets
 
 
+def _get_115_cookie(data: Optional[dict]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return str(
+        data.get("115_cookie")
+        or data.get("web_115_cookie")
+        or data.get("cookie_115")
+        or ""
+    ).strip()
+
+
+def _set_115_cookie(config: dict, cookie: str) -> None:
+    if not isinstance(config, dict):
+        return
+    value = str(cookie or "").strip()
+    config["115_cookie"] = value
+    config["web_115_cookie"] = value
+
+
+def _get_115_target_cid(data: Optional[dict]) -> str:
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("115_target_cid") or data.get("target_115_cid") or "").strip()
+
+
+def _build_115_transfer_payload(config: dict) -> dict:
+    return {
+        "115_cookie": _get_115_cookie(config),
+        "115_target_cid": _get_115_target_cid(config),
+    }
+
+
+def _get_self_service_runtime(config: dict) -> dict:
+    targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
+    notify_targets = _parse_target_user_ids(config.get("self_service_notify_user_ids", ""))
+    effective_targets = notify_targets or targets
+    try:
+        max_results = int(config.get("self_service_search_max_results", 5) or 5)
+    except Exception:
+        max_results = 5
+    max_results = max(1, min(max_results, 20))
+    base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip() or "https://hdhive.com"
+    tmdb_key = ""
+    try:
+        tmdb_key = (config.get("drama_calendar", {}).get("tmdb_api_key") or "").strip()
+    except Exception:
+        tmdb_key = ""
+    return {
+        "enabled": bool(config.get("self_service_enabled", False)),
+        "targets": targets,
+        "notify_targets": notify_targets,
+        "effective_targets": effective_targets,
+        "max_results": max_results,
+        "hdhive_cookie": (config.get("hdhive_cookie") or "").strip(),
+        "hdhive_cookie_test_resource": (config.get("hdhive_cookie_test_resource") or "").strip(),
+        "hdhive_api_key": (config.get("hdhive_open_api_key") or "").strip(),
+        "use_open_api": bool(config.get("self_service_use_open_api", False)),
+        "allow_open_api_direct": bool(config.get("hdhive_open_api_direct_unlock", False)),
+        "storage_mode": _normalize_self_service_storage_mode(config.get("self_service_storage_mode", "any")),
+        "base_url": base_url,
+        "tmdb_api_key": tmdb_key,
+    }
+
+
+def _submit_self_service_request(
+    config: dict,
+    runtime: dict,
+    *,
+    source_label: str,
+    endpoint: str,
+    disabled_message: str,
+    missing_targets_message: str,
+    strict_cookie_message: str,
+):
+    if not runtime.get("enabled"):
+        flash(disabled_message, "warning")
+        return redirect(url_for(endpoint))
+
+    effective_use_open_api = bool(runtime.get("use_open_api"))
+    if effective_use_open_api:
+        if not runtime.get("hdhive_api_key"):
+            flash("未配置 HDHive Open API Key，无法使用 API 搜索。", "error")
+            return redirect(url_for(endpoint))
+    else:
+        if not runtime.get("hdhive_cookie"):
+            flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
+            return redirect(url_for(endpoint))
+
+    if not runtime.get("effective_targets"):
+        flash(missing_targets_message, "error")
+        return redirect(url_for(endpoint))
+
+    if not effective_use_open_api:
+        cookie_check_mode = str(config.get("self_service_cookie_check_mode", "warn") or "warn").lower()
+        if cookie_check_mode not in ("strict", "warn", "off"):
+            cookie_check_mode = "warn"
+        if cookie_check_mode != "off":
+            cookie_check = _test_hdhive_cookie(
+                runtime.get("base_url") or "https://hdhive.com",
+                runtime.get("hdhive_cookie") or "",
+                runtime.get("hdhive_cookie_test_resource") or "",
+            )
+            if not cookie_check.get("success"):
+                msg = cookie_check.get("message") or "Cookie 无效或登录失效"
+                if cookie_check_mode == "strict":
+                    flash(f"HDHive Cookie 无效：{msg}，{strict_cookie_message}", "error")
+                    return redirect(url_for(endpoint))
+                flash(f"HDHive Cookie 可能无效：{msg}，仍尝试提交。", "warning")
+
+    title = (request.form.get("title") or "").strip()
+    if not title:
+        flash("请填写影片或剧集名称。", "warning")
+        return redirect(url_for(endpoint))
+
+    request_type = (request.form.get("type") or "").strip()
+    request_year = (request.form.get("year") or "").strip()
+    request_note = ""
+    dolby_preference = (request.form.get("dolby_preference") or "any").strip().lower()
+    if dolby_preference not in ("any", "prefer", "exclude"):
+        dolby_preference = "any"
+    advanced_mode = (request.form.get("advanced_mode") or "off").strip().lower() == "on"
+    season_raw = (request.form.get("season") or "").strip()
+    season_val = season_raw or None
+    resolution_pref = _normalize_resolution_pref(request.form.get("resolution") or "")
+
+    query_parts = [title]
+    if request_year:
+        query_parts.append(request_year)
+    if request_type:
+        query_parts.append(request_type)
+    query = " ".join([p for p in query_parts if p])
+
+    request_id = uuid.uuid4().hex
+    payload = {
+        "query": query,
+        "title": title,
+        "targets": runtime.get("targets") or [],
+        "notify_targets": runtime.get("effective_targets") or [],
+        "max_results": runtime.get("max_results", 5),
+        "hdhive_cookie": runtime.get("hdhive_cookie") or "",
+        "base_url": runtime.get("base_url") or "https://hdhive.com",
+        "type": request_type,
+        "year": request_year,
+        "note": request_note,
+        "hdhive_url": "",
+        "tmdb_api_key": runtime.get("tmdb_api_key") or "",
+        "tmdb_id": "",
+        "use_open_api": effective_use_open_api,
+        "hdhive_open_api_key": runtime.get("hdhive_api_key") or "",
+        "open_api_direct_unlock": bool(runtime.get("allow_open_api_direct")),
+        "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
+        "storage_mode": runtime.get("storage_mode") or "any",
+        "dolby_preference": dolby_preference,
+        "season": season_val,
+        "resolution": resolution_pref,
+        "advanced_mode": advanced_mode,
+        "request_id": request_id,
+    }
+    payload.update(_build_115_transfer_payload(config))
+
+    processing_detail = _build_self_service_detail([
+        f"片名: {title}" if title else "",
+        f"年份: {request_year}" if request_year else "",
+    ])
+    _set_self_service_result(request_id, "processing", "正在解析中，请稍候。", processing_detail)
+    submit_detail = _build_self_service_detail([
+        f"来源: {source_label}",
+        f"片名: {title}" if title else "",
+        f"类型: {request_type}" if request_type else "",
+        f"年份: {request_year}" if request_year else "",
+        f"模式: {'高级交互' if advanced_mode else '自动入库'}",
+        f"杜比: {_dolby_preference_label(dolby_preference)}" if dolby_preference != "any" else "",
+        f"RID: {request_id}",
+    ])
+    _self_service_notify_submit(runtime.get("effective_targets") or [], submit_detail)
+    threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
+    flash("已提交申请，后台处理中。结果将在页面内展示。", "success")
+    return redirect(url_for(endpoint, rid=request_id))
+
+
 def _try_115_share_transfer(real_url: str, payload: dict) -> tuple[bool, str]:
     if not real_url or not _is_115_url(real_url):
         return False, "not_115_url"
-    cookie = (payload.get("115_cookie") or payload.get("web_115_cookie") or "").strip()
-    target_cid = (payload.get("115_target_cid") or "").strip()
+    cookie = _get_115_cookie(payload)
+    target_cid = _get_115_target_cid(payload)
     if not cookie or not target_cid:
         return False, "missing_115_config"
     if not Client115:
@@ -5141,9 +5420,7 @@ def _run_self_service_request(payload: dict) -> None:
     tmdb_id_input = (payload.get("tmdb_id") or "").strip()
     unlock_threshold = int(payload.get("unlock_threshold", 0) or 0)
     allow_open_api_direct = bool(payload.get("open_api_direct_unlock", False))
-    storage_mode = str(payload.get("storage_mode", "any") or "any").lower()
-    if storage_mode not in ("any", "115", "123", "115_123"):
-        storage_mode = "any"
+    storage_mode = _normalize_self_service_storage_mode(payload.get("storage_mode", "any"))
     storage_label = _storage_mode_label(storage_mode)
     dolby_preference = str(payload.get("dolby_preference", "any") or "any").lower()
     if dolby_preference not in ("any", "prefer", "exclude"):
@@ -5421,8 +5698,8 @@ def _run_self_service_request(payload: dict) -> None:
                 return
 
             manual_transfer_supported = bool(
-                (payload.get("115_cookie") or payload.get("web_115_cookie"))
-                and payload.get("115_target_cid")
+                _get_115_cookie(payload)
+                and _get_115_target_cid(payload)
                 and Client115
                 and storage_mode != "123"
             )
@@ -7215,9 +7492,7 @@ def manage_config():
             target_user_ids = (request.form.get('self_service_target_user_ids') or '').strip()
             notify_user_ids = (request.form.get('self_service_notify_user_ids') or '').strip()
             notify_sender = (request.form.get('self_service_notify_sender') or 'telegram_monitor').strip().lower()
-            storage_mode = (request.form.get('self_service_storage_mode') or 'any').strip().lower()
-            if storage_mode not in ('any', '115', '123', '115_123'):
-                storage_mode = 'any'
+            storage_mode = _normalize_self_service_storage_mode(request.form.get('self_service_storage_mode') or 'any')
             max_results_raw = (request.form.get('self_service_search_max_results') or '').strip()
             cookie_check_mode = (request.form.get('self_service_cookie_check_mode') or 'warn').strip().lower()
             use_open_api = (request.form.get('self_service_use_open_api') or 'off').strip().lower() == 'on'
@@ -8268,26 +8543,13 @@ def manage_file_config():
         
         elif action == 'update_global':
             allowed_browse_path = request.form.get('allowed_browse_path')
-            debug_mode = request.form.get('debug_mode') == 'on'
             trace_media_detection = request.form.get('trace_media_detection') == 'on'
-            log_insights_window_minutes = request.form.get('log_insights_window_minutes', config.get('log_insights_window_minutes', 5))
-            config['debug_mode'] = debug_mode
             config['trace_media_detection'] = trace_media_detection
-            try:
-                log_insights_window_minutes = int(log_insights_window_minutes)
-            except Exception:
-                log_insights_window_minutes = config.get('log_insights_window_minutes', 5)
-            if log_insights_window_minutes < 0:
-                log_insights_window_minutes = 0
-            if log_insights_window_minutes > 1440:
-                log_insights_window_minutes = 1440
-            config['log_insights_window_minutes'] = log_insights_window_minutes
             if os.path.isdir(allowed_browse_path):
                 config['allowed_browse_path'] = os.path.abspath(allowed_browse_path)
                 save_config(config)
                 flash(
-                    f"全局设置已更新！DEBUG 模式: {'[开启]' if debug_mode else '[关闭]'}，"
-                    f"媒体追踪日志: {'[开启]' if trace_media_detection else '[关闭]'}",
+                    f"浏览与追踪设置已更新！媒体追踪日志: {'[开启]' if trace_media_detection else '[关闭]'}",
                     "success"
                 )
             else:
@@ -8296,8 +8558,7 @@ def manage_file_config():
         elif action == 'update_115':
             cookie_115 = (request.form.get('cookie_115') or '').strip()
             target_115_cid = (request.form.get('target_115_cid') or '').strip()
-            config['115_cookie'] = cookie_115
-            config['web_115_cookie'] = cookie_115
+            _set_115_cookie(config, cookie_115)
             config['115_target_cid'] = target_115_cid
             save_config(config)
             flash("115 Cookie 已更新！", "success")
@@ -8643,140 +8904,27 @@ def downloader_clear_log():
 @login_required
 def self_service_request():
     config = load_config()
-    enabled = bool(config.get("self_service_enabled", False))
-    targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
-    notify_targets = _parse_target_user_ids(config.get("self_service_notify_user_ids", ""))
-    effective_targets = notify_targets or targets
-    max_results = int(config.get("self_service_search_max_results", 5) or 5)
-    max_results = max(1, min(max_results, 20))
-    hdhive_cookie = (config.get("hdhive_cookie") or "").strip()
-    hdhive_cookie_test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
-    hdhive_api_key = (config.get("hdhive_open_api_key") or "").strip()
-    use_open_api = bool(config.get("self_service_use_open_api", False))
-    allow_open_api_direct = bool(config.get("hdhive_open_api_direct_unlock", False))
-    storage_mode = str(config.get("self_service_storage_mode", "any") or "any").lower()
+    runtime = _get_self_service_runtime(config)
 
     if request.method == 'POST':
-        hdhive_url = ""
-        effective_use_open_api = use_open_api
-        if not enabled:
-            flash("自助观影申请功能未启用，请先在配置页开启。", "warning")
-            return redirect(url_for('self_service_request'))
-        if effective_use_open_api:
-            if not hdhive_api_key:
-                flash("未配置 HDHive Open API Key，无法使用 API 搜索。", "error")
-                return redirect(url_for('self_service_request'))
-        else:
-            if not hdhive_cookie:
-                flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
-                return redirect(url_for('self_service_request'))
-        if not effective_targets:
-            flash("未配置通知用户，请先在配置页填写通知用户 ID。", "error")
-            return redirect(url_for('self_service_request'))
-
-        if not effective_use_open_api:
-            cookie_check_mode = str(config.get("self_service_cookie_check_mode", "warn") or "warn").lower()
-            if cookie_check_mode not in ("strict", "warn", "off"):
-                cookie_check_mode = "warn"
-            if cookie_check_mode != "off":
-                cookie_check = _test_hdhive_cookie(
-                    (config.get("hdhive_base_url") or "https://hdhive.com"),
-                    hdhive_cookie,
-                    hdhive_cookie_test_resource,
-                )
-                if not cookie_check.get("success"):
-                    msg = cookie_check.get("message") or "Cookie 无效或登录失效"
-                    if cookie_check_mode == "strict":
-                        flash(f"HDHive Cookie 无效：{msg}，请先更新 Cookie。", "error")
-                        return redirect(url_for('self_service_request'))
-                    flash(f"HDHive Cookie 可能无效：{msg}，仍尝试提交。", "warning")
-        title = (request.form.get('title') or '').strip()
-        if not title:
-            flash("请填写影片或剧集名称。", "warning")
-            return redirect(url_for('self_service_request'))
-
-        request_type = (request.form.get('type') or '').strip()
-        request_year = (request.form.get('year') or '').strip()
-        tmdb_id = ""
-        request_note = ""
-        dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
-        if dolby_preference not in ("any", "prefer", "exclude"):
-            dolby_preference = "any"
-        advanced_mode = (request.form.get('advanced_mode') or 'off').strip().lower() == 'on'
-        season_raw = (request.form.get('season') or '').strip()
-        season_val = None
-        if season_raw:
-            season_val = season_raw
-        resolution_pref = _normalize_resolution_pref(request.form.get('resolution') or '')
-
-        query_parts = [title]
-        if request_year:
-            query_parts.append(request_year)
-        if request_type:
-            query_parts.append(request_type)
-        query = " ".join([p for p in query_parts if p])
-
-        tmdb_key = ""
-        try:
-            tmdb_key = (config.get("drama_calendar", {}).get("tmdb_api_key") or "").strip()
-        except Exception:
-            tmdb_key = ""
-
-        payload = {
-            "query": query,
-            "title": title,
-            "targets": targets,
-            "notify_targets": effective_targets,
-            "max_results": max_results,
-            "hdhive_cookie": hdhive_cookie,
-            "base_url": (config.get("hdhive_base_url") or "https://hdhive.com"),
-            "type": request_type,
-            "year": request_year,
-            "note": request_note,
-            "hdhive_url": hdhive_url,
-            "tmdb_api_key": tmdb_key,
-            "tmdb_id": tmdb_id,
-            "use_open_api": effective_use_open_api,
-            "hdhive_open_api_key": hdhive_api_key,
-            "open_api_direct_unlock": allow_open_api_direct,
-            "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
-            "storage_mode": storage_mode,
-            "dolby_preference": dolby_preference,
-            "season": season_val,
-            "resolution": resolution_pref,
-            "advanced_mode": advanced_mode,
-            "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
-            "115_target_cid": (config.get("115_target_cid") or "").strip(),
-        }
-        request_id = uuid.uuid4().hex
-        payload["request_id"] = request_id
-        processing_detail = _build_self_service_detail([
-            f"片名: {title}" if title else "",
-            f"年份: {request_year}" if request_year else "",
-        ])
-        _set_self_service_result(request_id, "processing", "正在解析中，请稍候。", processing_detail)
-        submit_detail = _build_self_service_detail([
-            "来源: 登录入口",
-            f"片名: {title}" if title else "",
-            f"类型: {request_type}" if request_type else "",
-            f"年份: {request_year}" if request_year else "",
-            f"模式: {'高级交互' if advanced_mode else '自动入库'}",
-            f"杜比: {_dolby_preference_label(dolby_preference)}" if dolby_preference != "any" else "",
-            f"RID: {request_id}",
-        ])
-        _self_service_notify_submit(effective_targets, submit_detail)
-        threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
-        flash("已提交申请，后台处理中。结果将在页面内展示。", "success")
-        return redirect(url_for('self_service_request', rid=request_id))
+        return _submit_self_service_request(
+            config,
+            runtime,
+            source_label="登录入口",
+            endpoint="self_service_request",
+            disabled_message="自助观影申请功能未启用，请先在配置页开启。",
+            missing_targets_message="未配置通知用户，请先在配置页填写通知用户 ID。",
+            strict_cookie_message="请先更新 Cookie。",
+        )
 
     return render_template(
         'self_service_request.html',
-        enabled=enabled,
-        target_display=", ".join([str(t) for t in effective_targets]) if effective_targets else "未配置",
-        max_results=max_results,
-        has_cookie=bool(hdhive_cookie),
-        has_open_api_key=bool(hdhive_api_key),
-        use_open_api=use_open_api,
+        enabled=runtime.get("enabled"),
+        target_display=", ".join([str(t) for t in (runtime.get("effective_targets") or [])]) if runtime.get("effective_targets") else "未配置",
+        max_results=runtime.get("max_results"),
+        has_cookie=bool(runtime.get("hdhive_cookie")),
+        has_open_api_key=bool(runtime.get("hdhive_api_key")),
+        use_open_api=runtime.get("use_open_api"),
         request_id=(request.args.get('rid') or '').strip(),
         request_result=_get_self_service_result(request.args.get('rid') or ''),
         recent_limit=SELF_SERVICE_RECENT_DISPLAY_LIMIT,
@@ -8825,7 +8973,9 @@ def self_service_transfer():
     base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip() or "https://hdhive.com"
     effective_targets = _get_self_service_notify_targets(config)
     interactive_meta = result.get("interactive_meta") if isinstance(result.get("interactive_meta"), dict) else {}
-    storage_mode = str(interactive_meta.get("storage_mode") or config.get("self_service_storage_mode") or "any").lower()
+    storage_mode = _normalize_self_service_storage_mode(
+        interactive_meta.get("storage_mode") or config.get("self_service_storage_mode") or "any"
+    )
     storage_label = _storage_mode_label(storage_mode)
     title = str(interactive_meta.get("title") or selected.get("title") or "").strip()
 
@@ -8857,10 +9007,7 @@ def self_service_transfer():
         elif not full_url:
             note = "已解锁但未返回可转存链接"
         else:
-            transfer_payload = {
-                "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
-                "115_target_cid": (config.get("115_target_cid") or "").strip(),
-            }
+            transfer_payload = _build_115_transfer_payload(config)
             transfer_ok, transfer_note = _try_115_share_transfer(full_url, transfer_payload)
             if transfer_note == "transfer_ok":
                 note = "转存成功"
@@ -8927,20 +9074,10 @@ def self_service_transfer():
 @app.route('/self_service_public', methods=['GET', 'POST'], strict_slashes=False)
 def self_service_public():
     config = load_config()
-    enabled = bool(config.get("self_service_enabled", False))
+    runtime = _get_self_service_runtime(config)
+    enabled = bool(runtime.get("enabled"))
     public_enabled = bool(config.get("self_service_public_enabled", False))
     public_access_key = (config.get("self_service_public_access_key") or "").strip()
-    targets = _parse_target_user_ids(config.get("self_service_target_user_ids", ""))
-    notify_targets = _parse_target_user_ids(config.get("self_service_notify_user_ids", ""))
-    effective_targets = notify_targets or targets
-    max_results = int(config.get("self_service_search_max_results", 5) or 5)
-    max_results = max(1, min(max_results, 20))
-    hdhive_cookie = (config.get("hdhive_cookie") or "").strip()
-    hdhive_cookie_test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
-    hdhive_api_key = (config.get("hdhive_open_api_key") or "").strip()
-    use_open_api = bool(config.get("self_service_use_open_api", False))
-    allow_open_api_direct = bool(config.get("hdhive_open_api_direct_unlock", False))
-    storage_mode = str(config.get("self_service_storage_mode", "any") or "any").lower()
 
     if request.method == 'POST':
         if not enabled:
@@ -8960,128 +9097,26 @@ def self_service_public():
             flash(f"请求过于频繁，请在 {retry_after} 秒后再试。", "warning")
             return redirect(url_for('self_service_public'))
 
-        hdhive_url = ""
-        effective_use_open_api = use_open_api
-
-        if effective_use_open_api:
-            if not hdhive_api_key:
-                flash("未配置 HDHive Open API Key，无法使用 API 搜索。", "error")
-                return redirect(url_for('self_service_public'))
-        else:
-            if not hdhive_cookie:
-                flash("未配置 HDHive Cookie，无法自动解锁/解析。", "error")
-                return redirect(url_for('self_service_public'))
-
-        if not effective_targets:
-            flash("未配置通知用户，请联系管理员。", "error")
-            return redirect(url_for('self_service_public'))
-
-        if not effective_use_open_api:
-            cookie_check_mode = str(config.get("self_service_cookie_check_mode", "warn") or "warn").lower()
-            if cookie_check_mode not in ("strict", "warn", "off"):
-                cookie_check_mode = "warn"
-            if cookie_check_mode != "off":
-                cookie_check = _test_hdhive_cookie(
-                    (config.get("hdhive_base_url") or "https://hdhive.com"),
-                    hdhive_cookie,
-                    hdhive_cookie_test_resource,
-                )
-                if not cookie_check.get("success"):
-                    msg = cookie_check.get("message") or "Cookie 无效或登录失效"
-                    if cookie_check_mode == "strict":
-                        flash(f"HDHive Cookie 无效：{msg}，请联系管理员。", "error")
-                        return redirect(url_for('self_service_public'))
-                    flash(f"HDHive Cookie 可能无效：{msg}，仍尝试提交。", "warning")
-
-        title = (request.form.get('title') or '').strip()
-        if not title:
-            flash("请填写影片或剧集名称。", "warning")
-            return redirect(url_for('self_service_public'))
-
-        request_type = (request.form.get('type') or '').strip()
-        request_year = (request.form.get('year') or '').strip()
-        tmdb_id = ""
-        request_note = ""
-        dolby_preference = (request.form.get('dolby_preference') or 'any').strip().lower()
-        if dolby_preference not in ("any", "prefer", "exclude"):
-            dolby_preference = "any"
-        advanced_mode = (request.form.get('advanced_mode') or 'off').strip().lower() == 'on'
-        season_raw = (request.form.get('season') or '').strip()
-        season_val = None
-        if season_raw:
-            season_val = season_raw
-        resolution_pref = _normalize_resolution_pref(request.form.get('resolution') or '')
-
-        query_parts = [title]
-        if request_year:
-            query_parts.append(request_year)
-        if request_type:
-            query_parts.append(request_type)
-        query = " ".join([p for p in query_parts if p])
-
-        tmdb_key = ""
-        try:
-            tmdb_key = (config.get("drama_calendar", {}).get("tmdb_api_key") or "").strip()
-        except Exception:
-            tmdb_key = ""
-
-        payload = {
-            "query": query,
-            "title": title,
-            "targets": targets,
-            "notify_targets": effective_targets,
-            "max_results": max_results,
-            "hdhive_cookie": hdhive_cookie,
-            "base_url": (config.get("hdhive_base_url") or "https://hdhive.com"),
-            "type": request_type,
-            "year": request_year,
-            "note": request_note,
-            "hdhive_url": hdhive_url,
-            "tmdb_api_key": tmdb_key,
-            "tmdb_id": tmdb_id,
-            "use_open_api": effective_use_open_api,
-            "hdhive_open_api_key": hdhive_api_key,
-            "open_api_direct_unlock": allow_open_api_direct,
-            "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
-            "storage_mode": storage_mode,
-            "dolby_preference": dolby_preference,
-            "season": season_val,
-            "resolution": resolution_pref,
-            "advanced_mode": advanced_mode,
-            "115_cookie": (config.get("115_cookie") or config.get("web_115_cookie") or "").strip(),
-            "115_target_cid": (config.get("115_target_cid") or "").strip(),
-        }
-        request_id = uuid.uuid4().hex
-        payload["request_id"] = request_id
-        processing_detail = _build_self_service_detail([
-            f"片名: {title}" if title else "",
-            f"年份: {request_year}" if request_year else "",
-        ])
-        _set_self_service_result(request_id, "processing", "正在解析中，请稍候。", processing_detail)
-        submit_detail = _build_self_service_detail([
-            "来源: 公共入口",
-            f"片名: {title}" if title else "",
-            f"类型: {request_type}" if request_type else "",
-            f"年份: {request_year}" if request_year else "",
-            f"模式: {'高级交互' if advanced_mode else '自动入库'}",
-            f"杜比: {_dolby_preference_label(dolby_preference)}" if dolby_preference != "any" else "",
-            f"RID: {request_id}",
-        ])
-        _self_service_notify_submit(effective_targets, submit_detail)
-        threading.Thread(target=_run_self_service_request, args=(payload,), daemon=True).start()
-        flash("已提交申请，后台处理中。结果将在页面内展示。", "success")
-        return redirect(url_for('self_service_public', rid=request_id))
+        return _submit_self_service_request(
+            config,
+            runtime,
+            source_label="公共入口",
+            endpoint="self_service_public",
+            disabled_message="自助观影申请功能未启用，请联系管理员。",
+            missing_targets_message="未配置通知用户，请联系管理员。",
+            strict_cookie_message="请联系管理员。",
+        )
 
     return render_template(
         'self_service_public.html',
         enabled=enabled,
         public_enabled=public_enabled,
         require_access_key=bool(public_access_key),
-        max_results=max_results,
-        has_cookie=bool(hdhive_cookie),
-        has_open_api_key=bool(hdhive_api_key),
-        use_open_api=use_open_api,
-        target_display="管理员" if effective_targets else "未配置",
+        max_results=runtime.get("max_results"),
+        has_cookie=bool(runtime.get("hdhive_cookie")),
+        has_open_api_key=bool(runtime.get("hdhive_api_key")),
+        use_open_api=runtime.get("use_open_api"),
+        target_display="管理员" if runtime.get("effective_targets") else "未配置",
         request_id=(request.args.get('rid') or '').strip(),
         request_result=_get_self_service_result(request.args.get('rid') or ''),
     )
@@ -9177,8 +9212,10 @@ def api_test_115_upload_chain():
     config = load_config()
     payload = request.get_json(silent=True) or {}
 
-    cookie = (payload.get('cookie_115') or config.get('115_cookie') or config.get('web_115_cookie') or '').strip()
-    target_cid = (payload.get('target_115_cid') or config.get('115_target_cid') or '').strip()
+    merged_115 = dict(config)
+    merged_115.update(payload)
+    cookie = _get_115_cookie(merged_115)
+    target_cid = _get_115_target_cid(merged_115)
 
     if not cookie:
         return jsonify({

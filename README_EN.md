@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.41-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.42-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.41`
+Latest image: `y1nf0x/tg-file-monitor:0.5.42`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.41
+y1nf0x/tg-file-monitor:0.5.42
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,14 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.41 (2026-03-21) - Current
+### v0.5.42 (2026-04-09) - Current
+- ✅ Continued the lighter glass-style admin refresh across the home dashboard, config/file-sync/drama pages, public shells, and switched auth/login pages back to a light theme
+- ✅ Hardened HDHive link resolution with clearer Open API failure diagnostics; when “allow Open API direct unlock” is enabled, the resolver can fall back to direct unlock if the detail endpoint is down
+- ✅ Fixed the bot misclassifying YouTube and other normal links as raw 115 share codes, so it no longer incorrectly asks for `cid=123456`
+- ✅ Consolidated proxy scope normalization, proxy URL building, and Telethon proxy construction into a shared helper to reduce drift across entry points
+- ✅ Added regression coverage for HDHive / proxy / bot link detection / UI smoke, and the full unittest discover run passes before release
+
+### v0.5.41 (2026-03-21)
 - ✅ The homepage leans further into an overview-first layout with a recent-issues summary strip instead of repeating entry points
 - ✅ Config and runtime sections are trimmed again so log links are centralized and runtime cards only keep operational signals
 
@@ -346,7 +353,7 @@ Try:
 - Self-service UI: recent list on the right, details collapsed, limit display count
 - Drama scheduler log now keeps only the latest run
 
-### v0.5.14 (2026-03-17) - Current
+### v0.5.14 (2026-03-17)
 - ✅ Self-service form hint: leave season empty = all seasons
 
 ### v0.5.13 (2026-03-17)

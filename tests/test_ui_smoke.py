@@ -33,7 +33,7 @@ class UISmokeTestCase(unittest.TestCase):
     def test_private_pages_render_when_logged_in(self):
         self._login()
         checks = [
-            ("/", "配置入口与运行状态一页集中"),
+            ("/", "控制台"),
             ("/config", "Telegram 配置中心"),
             ("/proxy_config", "代理设置"),
             ("/file_config", "文件同步配置中心"),

@@ -5,27 +5,27 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}自助观影公共入口{% endblock %}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
+    <link href="{{ url_for('static', filename='vendor/bootstrap/css/bootstrap.min.css') }}" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap-icons/bootstrap-icons.min.css') }}">
     <style>
         :root {
             --bs-body-font-size: 0.875rem;
             --bs-border-radius: 0.85rem;
-            --glass-bg: rgba(255, 255, 255, 0.18);
-            --glass-bg-strong: rgba(255, 255, 255, 0.3);
-            --glass-border: rgba(255, 255, 255, 0.14);
-            --accent-color: #2563eb;
+            --glass-bg: rgba(8, 16, 30, 0.78);
+            --glass-bg-strong: rgba(12, 24, 44, 0.9);
+            --glass-border: rgba(63, 224, 255, 0.14);
+            --accent-color: #00eaff;
         }
 
         body {
             background:
-                radial-gradient(circle at top right, rgba(96, 165, 250, 0.18), transparent 28%),
-                radial-gradient(circle at 12% 18%, rgba(16, 185, 129, 0.12), transparent 26%),
-                radial-gradient(circle at 74% 78%, rgba(244, 114, 182, 0.1), transparent 22%),
-                linear-gradient(135deg, #f7f9fd 0%, #e3eaf5 100%);
+                radial-gradient(circle at top right, rgba(0, 234, 255, 0.18), transparent 28%),
+                radial-gradient(circle at 12% 18%, rgba(0, 255, 198, 0.12), transparent 26%),
+                radial-gradient(circle at 74% 78%, rgba(255, 94, 207, 0.1), transparent 22%),
+                linear-gradient(135deg, #050814 0%, #0a1020 100%);
             background-attachment: fixed;
             min-height: 100vh;
-            color: #1f2937;
+            color: #e8fbff;
             font-family: 'Inter', -apple-system, sans-serif;
             overflow-x: hidden;
         }
@@ -44,7 +44,7 @@
             font-weight: 700;
             letter-spacing: 0.08em;
             text-transform: uppercase;
-            color: #2563eb;
+            color: #00eaff;
             margin-bottom: 0.25rem;
         }
 
@@ -52,12 +52,12 @@
             margin: 0;
             font-size: 1.35rem;
             font-weight: 800;
-            color: #0f172a;
+            color: #e8fbff;
         }
 
         .public-topbar-desc {
             margin-top: 0.35rem;
-            color: #64748b;
+            color: #7da4c2;
             font-size: 0.82rem;
             line-height: 1.45;
         }
@@ -69,15 +69,70 @@
             border: 1px solid var(--glass-border);
             border-radius: var(--bs-border-radius);
             box-shadow:
-                0 12px 24px rgba(15, 23, 42, 0.05),
-                inset 0 1px 0 rgba(255, 255, 255, 0.16);
+                0 18px 30px rgba(0, 0, 0, 0.24),
+                inset 0 1px 0 rgba(148, 224, 255, 0.05);
         }
 
         .card-header {
-            background: rgba(255, 255, 255, 0.1) !important;
+            background: rgba(0, 234, 255, 0.08) !important;
             border-bottom: 1px solid var(--glass-border);
             padding: 0.75rem 1.25rem;
-            color: #374151 !important;
+            color: #dff8ff !important;
+        }
+
+        .public-shell,
+        .card-body,
+        .card-body p,
+        .card-body li,
+        .card-body span,
+        .card-body div {
+            color: #e8fbff;
+        }
+
+        .text-muted,
+        .text-secondary,
+        small,
+        .small,
+        .form-text {
+            color: #7da4c2 !important;
+        }
+
+        .text-dark,
+        .fw-bold,
+        .fw-semibold {
+            color: #e8fbff !important;
+        }
+
+        .btn-outline-primary,
+        .btn-outline-secondary,
+        .btn-outline-info,
+        .btn-outline-danger,
+        .btn-outline-warning,
+        .btn-outline-light {
+            background: rgba(8, 16, 30, 0.68);
+            border-color: rgba(63, 224, 255, 0.14);
+        }
+
+        .form-control,
+        .form-select,
+        textarea.form-control {
+            background: rgba(7, 14, 28, 0.88);
+            border: 1px solid rgba(63, 224, 255, 0.14);
+            color: #effcff;
+        }
+
+        .form-control::placeholder,
+        textarea.form-control::placeholder {
+            color: rgba(138, 178, 206, 0.56);
+        }
+
+        .form-control:focus,
+        .form-select:focus,
+        textarea.form-control:focus {
+            background: rgba(10, 19, 35, 0.96);
+            border-color: rgba(0, 234, 255, 0.32);
+            color: #f7feff;
+            box-shadow: 0 0 0 0.16rem rgba(0, 234, 255, 0.12);
         }
 
         .btn-primary {
@@ -214,7 +269,7 @@
         <footer class="text-center mt-4 opacity-50">© 2026 Public Page v{{ version }}</footer>
     </main>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
     <script>
         setTimeout(() => {
             const alerts = document.querySelectorAll('.alert.alert-dismissible');

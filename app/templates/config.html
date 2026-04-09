@@ -3,25 +3,25 @@
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
 <style>
     .tg-compact {
-        --tg-gap-x: 0.6rem;
-        --tg-gap-y: 0.45rem;
+        --tg-gap-x: 1rem;
+        --tg-gap-y: 0.8rem;
     }
     .tg-compact .row {
         --bs-gutter-x: var(--tg-gap-x);
         --bs-gutter-y: var(--tg-gap-y);
     }
     .tg-compact h3 {
-        font-size: 1.05rem;
-        margin-bottom: 0.35rem !important;
-    }
-    .tg-compact .card {
+        font-size: 1.2rem;
         margin-bottom: 0.5rem !important;
     }
+    .tg-compact .card {
+        margin-bottom: 0.9rem !important;
+    }
     .tg-compact .card-header {
-        padding: 0.35rem 0.6rem !important;
+        padding: 0.65rem 0.9rem !important;
     }
     .tg-compact .card-body {
-        padding: 0.6rem !important;
+        padding: 0.95rem !important;
     }
     .tg-compact .mb-2 {
         margin-bottom: 0.35rem !important;
@@ -55,7 +55,7 @@
         padding-bottom: 0.2rem;
     }
     .tg-compact .btn-sm {
-        padding: 0.2rem 0.5rem;
+        padding: 0.35rem 0.75rem;
     }
     .sortable-ghost {
         opacity: 0.4;
@@ -100,9 +100,9 @@
     }
     
     .list-group-item {
-        padding: 0.1rem 0.3rem !important;
-        font-size: 0.75rem !important;
-        gap: 0.2rem !important;
+        padding: 0.45rem 0.7rem !important;
+        font-size: 0.82rem !important;
+        gap: 0.45rem !important;
         border-bottom: 1px solid #f0f0f0 !important;
     }
 
@@ -206,6 +206,124 @@
         opacity: 0.8;
     }
 
+    .channel-item {
+        padding: 0.8rem 0.95rem !important;
+        background: rgba(255, 255, 255, 0.82) !important;
+        border-bottom: 1px solid rgba(125, 160, 190, 0.14) !important;
+    }
+
+    .channel-item-main {
+        min-width: 0;
+    }
+
+    .channel-item-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+    }
+
+    .channel-item-title {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        min-width: 0;
+    }
+
+    .channel-item-name {
+        font-size: 0.96rem;
+        font-weight: 800;
+        color: #17314c;
+        line-height: 1.25;
+        min-width: 0;
+        word-break: break-word;
+    }
+
+    .channel-item-id {
+        display: inline-flex;
+        align-items: center;
+        padding: 0.16rem 0.4rem;
+        border-radius: 999px;
+        background: rgba(236, 243, 250, 0.92);
+        color: #5f7892;
+        font-size: 0.68rem;
+        font-weight: 700;
+        border: 1px solid rgba(125, 160, 190, 0.14);
+    }
+
+    .channel-item-path {
+        margin-top: 0.45rem;
+        font-size: 0.8rem;
+        color: #5f7892;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        flex-wrap: wrap;
+    }
+
+    .channel-item-path code {
+        font-size: 0.68rem !important;
+        padding: 0.05rem 0.25rem !important;
+    }
+
+    .channel-item-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.36rem;
+        margin-top: 0.55rem;
+    }
+
+    .channel-item-chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.24rem;
+        padding: 0.18rem 0.5rem;
+        border-radius: 999px;
+        background: rgba(244, 248, 253, 0.96);
+        border: 1px solid rgba(125, 160, 190, 0.14);
+        color: #46617b;
+        font-size: 0.72rem;
+        font-weight: 700;
+        line-height: 1.2;
+    }
+
+    .channel-item-chip.is-positive {
+        color: #0f8b6a;
+        border-color: rgba(16, 185, 129, 0.16);
+        background: rgba(16, 185, 129, 0.1);
+    }
+
+    .channel-item-chip.is-alert {
+        color: #dc2626;
+        border-color: rgba(220, 38, 38, 0.16);
+        background: rgba(220, 38, 38, 0.08);
+    }
+
+    .channel-item-actions {
+        display: inline-flex;
+        gap: 0.24rem;
+        flex-shrink: 0;
+    }
+
+    .channel-item-actions .btn {
+        padding: 0.12rem 0.34rem !important;
+        border-radius: 0.55rem;
+    }
+
+    .channel-item-fetch {
+        padding: 0;
+        border: 0;
+        background: transparent;
+        color: #2563eb;
+        font-size: 0.7rem;
+        font-weight: 700;
+    }
+
+    .channel-item-fetch:hover {
+        color: #1d4ed8;
+    }
+
     @keyframes rotate {
         from { transform: rotate(0deg); }
         to { transform: rotate(360deg); }
@@ -215,11 +333,14 @@
         animation: rotate 1s linear infinite;
     }
 
-    .settings-overview {
-        background:
-            radial-gradient(circle at top right, rgba(99, 102, 241, 0.16), transparent 32%),
-            linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(248, 250, 252, 0.28));
-        border: 1px solid rgba(99, 102, 241, 0.14);
+    .tg-compact {
+        --tg-surface: rgba(9, 18, 34, 0.9);
+        --tg-surface-soft: rgba(12, 24, 44, 0.86);
+        --tg-border: rgba(63, 224, 255, 0.14);
+        --tg-text: #e8fbff;
+        --tg-muted: #7da4c2;
+        --tg-accent: #00eaff;
+        --tg-accent-soft: #00ffc6;
     }
 
     .settings-kicker {
@@ -227,15 +348,114 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #4f46e5;
+        color: var(--tg-accent);
         margin-bottom: 0.25rem;
     }
 
-    .settings-hero-title {
-        font-size: 1.35rem;
-        font-weight: 800;
-        color: #111827;
+    .settings-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 1.15rem;
+    }
+
+    .settings-topbar {
+        background:
+            radial-gradient(circle at top right, rgba(0, 234, 255, 0.14), transparent 28%),
+            linear-gradient(135deg, rgba(10, 19, 35, 0.94), rgba(7, 14, 28, 0.88));
+        border: 1px solid var(--tg-border);
+    }
+
+    .settings-topbar-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .settings-topbar-copy h3 {
         margin: 0;
+        font-size: 1.45rem;
+        font-weight: 800;
+        color: var(--tg-text);
+    }
+
+    .settings-topbar-copy p {
+        margin: 0.25rem 0 0;
+        font-size: 0.78rem;
+        line-height: 1.4;
+        color: var(--tg-muted);
+        max-width: 52ch;
+    }
+
+    .settings-summary-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.75rem;
+    }
+
+    .settings-summary-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.38rem;
+        padding: 0.25rem 0.58rem;
+        border-radius: 999px;
+        border: 1px solid var(--tg-border);
+        background: rgba(9, 18, 34, 0.82);
+        color: var(--tg-muted);
+        font-size: 0.73rem;
+        font-weight: 600;
+    }
+
+    .settings-summary-pill i {
+        color: var(--tg-accent);
+        font-size: 0.8rem;
+    }
+
+    .settings-summary-pill strong {
+        color: var(--tg-text);
+        font-weight: 800;
+    }
+
+    .settings-metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.8rem;
+        margin-top: 1rem;
+    }
+
+    .settings-metric-card {
+        padding: 1rem 1.05rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(125, 160, 190, 0.16);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(241, 247, 252, 0.84));
+        box-shadow:
+            0 14px 28px rgba(37, 78, 122, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.68);
+    }
+
+    .settings-metric-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #69829a;
+        margin-bottom: 0.35rem;
+    }
+
+    .settings-metric-value {
+        font-size: 1.55rem;
+        line-height: 1;
+        font-weight: 800;
+        color: #17314c;
+        letter-spacing: -0.03em;
+    }
+
+    .settings-metric-note {
+        margin-top: 0.38rem;
+        font-size: 0.8rem;
+        line-height: 1.45;
+        color: #617a93;
     }
 
     .settings-quick-actions {
@@ -249,44 +469,7 @@
         min-width: 118px;
         font-weight: 800;
         border-width: 1.5px;
-        box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
-    }
-
-    .settings-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.75rem;
-    }
-
-    .settings-stat-card {
-        background: rgba(255, 255, 255, 0.2);
-        border: 1px solid rgba(148, 163, 184, 0.18);
-        border-radius: 0.85rem;
-        padding: 0.85rem 0.9rem;
-        min-height: 112px;
-    }
-
-    .settings-stat-label {
-        font-size: 0.72rem;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 700;
-        margin-bottom: 0.35rem;
-    }
-
-    .settings-stat-value {
-        font-size: 1.55rem;
-        line-height: 1;
-        font-weight: 800;
-        color: #0f172a;
-        margin-bottom: 0.25rem;
-    }
-
-    .settings-stat-help {
-        font-size: 0.76rem;
-        color: #64748b;
-        line-height: 1.35;
+        box-shadow: 0 12px 22px rgba(0, 0, 0, 0.2);
     }
 
     .settings-chip-row {
@@ -302,94 +485,81 @@
         gap: 0.3rem;
         padding: 0.2rem 0.5rem;
         border-radius: 999px;
-        background: rgba(148, 163, 184, 0.16);
-        color: #475569;
+        background: rgba(12, 24, 44, 0.86);
+        color: var(--tg-muted);
         font-size: 0.72rem;
         font-weight: 600;
     }
 
+    .settings-chip::before {
+        content: "";
+        width: 0.42rem;
+        height: 0.42rem;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.32;
+        flex-shrink: 0;
+    }
+
     .settings-chip.is-on {
-        background: rgba(16, 185, 129, 0.14);
-        color: #047857;
+        background: rgba(0, 255, 198, 0.12);
+        color: var(--tg-accent-soft);
     }
 
     .settings-chip.is-off {
-        background: rgba(148, 163, 184, 0.16);
-        color: #64748b;
+        background: rgba(9, 18, 34, 0.82);
+        color: var(--tg-muted);
     }
 
     .settings-nav-card {
-        position: sticky;
-        top: 1.1rem;
+        position: static;
+        border-style: dashed;
     }
 
     .settings-nav-list {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 0.55rem;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 0.45rem;
     }
 
     .settings-nav-link {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 0.75rem;
+        gap: 0.6rem;
         text-decoration: none;
-        color: #334155;
-        padding: 0.7rem 0.8rem;
-        border-radius: 0.85rem;
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        background: rgba(255, 255, 255, 0.16);
+        color: #9ec8e8;
+        padding: 0.55rem 0.7rem;
+        border-radius: 0.75rem;
+        border: 1px solid var(--tg-border);
+        background: rgba(9, 18, 34, 0.82);
         transition: all 0.2s ease;
+        font-size: 0.76rem;
     }
 
     .settings-nav-link:hover {
-        color: #1e293b;
-        border-color: rgba(99, 102, 241, 0.28);
+        color: #f1fcff;
+        border-color: rgba(0, 234, 255, 0.18);
         transform: translateY(-1px);
-        box-shadow: 0 10px 24px rgba(99, 102, 241, 0.08);
+        box-shadow: 0 0 24px rgba(0, 234, 255, 0.08);
     }
 
     .settings-nav-link.active {
-        color: #312e81;
-        border-color: rgba(99, 102, 241, 0.26);
-        background: rgba(99, 102, 241, 0.1);
-        box-shadow: 0 10px 22px rgba(99, 102, 241, 0.1);
+        color: #f1fcff;
+        border-color: rgba(0, 234, 255, 0.18);
+        background: linear-gradient(90deg, rgba(0, 234, 255, 0.12), rgba(8, 16, 30, 0.84));
+        box-shadow: 0 0 24px rgba(0, 234, 255, 0.08);
     }
 
     .settings-nav-link i {
-        color: #6366f1;
+        color: var(--tg-accent);
         margin-right: 0.35rem;
     }
 
     .settings-nav-meta {
         font-size: 0.75rem;
-        color: #64748b;
+        color: var(--tg-muted);
         line-height: 1.5;
-    }
-
-    .related-page-link {
-        display: block;
-        text-decoration: none;
-        border: 1px solid rgba(148, 163, 184, 0.16);
-        border-radius: 0.8rem;
-        padding: 0.7rem 0.8rem;
-        background: rgba(255, 255, 255, 0.14);
-        color: #1f2937;
-        transition: all 0.2s ease;
-    }
-
-    .related-page-link:hover {
-        color: #111827;
-        border-color: rgba(99, 102, 241, 0.24);
-        transform: translateY(-1px);
-    }
-
-    .related-page-link small {
-        display: block;
-        color: #64748b;
-        margin-top: 0.15rem;
-        line-height: 1.35;
     }
 
     .settings-section {
@@ -401,21 +571,22 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: 0.75rem;
-        margin-bottom: 0.75rem;
+        margin-bottom: 0.55rem;
     }
 
     .settings-section-header h4 {
         margin: 0 0 0.15rem 0;
         font-size: 1rem;
         font-weight: 800;
-        color: #0f172a;
+        color: var(--tg-text);
     }
 
     .settings-section-header p {
         margin: 0;
-        color: #64748b;
-        font-size: 0.78rem;
-        line-height: 1.45;
+        color: var(--tg-muted);
+        font-size: 0.74rem;
+        line-height: 1.4;
+        max-width: 44ch;
     }
 
     .settings-section-label {
@@ -423,7 +594,7 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #6366f1;
+        color: var(--tg-accent);
         margin-bottom: 0.2rem;
     }
 
@@ -433,28 +604,273 @@
         gap: 0.35rem;
         padding: 0.25rem 0.55rem;
         border-radius: 999px;
-        background: rgba(15, 23, 42, 0.05);
-        color: #334155;
+        background: rgba(0, 234, 255, 0.1);
+        color: #def9ff;
         font-size: 0.72rem;
         font-weight: 600;
     }
 
-    .settings-note-card {
-        background: rgba(15, 23, 42, 0.04);
-        border: 1px dashed rgba(148, 163, 184, 0.4);
-        border-radius: 0.8rem;
-        padding: 0.75rem 0.8rem;
+    .settings-section-header.compact {
+        margin-bottom: 0.6rem;
     }
 
-    .settings-note-card strong {
-        color: #0f172a;
+    .settings-section-header.compact .settings-section-label {
+        display: none;
     }
 
-    .settings-note-card,
-    .settings-note-card small {
-        color: #334155;
-        font-weight: 500;
-        line-height: 1.45;
+    .tg-compact .accordion-header {
+        background: transparent;
+    }
+
+    .tg-compact .accordion-button,
+    .tg-compact .compact-accordion .accordion-button {
+        background: linear-gradient(180deg, rgba(12, 24, 44, 0.94), rgba(8, 16, 30, 0.88)) !important;
+        color: var(--tg-text) !important;
+        border-color: var(--tg-border) !important;
+    }
+
+    .tg-compact .accordion-button:not(.collapsed) {
+        background: linear-gradient(180deg, rgba(0, 234, 255, 0.1), rgba(8, 16, 30, 0.9)) !important;
+        color: var(--tg-text) !important;
+    }
+
+    .tg-compact .accordion-item,
+    .tg-compact .compact-accordion .accordion-item {
+        background: var(--tg-surface-soft);
+        border: 1px solid var(--tg-border) !important;
+    }
+
+    .tg-compact .list-group-item {
+        background: var(--tg-surface) !important;
+        color: var(--tg-text) !important;
+        border-bottom: 1px solid rgba(63, 224, 255, 0.08) !important;
+    }
+
+    .tg-compact .list-group-item:hover {
+        background-color: rgba(0, 234, 255, 0.06) !important;
+    }
+
+    .tg-compact .group-drag-handle {
+        color: var(--tg-muted);
+    }
+
+    .tg-compact .group-drag-handle:hover {
+        color: var(--tg-accent);
+    }
+
+    .tg-compact .badge.bg-light.text-dark,
+    .tg-compact .badge.bg-white.text-primary,
+    .tg-compact .badge.bg-success-subtle.text-success {
+        background: rgba(10, 21, 39, 0.96) !important;
+        color: #dff8ff !important;
+        border: 1px solid var(--tg-border);
+    }
+
+    .tg-compact .badge.bg-warning.text-dark,
+    .tg-compact .badge.bg-secondary,
+    .tg-compact .badge.bg-primary,
+    .tg-compact .badge.bg-success {
+        color: #03111e !important;
+    }
+
+    .tg-compact .text-primary {
+        color: var(--tg-accent) !important;
+    }
+
+    .tg-compact .text-danger {
+        color: #ff7fb0 !important;
+    }
+
+    .tg-compact .text-muted,
+    .tg-compact .text-secondary,
+    .tg-compact small,
+    .tg-compact .small,
+    .tg-compact .form-text {
+        color: var(--tg-muted) !important;
+    }
+
+    .tg-compact .text-dark,
+    .tg-compact .fw-bold,
+    .tg-compact .fw-semibold {
+        color: var(--tg-text) !important;
+    }
+
+    .tg-compact .card-header.bg-primary,
+    .tg-compact .card-header.bg-success,
+    .tg-compact .card-header.bg-secondary,
+    .tg-compact .card-header.bg-dark,
+    .tg-compact .card-header.bg-warning {
+        color: #02111e !important;
+    }
+
+    .tg-compact .btn-link {
+        color: var(--tg-accent);
+    }
+
+    .tg-compact .btn-link:hover,
+    .tg-compact .btn-link:focus {
+        color: var(--tg-accent-soft);
+    }
+
+    .tg-compact .alert {
+        background: linear-gradient(180deg, rgba(9, 18, 34, 0.94), rgba(8, 16, 30, 0.9));
+        border: 1px solid var(--tg-border);
+        color: var(--tg-text);
+    }
+
+    #bulkActionBar {
+        background: rgba(7, 14, 28, 0.88);
+        border: 1px solid var(--tg-border);
+    }
+
+    /* Light glass readability pass */
+    .tg-compact {
+        --tg-surface: rgba(255, 255, 255, 0.76);
+        --tg-surface-soft: rgba(247, 251, 255, 0.88);
+        --tg-border: rgba(125, 160, 190, 0.18);
+        --tg-text: #1d3650;
+        --tg-muted: #617a93;
+        --tg-accent: #475569;
+        --tg-accent-soft: #64748b;
+    }
+
+    .settings-topbar {
+        background:
+            radial-gradient(circle at top right, rgba(84, 208, 255, 0.14), transparent 28%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(236, 244, 252, 0.88));
+        border: 1px solid var(--tg-border);
+        box-shadow: 0 18px 36px rgba(37, 78, 122, 0.08);
+    }
+
+    .settings-summary-pill,
+    .settings-chip {
+        background: rgba(255, 255, 255, 0.74);
+        color: var(--tg-muted);
+    }
+
+    .settings-summary-pill strong {
+        color: var(--tg-text);
+    }
+
+    .settings-inline-badge {
+        background: rgba(84, 208, 255, 0.12);
+        color: #23405d;
+    }
+
+    .settings-chip.is-on {
+        background: rgba(16, 185, 129, 0.14);
+        color: #0f9f78;
+    }
+
+    .settings-chip.is-off {
+        background: rgba(236, 243, 250, 0.9);
+        color: var(--tg-muted);
+    }
+
+    .settings-nav-link {
+        background: rgba(255, 255, 255, 0.74);
+        color: #49617a;
+        box-shadow: none;
+    }
+
+    .settings-nav-link:hover,
+    .settings-nav-link.active {
+        color: #17314c;
+        border-color: rgba(125, 160, 190, 0.22);
+        background: linear-gradient(90deg, rgba(84, 208, 255, 0.12), rgba(255, 255, 255, 0.76));
+        box-shadow: 0 10px 22px rgba(37, 78, 122, 0.08);
+    }
+
+    .tg-compact .accordion-button,
+    .tg-compact .compact-accordion .accordion-button {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(242, 247, 252, 0.82)) !important;
+        color: var(--tg-text) !important;
+        border-color: var(--tg-border) !important;
+    }
+
+    .tg-compact .accordion-button:not(.collapsed) {
+        background: linear-gradient(180deg, rgba(84, 208, 255, 0.12), rgba(255, 255, 255, 0.84)) !important;
+        color: var(--tg-text) !important;
+    }
+
+    .tg-compact .accordion-item,
+    .tg-compact .compact-accordion .accordion-item {
+        background: var(--tg-surface-soft);
+    }
+
+    .tg-compact .list-group-item {
+        background: var(--tg-surface) !important;
+        color: var(--tg-text) !important;
+        border-bottom: 1px solid rgba(125, 160, 190, 0.14) !important;
+    }
+
+    .tg-compact .list-group-item:hover {
+        background-color: rgba(84, 208, 255, 0.06) !important;
+    }
+
+    .tg-compact .badge.bg-light.text-dark,
+    .tg-compact .badge.bg-white.text-primary,
+    .tg-compact .badge.bg-success-subtle.text-success {
+        background: rgba(255, 255, 255, 0.86) !important;
+        color: #23405d !important;
+        border: 1px solid var(--tg-border);
+    }
+
+    .tg-compact .text-danger {
+        color: #d64f87 !important;
+    }
+
+    .tg-compact .card-header.bg-primary,
+    .tg-compact .card-header.bg-success,
+    .tg-compact .card-header.bg-secondary,
+    .tg-compact .card-header.bg-dark {
+        color: #fff !important;
+    }
+
+    .tg-compact .card-header.bg-warning {
+        color: #563c12 !important;
+    }
+
+    .tg-compact .alert {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(239, 246, 252, 0.8));
+        border: 1px solid var(--tg-border);
+        color: var(--tg-text);
+        box-shadow: none;
+    }
+
+    #bulkActionBar {
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--tg-border);
+        box-shadow: 0 8px 18px rgba(37, 78, 122, 0.08);
+    }
+
+    .tg-compact code {
+        background: rgba(244, 248, 253, 0.92) !important;
+        color: #24415f !important;
+        border: 1px solid rgba(125, 160, 190, 0.14) !important;
+    }
+
+    #restrictedEditorModal .card {
+        margin-bottom: 0;
+        border: 0;
+        box-shadow: none;
+        background: transparent;
+    }
+
+    #restrictedEditorModal .card-header {
+        display: none;
+    }
+
+    #restrictedEditorModal .card-body {
+        padding: 0 !important;
+    }
+
+    #settingsSectionModal .settings-fold-summary {
+        display: none;
+    }
+
+    #settingsSectionModal .card {
+        margin-bottom: 0;
     }
 
     .settings-section.is-jumping > .settings-section-header,
@@ -462,6 +878,41 @@
         position: relative;
         z-index: 1;
         animation: settingsSectionPulse 1.2s ease;
+    }
+
+    .settings-fold {
+        margin-bottom: 0.75rem;
+    }
+
+    .settings-fold-summary {
+        list-style: none;
+        cursor: pointer;
+    }
+
+    .settings-fold-summary::-webkit-details-marker {
+        display: none;
+    }
+
+    .settings-fold-summary .settings-section-header {
+        margin-bottom: 0;
+    }
+
+    .settings-fold .settings-section-header::after {
+        content: "展开";
+        margin-left: auto;
+        color: var(--tg-muted);
+        font-size: 0.7rem;
+        font-family: var(--console-mono);
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+
+    .settings-fold[open] .settings-section-header::after {
+        content: "收起";
+    }
+
+    .settings-fold[open] .settings-fold-summary {
+        margin-bottom: 0.55rem;
     }
 
     @keyframes settingsSectionPulse {
@@ -484,9 +935,6 @@
             scroll-margin-top: 1.35rem;
         }
 
-        .settings-summary-grid {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-        }
     }
 
     @media (min-width: 992px) {
@@ -510,13 +958,115 @@
     }
 
     @media (max-width: 767.98px) {
-        .settings-summary-grid {
-            grid-template-columns: 1fr;
+        .settings-topbar-head {
+            flex-direction: column;
         }
 
         .settings-section-header {
             flex-direction: column;
         }
+
+        .settings-metrics-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* Expansion pass */
+    .tg-compact {
+        --tg-gap-x: 1.2rem;
+        --tg-gap-y: 1rem;
+    }
+
+    .tg-compact .card {
+        margin-bottom: 1.1rem !important;
+    }
+
+    .tg-compact .card-header {
+        padding: 0.85rem 1rem !important;
+    }
+
+    .tg-compact .card-body {
+        padding: 1.2rem !important;
+    }
+
+    .settings-shell {
+        gap: 1.35rem;
+    }
+
+    .settings-topbar .card-body {
+        padding: 1.35rem !important;
+    }
+
+    .settings-topbar-copy h3 {
+        font-size: 1.7rem;
+        line-height: 1.15;
+    }
+
+    .settings-kicker {
+        font-size: 0.8rem;
+        margin-bottom: 0.35rem;
+    }
+
+    .settings-summary-strip {
+        gap: 0.55rem;
+        margin-top: 1rem;
+    }
+
+    .settings-summary-pill,
+    .settings-chip {
+        padding: 0.38rem 0.8rem;
+        font-size: 0.82rem;
+    }
+
+    .settings-quick-actions .btn {
+        min-width: 132px;
+        padding: 0.5rem 0.95rem;
+        border-radius: 1rem;
+    }
+
+    .settings-section-header.compact {
+        margin-bottom: 0.8rem;
+    }
+
+    .settings-section-header h4 {
+        font-size: 1.2rem;
+    }
+
+    .channel-item {
+        padding: 1rem 1.15rem !important;
+    }
+
+    .channel-item-name {
+        font-size: 1.04rem;
+    }
+
+    .channel-item-id {
+        padding: 0.2rem 0.5rem;
+        font-size: 0.74rem;
+    }
+
+    .channel-item-path {
+        margin-top: 0.55rem;
+        font-size: 0.86rem;
+    }
+
+    .channel-item-meta {
+        gap: 0.45rem;
+        margin-top: 0.7rem;
+    }
+
+    .channel-item-chip {
+        padding: 0.22rem 0.58rem;
+        font-size: 0.78rem;
+    }
+
+    .channel-item-actions .btn {
+        padding: 0.18rem 0.46rem !important;
+    }
+
+    .accordion-button {
+        padding: 0.75rem 1rem !important;
+        font-size: 0.96rem !important;
     }
 </style>
 {% endblock %}
@@ -558,132 +1108,63 @@
     {% set telegram_proxy_ready = telegram_proxy_cfg.get('addr') and telegram_proxy_cfg.get('port') %}
     {% set service_proxy_ready = service_proxy_cfg.get('addr') and service_proxy_cfg.get('port') %}
     {% set downloader_proxy_ready = downloader_proxy_cfg.get('addr') and downloader_proxy_cfg.get('port') %}
+    {% set proxy_any_ready = telegram_proxy_ready or service_proxy_ready or downloader_proxy_ready %}
 
-    <div class="d-flex flex-column gap-3">
-        <div>
-            <h3 class="mb-1"><i class="bi bi-gear-fill me-2"></i>Telegram 配置中心</h3>
-            <p class="text-muted small mb-0">把频道任务、全局规则、扩展服务和凭证按模块集中整理，常用配置可以直接定位。</p>
-        </div>
-
-        <div class="card shadow-sm settings-overview" id="section-overview">
-            <div class="card-body p-3 p-lg-4">
-                <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-start">
-                    <div>
+    <div class="settings-shell">
+        <div class="card shadow-sm settings-topbar" id="section-overview">
+            <div class="card-body p-3">
+                <div class="settings-topbar-head">
+                    <div class="settings-topbar-copy">
                         <div class="settings-kicker">集中管理</div>
-                        <h4 class="settings-hero-title">一页看清常用设置，减少来回翻找</h4>
-                        <p class="text-muted small mb-0 mt-2">现在按“频道管理、规则中心、扩展服务、凭证配置”分区，你可以从左侧目录快速跳转到对应模块。</p>
+                        <h3><i class="bi bi-gear-fill me-2"></i>Telegram 配置中心</h3>
+                        <p>把频道任务留在当前页直接管理，规则、扩展服务和凭证能力改成弹窗维护，避免在长页面里来回寻找。</p>
                     </div>
                     <div class="settings-quick-actions">
                         <a href="#section-editor" class="btn btn-primary btn-sm" data-settings-jump><i class="bi bi-plus-circle me-1"></i>新增频道</a>
-                        <a href="#section-rules" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-sliders me-1"></i>调整规则</a>
-                        <a href="{{ url_for('proxy_config') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-diagram-3 me-1"></i>代理设置</a>
+                        <a href="#section-rules" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-sliders me-1"></i>规则</a>
+                        <a href="#section-services" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-grid me-1"></i>服务</a>
+                        <a href="#section-bot" class="btn btn-outline-secondary btn-sm" data-settings-jump><i class="bi bi-robot me-1"></i>Bot</a>
+                        <a href="{{ url_for('proxy_config') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-diagram-3 me-1"></i>代理</a>
                     </div>
                 </div>
-                <div class="settings-summary-grid mt-3">
-                    <div class="settings-stat-card">
-                        <div class="settings-stat-label">监控频道</div>
-                        <div class="settings-stat-value">{{ config.restricted_channels | length }}</div>
-                        <div class="settings-stat-help">当前纳入 Telegram 采集的频道总数。</div>
+                <div class="settings-summary-strip">
+                    <span class="settings-chip {% if hdhive_enabled %}is-on{% else %}is-off{% endif %}">HDHive</span>
+                    <span class="settings-chip {% if bot_token_ready %}is-on{% else %}is-off{% endif %}">Bot Token</span>
+                    <span class="settings-chip {% if proxy_any_ready %}is-on{% else %}is-off{% endif %}">代理</span>
+                </div>
+                <div class="settings-metrics-grid">
+                    <div class="settings-metric-card">
+                        <div class="settings-metric-label">频道总数</div>
+                        <div class="settings-metric-value">{{ config.restricted_channels | length }}</div>
+                        <div class="settings-metric-note">当前已经接入监控和转发流程的频道数量。</div>
                     </div>
-                    <div class="settings-stat-card">
-                        <div class="settings-stat-label">频道分组</div>
-                        <div class="settings-stat-value">{{ summary.group_count }}</div>
-                        <div class="settings-stat-help">按你当前分组顺序实际存在的监控分组。</div>
+                    <div class="settings-metric-card">
+                        <div class="settings-metric-label">分组数量</div>
+                        <div class="settings-metric-value">{{ summary.group_count }}</div>
+                        <div class="settings-metric-note">按你现在的顺序整理出的有效频道分组。</div>
                     </div>
-                    <div class="settings-stat-card">
-                        <div class="settings-stat-label">转发任务</div>
-                        <div class="settings-stat-value">{{ summary.forwarding_count }}</div>
-                        <div class="settings-stat-help">开启转发或全类型转发的频道任务数量。</div>
+                    <div class="settings-metric-card">
+                        <div class="settings-metric-label">转发任务</div>
+                        <div class="settings-metric-value">{{ summary.forwarding_count }}</div>
+                        <div class="settings-metric-note">开启消息转发或全类型转发的频道任务数。</div>
                     </div>
-                    <div class="settings-stat-card">
-                        <div class="settings-stat-label">自动点击</div>
-                        <div class="settings-stat-value">{{ summary.auto_click_count }}</div>
-                        <div class="settings-stat-help">启用了红包自动点击或关键字自动点击的频道。</div>
-                    </div>
-                    <div class="settings-stat-card">
-                        <div class="settings-stat-label">下载目录</div>
-                        <div class="settings-stat-value">{{ summary.download_dir_count }}</div>
-                        <div class="settings-stat-help">已经明确配置下载目录的频道任务数量。</div>
-                    </div>
-                    <div class="settings-stat-card">
-                        <div class="settings-stat-label">服务状态</div>
-                        <div class="settings-chip-row">
-                            <span class="settings-chip {% if config.get('self_service_enabled', False) %}is-on{% else %}is-off{% endif %}">自助观影{% if config.get('self_service_enabled', False) %}已开{% else %}未开{% endif %}</span>
-                            <span class="settings-chip {% if config.get('self_service_public_enabled', False) %}is-on{% else %}is-off{% endif %}">公共入口{% if config.get('self_service_public_enabled', False) %}已开{% else %}未开{% endif %}</span>
-                            <span class="settings-chip {% if hdhive_enabled %}is-on{% else %}is-off{% endif %}">HDHive{% if hdhive_enabled %}已配{% else %}待配{% endif %}</span>
-                            <span class="settings-chip {% if bot_token_ready %}is-on{% else %}is-off{% endif %}">Bot{% if bot_token_ready %}已配{% else %}待配{% endif %}</span>
-                            <span class="settings-chip {% if telegram_proxy_ready %}is-on{% else %}is-off{% endif %}">TG代理{% if telegram_proxy_ready %}已配{% else %}直连{% endif %}</span>
-                            <span class="settings-chip {% if service_proxy_ready %}is-on{% else %}is-off{% endif %}">HDHive/TMDB{% if service_proxy_ready %}代理{% else %}直连{% endif %}</span>
-                            <span class="settings-chip {% if downloader_proxy_ready %}is-on{% else %}is-off{% endif %}">下载器{% if downloader_proxy_ready %}代理{% else %}直连{% endif %}</span>
-                        </div>
-                        <div class="settings-stat-help mt-2">扩展能力的启用状态会在这里做一个快速提示。</div>
+                    <div class="settings-metric-card">
+                        <div class="settings-metric-label">自动点击</div>
+                        <div class="settings-metric-value">{{ summary.auto_click_count }}</div>
+                        <div class="settings-metric-note">红包和关键词自动点击相关规则的启用数。</div>
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="row g-3 settings-layout">
-            <div class="col-xl-3">
-                <div class="card shadow-sm settings-nav-card">
-                    <div class="card-body p-3">
-                        <div class="settings-section-label">配置目录</div>
-                        <div class="settings-nav-meta mb-3">当前管理 {{ config.restricted_channels | length }} 个频道，{{ summary.group_count }} 个分组。</div>
-                        <div class="settings-nav-list">
-                            <a href="#section-overview" class="settings-nav-link active" data-settings-nav>
-                                <span><i class="bi bi-grid-1x2-fill"></i>配置概览</span>
-                                <span class="badge bg-light text-dark">总览</span>
-                            </a>
-                            <a href="#section-channels" class="settings-nav-link" data-settings-nav>
-                                <span><i class="bi bi-list-task"></i>频道列表</span>
-                                <span class="badge bg-light text-dark">{{ config.restricted_channels | length }}</span>
-                            </a>
-                            <a href="#section-editor" class="settings-nav-link" data-settings-nav>
-                                <span><i class="bi bi-pencil-square"></i>新增与编辑</span>
-                                <span class="badge bg-light text-dark">表单</span>
-                            </a>
-                            <a href="#section-rules" class="settings-nav-link" data-settings-nav>
-                                <span><i class="bi bi-funnel"></i>全局规则</span>
-                                <span class="badge bg-light text-dark">{{ summary.tv_filter_count }}</span>
-                            </a>
-                            <a href="#section-services" class="settings-nav-link" data-settings-nav>
-                                <span><i class="bi bi-grid"></i>扩展服务</span>
-                                <span class="badge bg-light text-dark">HDHive</span>
-                            </a>
-                            <a href="{{ url_for('proxy_config') }}" class="settings-nav-link">
-                                <span><i class="bi bi-diagram-3"></i>代理设置</span>
-                                <span class="badge bg-light text-dark">独立页</span>
-                            </a>
-                            <a href="#section-bot" class="settings-nav-link" data-settings-nav>
-                                <span><i class="bi bi-robot"></i>Bot 凭证</span>
-                                <span class="badge {% if bot_token_ready %}bg-success-subtle text-success{% else %}bg-light text-dark{% endif %}">{% if bot_token_ready %}已配{% else %}待配{% endif %}</span>
-                            </a>
-                        </div>
-                        <div class="settings-note-card mt-3">
-                            <strong>联动页面</strong>
-                            <div class="d-flex flex-column gap-2 mt-2">
-                                <a href="{{ url_for('manage_file_config') }}" class="related-page-link">
-                                    <span><i class="bi bi-folder2-open me-2"></i>文件同步策略</span>
-                                    <small>下载风控、队列、目录同步等配置。</small>
-                                </a>
-                                <a href="{{ url_for('drama_calendar_settings') }}" class="related-page-link">
-                                    <span><i class="bi bi-calendar3 me-2"></i>追剧配置中心</span>
-                                    <small>剧集规则、自动抓取和白名单配置。</small>
-                                </a>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="col-xl-9">
+            <div class="col-12">
                 <section class="settings-section" id="section-channels">
-                    <div class="settings-section-header">
+                    <div class="settings-section-header compact">
                         <div>
                             <div class="settings-section-label">频道任务</div>
                             <h4>已监控频道</h4>
-                            <p>这里负责查看当前监控清单、分组顺序和批量整理操作。</p>
                         </div>
-                        <a href="#section-editor" class="settings-inline-badge text-decoration-none" data-settings-jump><i class="bi bi-plus-circle"></i>新增或编辑频道</a>
                     </div>
 
         <div class="card mb-2 shadow-sm">
@@ -750,75 +1231,82 @@
                         <div class="accordion-body">
                             <div class="list-group list-group-flush">
                                 {% for entry in g_list %}
-                                <div class="list-group-item d-flex align-items-start border-start-0 border-end-0 border-top-0">
+                                <div class="list-group-item channel-item d-flex align-items-start border-start-0 border-end-0 border-top-0">
                                     <div class="form-check" style="flex-shrink: 0; margin-top: 0.05rem; margin-right: 0.3rem;">
                                         <input class="form-check-input item-checkbox" type="checkbox"
                                             name="selected_ids" value="{{ entry.channel_id }}" data-group="{{ g_name }}"
                                             onchange="updateBulkUI()">
                                     </div>
-                                    <div class="flex-grow-1">
-                                        <div class="d-flex justify-content-between align-items-start" style="margin-bottom: 0.05rem;">
+                                    <div class="flex-grow-1 channel-item-main">
+                                        <div class="channel-item-head">
                                             <div class="flex-grow-1">
-                                                <div style="margin-bottom: 0.02rem;">
-                                                    <span class="badge bg-warning text-dark">{{ entry.channel_id }}</span>
+                                                <div class="channel-item-title">
                                                     {% if entry.channel_name %}
-                                                    <span class="fw-bold text-primary" style="margin-left: 0.2rem;">{{ entry.channel_name }}</span>
+                                                    <span class="channel-item-name">{{ entry.channel_name }}</span>
                                                     {% else %}
-                                                    <button type="button" class="btn btn-link p-0 ms-1 text-decoration-none" 
-                                                        style="font-size: 0.65rem;"
+                                                    <button type="button" class="channel-item-fetch"
                                                         onclick="fetchTitle('{{ entry.channel_id }}', this)">
                                                         <i class="bi bi-arrow-repeat me-1"></i>获取名称
                                                     </button>
                                                     {% endif %}
+                                                    <span class="channel-item-id">{{ entry.channel_id }}</span>
                                                 </div>
-                                                <div class="text-muted small d-flex flex-wrap" style="line-height: 1.0; gap: 0.15rem;">
-                                                    <span><i class="bi bi-folder2-open"></i><code style="background: #f3f4f6; padding: 0.02rem 0.15rem; border-radius: 0.15rem; margin-left: 0.1rem;">{{ entry.download_directory }}</code></span>
-                                                    <span><i class="bi bi-file-earmark-arrow-down me-1"></i>
-                                                        {% set entry_types = entry.monitor_types or [] %}
+                                                {% set entry_types = entry.monitor_types or [] %}
+                                                <div class="channel-item-path">
+                                                    <i class="bi bi-folder2-open"></i>
+                                                    <code>{{ entry.download_directory or '未设置下载目录' }}</code>
+                                                </div>
+                                                <div class="channel-item-meta">
+                                                    <span class="channel-item-chip">
+                                                        <i class="bi bi-file-earmark-arrow-down"></i>
                                                         {% if entry.force_forward_all or entry.forward_only or ('all' in entry_types) %}
                                                         全类型转发
                                                         {% elif entry_types %}
-                                                        {{ entry_types | join(', ') }}
+                                                        {{ entry_types | join(' / ') }}
                                                         {% else %}
-                                                        video
+                                                        视频
                                                         {% endif %}
                                                     </span>
+                                                    {% if entry.target_user_ids %}
+                                                    <span class="channel-item-chip">
+                                                        <i class="bi bi-send"></i>{{ entry.target_user_ids | length }} 个目标
+                                                    </span>
+                                                    {% endif %}
                                                     {% if entry.blacklist_keywords %}
-                                                    <span class="text-danger"><i class="bi bi-slash-circle me-1"></i>{{ entry.blacklist_keywords | join(', ') }}</span>
+                                                    <span class="channel-item-chip is-alert">
+                                                        <i class="bi bi-slash-circle"></i>黑名单 {{ entry.blacklist_keywords | length }}
+                                                    </span>
                                                     {% endif %}
                                                     {% if entry.whitelist_keywords %}
-                                                    <span class="text-success"><i class="bi bi-check-circle me-1"></i>{{ entry.whitelist_keywords | join(', ') }}</span>
+                                                    <span class="channel-item-chip is-positive">
+                                                        <i class="bi bi-check-circle"></i>白名单 {{ entry.whitelist_keywords | length }}
+                                                    </span>
                                                     {% endif %}
-                                                    {% if entry.auto_click_keywords %}
-                                                    <span class="text-warning"><i class="bi bi-lightning-charge me-1"></i>自动点击: {{ entry.auto_click_keywords | join(', ') }}</span>
+                                                    {% if entry.auto_click_redpacket or entry.auto_click_keywords %}
+                                                    <span class="channel-item-chip {% if entry.auto_click_redpacket %}is-alert{% endif %}">
+                                                        <i class="bi bi-lightning-charge"></i>自动点击
+                                                    </span>
                                                     {% endif %}
-                                                    {% if entry.auto_click_redpacket %}
-                                                    <span class="text-warning"><i class="bi bi-cash-coin me-1"></i>红包开关</span>
+                                                    {% if entry.keep_video_message or entry.force_forward_all %}
+                                                    <span class="channel-item-chip is-positive">
+                                                        <i class="bi bi-arrow-right-circle"></i>转发开启
+                                                    </span>
                                                     {% endif %}
-                                                    {% if entry.auto_click_notify_targets %}
-                                                    <span class="text-secondary"><i class="bi bi-bell me-1"></i>通知: {{ entry.auto_click_notify_targets | join(', ') }}</span>
-                                                    {% endif %}
-                                                    {% if entry.target_user_ids %}
-                                                    <span class="text-info"><i class="bi bi-send me-1"></i>{{ entry.target_user_ids | length }} 目标</span>
-                                                    {% endif %}
-                                                    {% if entry.keep_video_message %}
-                                                    <span class="text-success"><i class="bi bi-arrow-right-circle me-1"></i>转发开启</span>
-                                                    {% endif %}
-                                                    {% if entry.force_forward_all %}
-                                                    <span class="text-success"><i class="bi bi-lightning-charge me-1"></i>强制转发</span>
-                                                    {% endif %}
-                                                    {% if entry.force_forward_all or entry.forward_only or ('all' in (entry.monitor_types or [])) %}
-                                                    <span class="badge bg-info text-dark">全类型转发</span>
+                                                    {% if entry.use_tvchannel_filters %}
+                                                    <span class="channel-item-chip">
+                                                        <i class="bi bi-tv"></i>TV 过滤
+                                                    </span>
                                                     {% endif %}
                                                     {% if entry.convert_hdhive %}
-                                                    <span class="text-primary"><i class="bi bi-link-45deg me-1"></i>影巢转换</span>
+                                                    <span class="channel-item-chip">
+                                                        <i class="bi bi-link-45deg"></i>影巢转换
+                                                    </span>
                                                     {% endif %}
                                                 </div>
                                             </div>
-                                            <div class="d-flex" style="flex-shrink: 0; gap: 0.15rem; margin-left: 0.25rem;">
+                                            <div class="channel-item-actions">
                                                 <button type="button"
                                                     class="btn btn-sm btn-outline-primary edit-btn"
-                                                    style="padding: 0.1rem 0.3rem;"
                                                     data-entry='{{ entry | tojson | safe }}' title="编辑">
                                                     <i class="bi bi-pencil-square"></i>
                                                 </button>
@@ -828,7 +1316,6 @@
                                                         value="{{ entry.channel_id }}">
                                                     <button type="submit"
                                                         class="btn btn-sm btn-outline-danger" 
-                                                        style="padding: 0.1rem 0.3rem;"
                                                         title="删除" onclick="return confirm('确定删除此频道配置吗？')"><i
                                                             class="bi bi-trash"></i></button>
                                                 </form>
@@ -851,13 +1338,12 @@
                 </section>
 
         <div class="row g-3">
-            <div class="col-lg-7">
-                <section class="settings-section" id="section-editor">
+            <div class="col-lg-7 d-none">
+                <section class="settings-section d-none" id="section-editor">
                     <div class="settings-section-header">
                         <div>
                             <div class="settings-section-label">单频道设置</div>
                             <h4>新增 / 编辑监控频道</h4>
-                            <p>把一个频道相关的下载、转发、自动点击和目标用户配置放在同一处编辑。</p>
                         </div>
                     </div>
                 <div class="card mb-3 shadow-sm">
@@ -934,96 +1420,144 @@
                                     当前为全类型转发（不下载）：已开启转发，且未选择下载类型。
                                 </div>
                             </div>
-                            <div class="col-md-12 mb-2">
-                                <label for="blacklist_keywords" class="form-label small">黑名单关键词 <span
-                                        class="badge bg-light text-dark fw-normal border"
-                                        style="font-size: 0.65rem;">支持正则</span>:</label>
-                                <input type="text" class="form-control form-control-sm" id="blacklist_keywords"
-                                    name="blacklist_keywords" placeholder="广告,赌场,^AD.* (逗号分隔)">
-                            </div>
-                            <div class="col-md-12 mb-2">
-                                <label for="whitelist_keywords" class="form-label small">白名单关键词 <span
-                                        class="badge bg-light text-dark fw-normal border"
-                                        style="font-size: 0.65rem;">支持正则</span>:</label>
-                                <input type="text" class="form-control form-control-sm" id="whitelist_keywords"
-                                    name="whitelist_keywords" placeholder="太平年,^重要.*$ (逗号分隔)">
-                            </div>
-                            <div class="col-md-12 mb-2">
-                                <div class="form-check">
-                                    <input class="form-check-input" type="checkbox" id="use_tvchannel_filters"
-                                        name="use_tvchannel_filters">
-                                    <label class="form-check-label small" for="use_tvchannel_filters">
-                                        使用 TV 频道正则配置（`tvchannel_filters.json`）
-                                    </label>
-                                </div>
-                                <div class="form-text small">可选：启用后将叠加文件内的黑白名单（支持正则）。</div>
+
+                            <div class="col-md-6 mb-2">
+                                <label for="target_user_ids_restricted" class="form-label small">目标 ID:</label>
+                                <input type="text" id="target_user_ids_restricted" name="target_user_ids_restricted"
+                                    class="form-control form-control-sm" placeholder="123, @user (逗号分隔)">
                             </div>
                             <div class="col-12">
-                                <div class="card border-warning shadow-sm">
-                                    <div class="card-body p-2">
-                                        <div class="accordion compact-accordion" id="redPacketAccordion">
-                                            <div class="accordion-item">
-                                                <h2 class="accordion-header" id="redPacketHeading">
-                                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
-                                                        data-bs-target="#redPacketCollapse" aria-expanded="false"
-                                                        aria-controls="redPacketCollapse">
-                                                        <i class="bi bi-cash-coin me-1"></i>🧧 红包相关设置
-                                                        <span class="text-muted small ms-2">仅影响自动点击与通知</span>
-                                                    </button>
-                                                </h2>
-                                                <div id="redPacketCollapse" class="accordion-collapse collapse"
-                                                    aria-labelledby="redPacketHeading" data-bs-parent="#redPacketAccordion">
-                                                    <div class="accordion-body p-2">
-                                                        <div class="row g-2">
-                                                            <div class="col-md-12 mb-2">
-                                                                <div class="form-check pt-1">
-                                                                    <input type="checkbox" class="form-check-input"
-                                                                        id="auto_click_redpacket" name="auto_click_redpacket">
-                                                                    <label class="form-check-label small" for="auto_click_redpacket">
-                                                                        红包自动点击（默认关键词：发了一个红包）
-                                                                    </label>
-                                                                </div>
-                                                                <div id="auto_click_download_hint"
-                                                                    class="alert alert-warning small py-1 mb-0 mt-1 d-none">
-                                                                    未填写下载目录且启用红包/自动点击时，将自动切换为“文本”监控（不下载媒体）。
-                                                                </div>
-                                                            </div>
-                                                            <div class="col-md-12 mb-2">
-                                                                <label for="auto_click_keywords" class="form-label small">自动点击关键词 <span
-                                                                        class="badge bg-light text-dark fw-normal border"
-                                                                        style="font-size: 0.65rem;">匹配消息文本</span>:</label>
-                                                                <input type="text" class="form-control form-control-sm"
-                                                                    id="auto_click_keywords" name="auto_click_keywords"
-                                                                    placeholder="发了一个红包 (逗号分隔)">
-                                                            </div>
-                                                            <div class="col-md-12 mb-2">
-                                                                <label for="auto_click_button_texts" class="form-label small">按钮文本关键词 <span
-                                                                        class="badge bg-light text-dark fw-normal border"
-                                                                        style="font-size: 0.65rem;">可选</span>:</label>
-                                                                <input type="text" class="form-control form-control-sm"
-                                                                    id="auto_click_button_texts" name="auto_click_button_texts"
-                                                                    placeholder="领取红包,打开 (逗号分隔)">
-                                                            </div>
-                                                            <div class="col-md-12 mb-2">
-                                                                <label for="auto_click_notify_targets" class="form-label small">点击后通知目标:</label>
-                                                                <input type="text" class="form-control form-control-sm"
-                                                                    id="auto_click_notify_targets" name="auto_click_notify_targets"
-                                                                    placeholder="@your_bot, 123456 (逗号分隔)">
-                                                            </div>
-                                                            <div class="col-md-12 mb-2">
-                                                                <div class="form-check pt-1">
-                                                                    <input type="checkbox" class="form-check-input"
-                                                                        id="auto_click_fast" name="auto_click_fast">
-                                                                    <label class="form-check-label small" for="auto_click_fast">
-                                                                        极速点击（优先匹配按钮文本，不拉取上下文）
-                                                                    </label>
-                                                                </div>
-                                                                <div class="form-check pt-1">
-                                                                    <input type="checkbox" class="form-check-input"
-                                                                        id="auto_click_fast_skip_processing" name="auto_click_fast_skip_processing">
-                                                                    <label class="form-check-label small" for="auto_click_fast_skip_processing">
-                                                                        点击后跳过后续处理（更快，但不转发/下载）
-                                                                    </label>
+                                <div class="accordion compact-accordion" id="channelAdvancedAccordion">
+                                    <div class="accordion-item">
+                                        <h2 class="accordion-header" id="channelAdvancedHeading">
+                                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                data-bs-target="#channelAdvancedCollapse" aria-expanded="false"
+                                                aria-controls="channelAdvancedCollapse">
+                                                <i class="bi bi-sliders me-1"></i>高级规则与动作
+                                            </button>
+                                        </h2>
+                                        <div id="channelAdvancedCollapse" class="accordion-collapse collapse"
+                                            aria-labelledby="channelAdvancedHeading" data-bs-parent="#channelAdvancedAccordion">
+                                            <div class="accordion-body p-2">
+                                                <div class="row g-2">
+                                                    <div class="col-md-12 mb-2">
+                                                        <label for="blacklist_keywords" class="form-label small">黑名单关键词 <span
+                                                                class="badge bg-light text-dark fw-normal border"
+                                                                style="font-size: 0.65rem;">支持正则</span>:</label>
+                                                        <input type="text" class="form-control form-control-sm" id="blacklist_keywords"
+                                                            name="blacklist_keywords" placeholder="广告,赌场,^AD.* (逗号分隔)">
+                                                    </div>
+                                                    <div class="col-md-12 mb-2">
+                                                        <label for="whitelist_keywords" class="form-label small">白名单关键词 <span
+                                                                class="badge bg-light text-dark fw-normal border"
+                                                                style="font-size: 0.65rem;">支持正则</span>:</label>
+                                                        <input type="text" class="form-control form-control-sm" id="whitelist_keywords"
+                                                            name="whitelist_keywords" placeholder="太平年,^重要.*$ (逗号分隔)">
+                                                    </div>
+                                                    <div class="col-md-12 mb-2">
+                                                        <div class="form-check">
+                                                            <input class="form-check-input" type="checkbox" id="use_tvchannel_filters"
+                                                                name="use_tvchannel_filters">
+                                                            <label class="form-check-label small" for="use_tvchannel_filters">
+                                                                使用 TV 频道正则配置（`tvchannel_filters.json`）
+                                                            </label>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6 mb-2">
+                                                        <div class="form-check pt-2">
+                                                            <input type="checkbox" class="form-check-input" id="download_video"
+                                                                name="download_video">
+                                                            <label class="form-check-label small" for="download_video">下载视频</label>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6 mb-2">
+                                                        <div class="form-check pt-2">
+                                                            <input type="checkbox" class="form-check-input" id="keep_video_message"
+                                                                name="keep_video_message">
+                                                            <label class="form-check-label small" for="keep_video_message">直接转发消息</label>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6 mb-2">
+                                                        <div class="form-check pt-2">
+                                                            <input type="checkbox" class="form-check-input" id="force_forward_all"
+                                                                name="force_forward_all">
+                                                            <label class="form-check-label small" for="force_forward_all">强制转发全部消息</label>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-md-6 mb-2">
+                                                        <div class="form-check pt-2">
+                                                            <input type="checkbox" class="form-check-input" id="convert_hdhive"
+                                                                name="convert_hdhive">
+                                                            <label class="form-check-label small" for="convert_hdhive">影巢链接转换</label>
+                                                        </div>
+                                                    </div>
+                                                    <div class="col-12">
+                                                        <div class="card border-warning shadow-sm">
+                                                            <div class="card-body p-2">
+                                                                <div class="accordion compact-accordion" id="redPacketAccordion">
+                                                                    <div class="accordion-item">
+                                                                        <h2 class="accordion-header" id="redPacketHeading">
+                                                                            <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
+                                                                                data-bs-target="#redPacketCollapse" aria-expanded="false"
+                                                                                aria-controls="redPacketCollapse">
+                                                                                <i class="bi bi-cash-coin me-1"></i>🧧 红包相关设置
+                                                                            </button>
+                                                                        </h2>
+                                                                        <div id="redPacketCollapse" class="accordion-collapse collapse"
+                                                                            aria-labelledby="redPacketHeading" data-bs-parent="#redPacketAccordion">
+                                                                            <div class="accordion-body p-2">
+                                                                                <div class="row g-2">
+                                                                                    <div class="col-md-12 mb-2">
+                                                                                        <div class="form-check pt-1">
+                                                                                            <input type="checkbox" class="form-check-input"
+                                                                                                id="auto_click_redpacket" name="auto_click_redpacket">
+                                                                                            <label class="form-check-label small" for="auto_click_redpacket">
+                                                                                                红包自动点击
+                                                                                            </label>
+                                                                                        </div>
+                                                                                        <div id="auto_click_download_hint"
+                                                                                            class="alert alert-warning small py-1 mb-0 mt-1 d-none">
+                                                                                            未填写下载目录且启用红包/自动点击时，将自动切换为“文本”监控（不下载媒体）。
+                                                                                        </div>
+                                                                                    </div>
+                                                                                    <div class="col-md-12 mb-2">
+                                                                                        <label for="auto_click_keywords" class="form-label small">自动点击关键词</label>
+                                                                                        <input type="text" class="form-control form-control-sm"
+                                                                                            id="auto_click_keywords" name="auto_click_keywords"
+                                                                                            placeholder="发了一个红包 (逗号分隔)">
+                                                                                    </div>
+                                                                                    <div class="col-md-12 mb-2">
+                                                                                        <label for="auto_click_button_texts" class="form-label small">按钮文本关键词</label>
+                                                                                        <input type="text" class="form-control form-control-sm"
+                                                                                            id="auto_click_button_texts" name="auto_click_button_texts"
+                                                                                            placeholder="领取红包,打开 (逗号分隔)">
+                                                                                    </div>
+                                                                                    <div class="col-md-12 mb-2">
+                                                                                        <label for="auto_click_notify_targets" class="form-label small">点击后通知目标</label>
+                                                                                        <input type="text" class="form-control form-control-sm"
+                                                                                            id="auto_click_notify_targets" name="auto_click_notify_targets"
+                                                                                            placeholder="@your_bot, 123456 (逗号分隔)">
+                                                                                    </div>
+                                                                                    <div class="col-md-12 mb-2">
+                                                                                        <div class="form-check pt-1">
+                                                                                            <input type="checkbox" class="form-check-input"
+                                                                                                id="auto_click_fast" name="auto_click_fast">
+                                                                                            <label class="form-check-label small" for="auto_click_fast">
+                                                                                                极速点击
+                                                                                            </label>
+                                                                                        </div>
+                                                                                        <div class="form-check pt-1">
+                                                                                            <input type="checkbox" class="form-check-input"
+                                                                                                id="auto_click_fast_skip_processing" name="auto_click_fast_skip_processing">
+                                                                                            <label class="form-check-label small" for="auto_click_fast_skip_processing">
+                                                                                                点击后跳过后续处理
+                                                                                            </label>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                </div>
+                                                                            </div>
+                                                                        </div>
+                                                                    </div>
                                                                 </div>
                                                             </div>
                                                         </div>
@@ -1033,44 +1567,6 @@
                                         </div>
                                     </div>
                                 </div>
-                            </div>
-                            <div class="col-md-6 mb-2">
-                                <div class="form-check pt-2">
-                                    <input type="checkbox" class="form-check-input" id="download_video"
-                                        name="download_video">
-                                    <label class="form-check-label small" for="download_video">下载视频</label>
-                                </div>
-                            </div>
-
-                            <div class="col-md-6 mb-2">
-                                <div class="form-check pt-2">
-                                    <input type="checkbox" class="form-check-input" id="keep_video_message"
-                                        name="keep_video_message">
-                                    <label class="form-check-label small" for="keep_video_message">直接转发消息</label>
-                                </div>
-                            </div>
-
-                            <div class="col-md-6 mb-2">
-                                <div class="form-check pt-2">
-                                    <input type="checkbox" class="form-check-input" id="force_forward_all"
-                                        name="force_forward_all">
-                                    <label class="form-check-label small" for="force_forward_all">强制转发全部消息</label>
-                                </div>
-                                <div class="form-text small">开启后忽略黑白名单与类型过滤，始终转发该频道消息。</div>
-                            </div>
-
-                            <div class="col-md-6 mb-2">
-                                <div class="form-check pt-2">
-                                    <input type="checkbox" class="form-check-input" id="convert_hdhive"
-                                        name="convert_hdhive">
-                                    <label class="form-check-label small" for="convert_hdhive">影巢链接转换</label>
-                                </div>
-                            </div>
-
-                            <div class="col-md-6 mb-2">
-                                <label for="target_user_ids_restricted" class="form-label small">目标 ID:</label>
-                                <input type="text" id="target_user_ids_restricted" name="target_user_ids_restricted"
-                                    class="form-control form-control-sm" placeholder="123, @user (逗号分隔)">
                             </div>
                             <div class="col-12 mt-2">
                                 <div class="d-flex gap-2">
@@ -1086,15 +1582,16 @@
                 </section>
             </div>
 
-            <div class="col-lg-5">
-                <section class="settings-section" id="section-rules">
+            <div class="col-lg-5 d-none">
+                <details class="settings-fold settings-section d-none" id="section-rules">
+                    <summary class="settings-fold-summary">
                     <div class="settings-section-header">
                         <div>
                             <div class="settings-section-label">规则中心</div>
                             <h4>全局过滤与清理规则</h4>
-                            <p>适合放那些跨频道生效的默认规则，减少你逐个频道重复配置。</p>
                         </div>
                     </div>
+                    </summary>
                 <div class="card mb-3 shadow-sm">
                     <div class="card-body p-2">
                         <div class="accordion compact-accordion" id="tgRulesAccordion">
@@ -1150,16 +1647,17 @@
                         </div>
                     </div>
                 </div>
-                </section>
+                </details>
 
-                <section class="settings-section" id="section-services">
+                <details class="settings-fold settings-section d-none" id="section-services">
+                    <summary class="settings-fold-summary">
                     <div class="settings-section-header">
                         <div>
                             <div class="settings-section-label">扩展服务</div>
                             <h4>监控补充能力与外部服务</h4>
-                            <p>把启动回溯、HDHive、自助观影这些附加能力集中到同一个服务区里。</p>
                         </div>
                     </div>
+                    </summary>
                 <div class="card mb-3 shadow-sm">
                     <div class="card-body p-2">
                         <div class="accordion compact-accordion" id="tgAdvancedAccordion">
@@ -1538,16 +2036,17 @@
                         </div>
                     </div>
                 </div>
-                </section>
+                </details>
 
-                <section class="settings-section" id="section-bot">
+                <details class="settings-fold settings-section d-none" id="section-bot">
+                    <summary class="settings-fold-summary">
                     <div class="settings-section-header">
                         <div>
                             <div class="settings-section-label">凭证配置</div>
                             <h4>Bot Token</h4>
-                            <p>单独放置机器人凭证，和频道规则分开，查找会更直观。</p>
                         </div>
                     </div>
+                    </summary>
                 <div class="card mb-3 shadow-sm">
                     <div class="card-header bg-dark text-white">
                         <h5 class="mb-0 small"><i class="bi bi-robot me-2"></i>Bot Token 凭证</h5>
@@ -1564,7 +2063,7 @@
                         </form>
                     </div>
                 </div>
-                </section>
+                </details>
 
             </div>
         </div>
@@ -1576,6 +2075,30 @@
     </div>
 </div>
 </div>
+</div>
+
+<div class="modal fade" id="restrictedEditorModal" tabindex="-1" aria-labelledby="restrictedEditorModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="restrictedEditorModalLabel">新增 / 编辑监控频道</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-3" id="restrictedEditorModalBody"></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="settingsSectionModal" tabindex="-1" aria-labelledby="settingsSectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="settingsSectionModalLabel">配置</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-3" id="settingsSectionModalBody"></div>
+        </div>
+    </div>
 </div>
 
 <!-- Directory Browser Modal -->
@@ -1607,10 +2130,38 @@
 
     // Initialize Bootstrap Modal only when DOM is ready
     let dirBrowserModalInstance;
+    let restrictedEditorModalInstance;
+    let settingsSectionModalInstance;
+    let currentSettingsSectionState = null;
+    const settingsSectionModalTitles = {
+        '#section-rules': '全局过滤与清理规则',
+        '#section-services': '扩展服务',
+        '#section-bot': 'Bot Token'
+    };
     document.addEventListener('DOMContentLoaded', function () {
         var dirBrowserModalEl = document.getElementById('dirBrowserModal');
         if (dirBrowserModalEl) {
             dirBrowserModalInstance = new bootstrap.Modal(dirBrowserModalEl);
+        }
+        const restrictedEditorModalEl = document.getElementById('restrictedEditorModal');
+        const editorSection = document.getElementById('section-editor');
+        const editorCard = editorSection ? editorSection.querySelector('.card') : null;
+        const editorModalBody = document.getElementById('restrictedEditorModalBody');
+        if (restrictedEditorModalEl) {
+            restrictedEditorModalInstance = new bootstrap.Modal(restrictedEditorModalEl);
+            if (editorCard && editorModalBody && !editorModalBody.contains(editorCard)) {
+                editorModalBody.appendChild(editorCard);
+            }
+            restrictedEditorModalEl.addEventListener('hidden.bs.modal', function () {
+                cancelEdit(true);
+            });
+        }
+        const settingsSectionModalEl = document.getElementById('settingsSectionModal');
+        if (settingsSectionModalEl) {
+            settingsSectionModalInstance = new bootstrap.Modal(settingsSectionModalEl);
+            settingsSectionModalEl.addEventListener('hidden.bs.modal', function () {
+                restoreSettingsSectionModal();
+            });
         }
     });
 
@@ -1833,25 +2384,73 @@
             cancelBtn.style.display = 'inline-block';
         }
 
-        // 滚动到表单并聚焦
-        const editorSection = document.getElementById('section-editor');
         const channelIdInput = document.getElementById('restricted_channel_id');
-        if (editorSection) {
-            editorSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        } else if (channelIdInput) {
-            channelIdInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
+        updateAutoClickHint();
+        updateForwardOnlyHint();
+        openRestrictedEditorModal(false);
+
         if (channelIdInput) {
             setTimeout(() => {
                 channelIdInput.focus();
-            }, 300);
+            }, 220);
         }
-
-        updateAutoClickHint();
-        updateForwardOnlyHint();
     }
 
-    function cancelEdit() {
+    function openRestrictedEditorModal(resetForm = true) {
+        if (resetForm) {
+            cancelEdit(true);
+        }
+        if (restrictedEditorModalInstance) {
+            restrictedEditorModalInstance.show();
+        }
+    }
+
+    function restoreSettingsSectionModal() {
+        if (!currentSettingsSectionState) {
+            return;
+        }
+        const { element, parent, nextSibling, wasOpen, hadHiddenClass } = currentSettingsSectionState;
+        if (nextSibling && nextSibling.parentNode === parent) {
+            parent.insertBefore(element, nextSibling);
+        } else {
+            parent.appendChild(element);
+        }
+        if (hadHiddenClass) {
+            element.classList.add('d-none');
+        }
+        if (typeof wasOpen === 'boolean') {
+            element.open = wasOpen;
+        }
+        currentSettingsSectionState = null;
+    }
+
+    function openSettingsSectionModal(targetSelector) {
+        const target = document.querySelector(targetSelector);
+        const modalBody = document.getElementById('settingsSectionModalBody');
+        const modalTitle = document.getElementById('settingsSectionModalLabel');
+        if (!target || !modalBody || !settingsSectionModalInstance) {
+            return;
+        }
+
+        restoreSettingsSectionModal();
+        currentSettingsSectionState = {
+            element: target,
+            parent: target.parentNode,
+            nextSibling: target.nextSibling,
+            hadHiddenClass: target.classList.contains('d-none'),
+            wasOpen: typeof target.open === 'boolean' ? target.open : undefined
+        };
+
+        target.classList.remove('d-none');
+        if (typeof target.open === 'boolean') {
+            target.open = true;
+        }
+        modalTitle.textContent = settingsSectionModalTitles[targetSelector] || '配置';
+        modalBody.appendChild(target);
+        settingsSectionModalInstance.show();
+    }
+
+    function cancelEdit(keepOpen = false) {
         // 安全的重置函数
         const safeReset = (id) => {
             const el = document.getElementById(id);
@@ -1918,6 +2517,10 @@
 
         updateAutoClickHint();
         updateForwardOnlyHint();
+
+        if (!keepOpen && restrictedEditorModalInstance) {
+            restrictedEditorModalInstance.hide();
+        }
     }
 
     // Initialize Sortable for group drag-and-drop
@@ -2160,8 +2763,18 @@
         const settingsNavLinks = Array.from(document.querySelectorAll('[data-settings-nav]'));
         const settingsJumpLinks = Array.from(document.querySelectorAll('[data-settings-jump]'));
         let settingsJumpTimer = null;
+        const isSettingsEditorTarget = (selector) => selector === '#section-editor';
+        const isSettingsModalTarget = (selector) => ['#section-rules', '#section-services', '#section-bot'].includes(selector);
 
         const jumpToSettingsSection = (targetSelector) => {
+            if (isSettingsEditorTarget(targetSelector)) {
+                openRestrictedEditorModal(true);
+                return;
+            }
+            if (isSettingsModalTarget(targetSelector)) {
+                openSettingsSectionModal(targetSelector);
+                return;
+            }
             const target = document.querySelector(targetSelector);
             if (!target) return;
 
@@ -2190,6 +2803,7 @@
 
         if (settingsNavLinks.length > 0) {
             const sections = settingsNavLinks
+                .filter(link => !isSettingsEditorTarget(link.getAttribute('href')))
                 .map(link => document.querySelector(link.getAttribute('href')))
                 .filter(Boolean);
 
@@ -2209,7 +2823,12 @@
             };
 
             settingsNavLinks.forEach((link) => {
-                link.addEventListener('click', () => {
+                link.addEventListener('click', (event) => {
+                    if (isSettingsEditorTarget(link.getAttribute('href'))) {
+                        event.preventDefault();
+                        openRestrictedEditorModal(true);
+                        return;
+                    }
                     settingsNavLinks.forEach(item => item.classList.remove('active'));
                     link.classList.add('active');
                 });

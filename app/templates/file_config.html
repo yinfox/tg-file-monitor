@@ -5,16 +5,12 @@
 {% block extra_head %}
 <style>
     .file-config-page {
-        --fc-border: rgba(148, 163, 184, 0.18);
-        --fc-panel: rgba(255, 255, 255, 0.2);
-    }
-
-    .file-settings-overview {
-        background:
-            radial-gradient(circle at top right, rgba(14, 165, 233, 0.18), transparent 32%),
-            radial-gradient(circle at 12% 18%, rgba(16, 185, 129, 0.12), transparent 32%),
-            linear-gradient(135deg, rgba(255, 255, 255, 0.52), rgba(248, 250, 252, 0.28));
-        border: 1px solid rgba(14, 165, 233, 0.16);
+        --fc-border: rgba(63, 224, 255, 0.14);
+        --fc-panel: rgba(10, 19, 35, 0.88);
+        --fc-text: #e8fbff;
+        --fc-muted: #7da4c2;
+        --fc-accent: #00eaff;
+        --fc-accent-soft: #00ffc6;
     }
 
     .file-kicker {
@@ -22,15 +18,114 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #0284c7;
+        color: var(--fc-accent);
         margin-bottom: 0.25rem;
     }
 
-    .file-hero-title {
+    .file-shell {
+        display: flex;
+        flex-direction: column;
+        gap: 1.15rem;
+    }
+
+    .file-topbar {
+        background:
+            radial-gradient(circle at top right, rgba(0, 234, 255, 0.14), transparent 30%),
+            linear-gradient(135deg, rgba(10, 19, 35, 0.94), rgba(7, 14, 28, 0.88));
+        border: 1px solid var(--fc-border);
+    }
+
+    .file-topbar-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 1rem;
+    }
+
+    .file-topbar-copy h2 {
         margin: 0;
-        font-size: 1.35rem;
+        font-size: 1.45rem;
         font-weight: 800;
-        color: #0f172a;
+        color: var(--fc-text);
+    }
+
+    .file-topbar-copy p {
+        margin: 0.25rem 0 0;
+        font-size: 0.78rem;
+        line-height: 1.4;
+        color: var(--fc-muted);
+        max-width: 52ch;
+    }
+
+    .file-summary-strip {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.75rem;
+    }
+
+    .file-summary-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.38rem;
+        padding: 0.25rem 0.58rem;
+        border-radius: 999px;
+        border: 1px solid var(--fc-border);
+        background: rgba(9, 18, 34, 0.82);
+        color: var(--fc-muted);
+        font-size: 0.73rem;
+        font-weight: 600;
+    }
+
+    .file-summary-pill i {
+        color: var(--fc-accent);
+        font-size: 0.8rem;
+    }
+
+    .file-summary-pill strong {
+        color: var(--fc-text);
+        font-weight: 800;
+    }
+
+    .file-metrics-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.8rem;
+        margin-top: 1rem;
+    }
+
+    .file-metric-card {
+        padding: 1rem 1.05rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(125, 160, 190, 0.16);
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(241, 247, 252, 0.84));
+        box-shadow:
+            0 14px 28px rgba(37, 78, 122, 0.08),
+            inset 0 1px 0 rgba(255, 255, 255, 0.68);
+    }
+
+    .file-metric-label {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: #69829a;
+        margin-bottom: 0.35rem;
+    }
+
+    .file-metric-value {
+        font-size: 1.55rem;
+        line-height: 1;
+        font-weight: 800;
+        color: #17314c;
+        letter-spacing: -0.03em;
+    }
+
+    .file-metric-note {
+        margin-top: 0.38rem;
+        font-size: 0.8rem;
+        line-height: 1.45;
+        color: #617a93;
     }
 
     .file-quick-actions {
@@ -41,47 +136,10 @@
     }
 
     .file-quick-actions .btn {
-        min-width: 118px;
+        min-width: 124px;
         font-weight: 800;
         border-width: 1.5px;
-        box-shadow: 0 10px 20px rgba(15, 23, 42, 0.08);
-    }
-
-    .file-summary-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.75rem;
-    }
-
-    .file-stat-card {
-        min-height: 112px;
-        padding: 0.85rem 0.9rem;
-        border-radius: 0.9rem;
-        background: rgba(255, 255, 255, 0.2);
-        border: 1px solid var(--fc-border);
-    }
-
-    .file-stat-label {
-        margin-bottom: 0.35rem;
-        font-size: 0.72rem;
-        color: #64748b;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
-        font-weight: 700;
-    }
-
-    .file-stat-value {
-        margin-bottom: 0.25rem;
-        font-size: 1.55rem;
-        line-height: 1;
-        font-weight: 800;
-        color: #0f172a;
-    }
-
-    .file-stat-help {
-        font-size: 0.76rem;
-        color: #64748b;
-        line-height: 1.35;
+        box-shadow: 0 12px 22px rgba(0, 0, 0, 0.22);
     }
 
     .file-chip-row {
@@ -96,95 +154,81 @@
         gap: 0.3rem;
         padding: 0.22rem 0.55rem;
         border-radius: 999px;
-        background: rgba(148, 163, 184, 0.16);
-        color: #475569;
+        background: rgba(12, 24, 44, 0.86);
+        color: var(--fc-muted);
         font-size: 0.72rem;
         font-weight: 600;
     }
 
+    .file-chip::before {
+        content: "";
+        width: 0.42rem;
+        height: 0.42rem;
+        border-radius: 999px;
+        background: currentColor;
+        opacity: 0.32;
+        flex-shrink: 0;
+    }
+
     .file-chip.is-on {
-        background: rgba(16, 185, 129, 0.14);
-        color: #047857;
+        background: rgba(0, 255, 198, 0.12);
+        color: var(--fc-accent-soft);
     }
 
     .file-chip.is-off {
-        background: rgba(148, 163, 184, 0.16);
-        color: #64748b;
+        background: rgba(9, 18, 34, 0.82);
+        color: var(--fc-muted);
     }
 
     .file-nav-card {
-        position: sticky;
-        top: 1.1rem;
+        position: static;
+        border-style: dashed;
     }
 
     .file-nav-list {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-        gap: 0.55rem;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 0.45rem;
     }
 
     .file-nav-link {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 0.75rem;
-        padding: 0.72rem 0.82rem;
-        border-radius: 0.85rem;
+        gap: 0.6rem;
+        padding: 0.55rem 0.7rem;
+        border-radius: 0.75rem;
         border: 1px solid var(--fc-border);
-        background: rgba(255, 255, 255, 0.16);
-        color: #334155;
+        background: rgba(9, 18, 34, 0.82);
+        color: #9ec8e8;
         text-decoration: none;
         transition: all 0.2s ease;
+        font-size: 0.76rem;
     }
 
     .file-nav-link:hover {
-        color: #0f172a;
-        border-color: rgba(14, 165, 233, 0.28);
+        color: #f1fcff;
+        border-color: rgba(0, 234, 255, 0.18);
         transform: translateY(-1px);
-        box-shadow: 0 10px 24px rgba(14, 165, 233, 0.08);
+        box-shadow: 0 0 24px rgba(0, 234, 255, 0.08);
     }
 
     .file-nav-link.active {
-        color: #0c4a6e;
-        background: rgba(14, 165, 233, 0.1);
-        border-color: rgba(14, 165, 233, 0.24);
-        box-shadow: 0 10px 22px rgba(14, 165, 233, 0.1);
+        color: #f1fcff;
+        background: linear-gradient(90deg, rgba(0, 234, 255, 0.12), rgba(8, 16, 30, 0.84));
+        border-color: rgba(0, 234, 255, 0.18);
+        box-shadow: 0 0 24px rgba(0, 234, 255, 0.08);
     }
 
     .file-nav-link i {
-        color: #0284c7;
+        color: var(--fc-accent);
         margin-right: 0.35rem;
     }
 
     .file-nav-meta {
         font-size: 0.75rem;
-        color: #64748b;
+        color: var(--fc-muted);
         line-height: 1.5;
-    }
-
-    .file-note-card {
-        padding: 0.8rem;
-        border-radius: 0.85rem;
-        border: 1px dashed rgba(148, 163, 184, 0.4);
-        background: rgba(15, 23, 42, 0.04);
-    }
-
-    .file-note-card strong {
-        color: #0f172a;
-    }
-
-    .file-note-card small {
-        display: block;
-        margin-top: 0.25rem;
-        color: #64748b;
-        line-height: 1.4;
-    }
-
-    .file-note-card,
-    .file-note-card small {
-        color: #334155;
-        font-weight: 500;
-        line-height: 1.45;
     }
 
     .file-section.is-jumping > .file-section-header,
@@ -201,7 +245,7 @@
         }
         35% {
             transform: translateY(-2px);
-            box-shadow: 0 0 0 4px rgba(14, 165, 233, 0.12);
+            box-shadow: 0 0 0 4px rgba(0, 234, 255, 0.12);
         }
         100% {
             transform: translateY(0);
@@ -218,21 +262,22 @@
         align-items: flex-start;
         justify-content: space-between;
         gap: 0.75rem;
-        margin-bottom: 0.75rem;
+        margin-bottom: 0.55rem;
     }
 
     .file-section-header h4 {
         margin: 0 0 0.15rem 0;
         font-size: 1rem;
         font-weight: 800;
-        color: #0f172a;
+        color: var(--fc-text);
     }
 
     .file-section-header p {
         margin: 0;
-        font-size: 0.78rem;
-        line-height: 1.45;
-        color: #64748b;
+        font-size: 0.74rem;
+        line-height: 1.4;
+        color: var(--fc-muted);
+        max-width: 44ch;
     }
 
     .file-section-label {
@@ -241,7 +286,15 @@
         font-weight: 700;
         letter-spacing: 0.08em;
         text-transform: uppercase;
-        color: #0284c7;
+        color: var(--fc-accent);
+    }
+
+    .file-section-header.compact {
+        margin-bottom: 0.35rem;
+    }
+
+    .file-section-header.compact .file-section-label {
+        display: none;
     }
 
     .file-inline-badge {
@@ -250,66 +303,277 @@
         gap: 0.35rem;
         padding: 0.25rem 0.55rem;
         border-radius: 999px;
-        background: rgba(15, 23, 42, 0.05);
-        color: #334155;
+        background: rgba(0, 234, 255, 0.1);
+        color: #def9ff;
         font-size: 0.72rem;
         font-weight: 600;
     }
 
     .file-task-item {
-        padding: 0.85rem 0.95rem;
-        background: rgba(255, 255, 255, 0.18);
+        padding: 1rem 1.1rem;
+        background: rgba(9, 18, 34, 0.82);
     }
 
     .file-task-meta {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.35rem 0.8rem;
-        color: #64748b;
-        font-size: 0.77rem;
-        line-height: 1.4;
+        gap: 0.45rem 0.95rem;
+        color: var(--fc-muted);
+        font-size: 0.82rem;
+        line-height: 1.5;
+    }
+
+    .file-task-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.75rem;
+    }
+
+    .file-task-title {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        margin-bottom: 0.25rem;
+    }
+
+    .file-task-destination {
+        font-size: 0.96rem;
+        font-weight: 800;
+        color: #17314c;
+        line-height: 1.25;
+        min-width: 0;
+        word-break: break-word;
+    }
+
+    .file-task-source {
+        margin-top: 0.45rem;
+        font-size: 0.8rem;
+        color: #5f7892;
+        display: flex;
+        align-items: center;
+        gap: 0.3rem;
+        flex-wrap: wrap;
     }
 
     .file-task-meta code {
         padding: 0.1rem 0.25rem;
         border-radius: 0.3rem;
-        background: rgba(15, 23, 42, 0.06);
-        color: #1e293b;
+        background: rgba(7, 14, 28, 0.92);
+        color: #dcfbff;
+        border: 1px solid rgba(63, 224, 255, 0.08);
         font-size: 0.73rem;
     }
 
     .file-task-tags {
         display: flex;
         flex-wrap: wrap;
-        gap: 0.35rem;
-        margin-top: 0.45rem;
+        gap: 0.4rem;
+        margin-top: 0.6rem;
     }
 
     .file-task-tag {
         display: inline-flex;
         align-items: center;
         gap: 0.25rem;
-        padding: 0.16rem 0.45rem;
+        padding: 0.18rem 0.52rem;
         border-radius: 999px;
-        background: rgba(14, 165, 233, 0.1);
-        color: #0c4a6e;
-        font-size: 0.71rem;
+        background: rgba(0, 234, 255, 0.1);
+        color: #def9ff;
+        font-size: 0.74rem;
         font-weight: 700;
     }
 
+    .file-task-actions {
+        display: inline-flex;
+        gap: 0.24rem;
+        flex-shrink: 0;
+    }
+
+    .file-task-actions .btn {
+        padding: 0.12rem 0.34rem !important;
+        border-radius: 0.55rem;
+    }
+
     .file-subcard {
-        border: 1px solid rgba(148, 163, 184, 0.18);
+        border: 1px solid var(--fc-border);
         border-radius: 0.8rem;
-        background: rgba(255, 255, 255, 0.12);
+        background: rgba(12, 24, 44, 0.72);
         padding: 0.75rem 0.8rem;
     }
 
     .file-warning-note {
         margin-top: 0.35rem;
         padding-left: 1.65rem;
-        color: #b45309;
+        color: #ffcc73;
         font-size: 0.74rem;
         line-height: 1.35;
+    }
+
+    .file-config-page .text-muted,
+    .file-config-page .text-secondary,
+    .file-config-page small,
+    .file-config-page .small,
+    .file-config-page .form-text {
+        color: var(--fc-muted) !important;
+    }
+
+    .file-config-page .text-dark,
+    .file-config-page .fw-bold,
+    .file-config-page .fw-semibold {
+        color: var(--fc-text) !important;
+    }
+
+    .file-config-page .badge.bg-light.text-dark,
+    .file-config-page .badge.bg-white.text-primary {
+        background: rgba(10, 21, 39, 0.96) !important;
+        color: #dff8ff !important;
+        border: 1px solid var(--fc-border);
+    }
+
+    .file-config-page .badge.bg-warning.text-dark,
+    .file-config-page .badge.bg-secondary,
+    .file-config-page .badge.bg-primary,
+    .file-config-page .badge.bg-success {
+        color: #03111e !important;
+    }
+
+    .file-config-page .card-header.bg-primary,
+    .file-config-page .card-header.bg-success,
+    .file-config-page .card-header.bg-secondary,
+    .file-config-page .card-header.bg-dark,
+    .file-config-page .card-header.bg-warning {
+        color: #02111e !important;
+    }
+
+    .file-config-page .alert {
+        background: linear-gradient(180deg, rgba(9, 18, 34, 0.94), rgba(8, 16, 30, 0.9));
+        border: 1px solid var(--fc-border);
+        color: var(--fc-text);
+    }
+
+    /* Light glass readability pass */
+    .file-config-page {
+        --fc-border: rgba(125, 160, 190, 0.18);
+        --fc-panel: rgba(255, 255, 255, 0.78);
+        --fc-text: #1d3650;
+        --fc-muted: #617a93;
+        --fc-accent: #475569;
+        --fc-accent-soft: #64748b;
+    }
+
+    .file-topbar {
+        background:
+            radial-gradient(circle at top right, rgba(84, 208, 255, 0.14), transparent 30%),
+            linear-gradient(135deg, rgba(255, 255, 255, 0.84), rgba(236, 244, 252, 0.88));
+        border: 1px solid var(--fc-border);
+        box-shadow: 0 18px 36px rgba(37, 78, 122, 0.08);
+    }
+
+    .file-summary-pill,
+    .file-chip {
+        background: rgba(255, 255, 255, 0.74);
+        color: var(--fc-muted);
+    }
+
+    .file-summary-pill strong {
+        color: var(--fc-text);
+    }
+
+    .file-chip.is-on {
+        background: rgba(16, 185, 129, 0.14);
+        color: #0f9f78;
+    }
+
+    .file-chip.is-off {
+        background: rgba(236, 243, 250, 0.9);
+        color: var(--fc-muted);
+    }
+
+    .file-nav-link {
+        background: rgba(255, 255, 255, 0.74);
+        color: #49617a;
+        box-shadow: none;
+    }
+
+    .file-nav-link:hover,
+    .file-nav-link.active {
+        color: #17314c;
+        border-color: rgba(125, 160, 190, 0.22);
+        background: linear-gradient(90deg, rgba(84, 208, 255, 0.12), rgba(255, 255, 255, 0.76));
+        box-shadow: 0 10px 22px rgba(37, 78, 122, 0.08);
+    }
+
+    .file-inline-badge,
+    .file-task-tag {
+        background: rgba(84, 208, 255, 0.12);
+        color: #23405d;
+    }
+
+    .file-task-item {
+        background: rgba(255, 255, 255, 0.76);
+        border: 1px solid rgba(125, 160, 190, 0.16);
+    }
+
+    .file-subcard {
+        background: rgba(255, 255, 255, 0.68);
+        border: 1px solid var(--fc-border);
+    }
+
+    .file-task-meta code,
+    .file-config-page code {
+        background: rgba(244, 248, 253, 0.92) !important;
+        color: #24415f !important;
+        border: 1px solid rgba(125, 160, 190, 0.14) !important;
+    }
+
+    .file-config-page .badge.bg-light.text-dark,
+    .file-config-page .badge.bg-white.text-primary {
+        background: rgba(255, 255, 255, 0.86) !important;
+        color: #23405d !important;
+        border: 1px solid var(--fc-border);
+    }
+
+    .file-config-page .card-header.bg-primary,
+    .file-config-page .card-header.bg-success,
+    .file-config-page .card-header.bg-secondary,
+    .file-config-page .card-header.bg-dark {
+        color: #fff !important;
+    }
+
+    .file-config-page .card-header.bg-warning {
+        color: #563c12 !important;
+    }
+
+    .file-config-page .alert {
+        background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(239, 246, 252, 0.8));
+        border: 1px solid var(--fc-border);
+        color: var(--fc-text);
+        box-shadow: none;
+    }
+
+    #fileTaskEditorModal .card {
+        margin-bottom: 0;
+        border: 0;
+        box-shadow: none;
+        background: transparent;
+    }
+
+    #fileTaskEditorModal .card-header {
+        display: none;
+    }
+
+    #fileTaskEditorModal .card-body {
+        padding: 0 !important;
+    }
+
+    #fileSectionModal .file-section-header {
+        display: none;
+    }
+
+    #fileSectionModal .card {
+        margin-bottom: 0;
     }
 
     @media (min-width: 992px) {
@@ -317,9 +581,6 @@
             scroll-margin-top: 1.35rem;
         }
 
-        .file-summary-grid {
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-        }
     }
 
     @media (min-width: 992px) {
@@ -343,13 +604,94 @@
     }
 
     @media (max-width: 767.98px) {
-        .file-summary-grid {
-            grid-template-columns: 1fr;
+        .file-topbar-head {
+            flex-direction: column;
         }
 
         .file-section-header {
             flex-direction: column;
         }
+
+        .file-metrics-grid {
+            grid-template-columns: 1fr;
+        }
+    }
+
+    /* Expansion pass */
+    .file-shell {
+        gap: 1.35rem;
+    }
+
+    .file-topbar .card-body {
+        padding: 1.35rem !important;
+    }
+
+    .file-topbar-copy h2 {
+        font-size: 1.7rem;
+        line-height: 1.15;
+    }
+
+    .file-kicker {
+        font-size: 0.8rem;
+        margin-bottom: 0.35rem;
+    }
+
+    .file-summary-strip {
+        gap: 0.55rem;
+        margin-top: 1rem;
+    }
+
+    .file-summary-pill,
+    .file-chip {
+        padding: 0.38rem 0.8rem;
+        font-size: 0.82rem;
+    }
+
+    .file-quick-actions .btn {
+        min-width: 136px;
+        padding: 0.5rem 0.95rem;
+        border-radius: 1rem;
+    }
+
+    .file-section-header.compact {
+        margin-bottom: 0.8rem;
+    }
+
+    .file-section-header h4 {
+        font-size: 1.2rem;
+    }
+
+    .file-task-item {
+        padding: 1.15rem 1.25rem;
+    }
+
+    .file-task-destination {
+        font-size: 1.04rem;
+    }
+
+    .file-task-source {
+        margin-top: 0.55rem;
+        font-size: 0.86rem;
+    }
+
+    .file-task-meta {
+        gap: 0.55rem 1.1rem;
+        font-size: 0.88rem;
+        margin-top: 0.55rem;
+    }
+
+    .file-task-tags {
+        gap: 0.45rem;
+        margin-top: 0.75rem;
+    }
+
+    .file-task-tag {
+        padding: 0.22rem 0.58rem;
+        font-size: 0.78rem;
+    }
+
+    .file-task-actions .btn {
+        padding: 0.18rem 0.46rem !important;
     }
 </style>
 {% endblock %}
@@ -373,73 +715,60 @@
 {% endfor %}
 
 <div class="file-config-page">
-    <div class="d-flex flex-column gap-3">
-        <div>
-            <h2 class="mb-1"><i class="bi bi-folder-fill me-2"></i>文件同步配置中心</h2>
-            <p class="text-muted small mb-0">把同步任务、运行安全、115 凭证和风控参数集中到一个页面里，排查和调整会更顺手。</p>
-        </div>
-
-        <div class="card shadow-sm file-settings-overview" id="section-overview">
-            <div class="card-body p-3 p-lg-4">
-                <div class="d-flex flex-column flex-lg-row justify-content-between gap-3 align-items-start">
-                    <div>
+    <div class="file-shell">
+        <div class="card shadow-sm file-topbar" id="section-overview">
+            <div class="card-body p-3">
+                <div class="file-topbar-head">
+                    <div class="file-topbar-copy">
                         <div class="file-kicker">文件同步</div>
-                        <h4 class="file-hero-title">统一管理目录任务、秒传和下载风控</h4>
-                        <p class="text-muted small mb-0 mt-2">常改的内容现在按“任务、编辑、全局、115、风控”分区，左侧目录可以直接跳转。</p>
+                        <h2><i class="bi bi-folder-fill me-2"></i>文件同步配置中心</h2>
+                        <p>把任务列表留在当前页直接查看，运行偏好、115 和风控改成弹窗维护，让页面本身更适合日常巡视。</p>
                     </div>
                     <div class="file-quick-actions">
                         <a href="#section-editor" class="btn btn-primary btn-sm" data-file-jump><i class="bi bi-plus-circle me-1"></i>新增任务</a>
-                        <a href="#section-global" class="btn btn-outline-secondary btn-sm" data-file-jump><i class="bi bi-sliders me-1"></i>全局设置</a>
-                        <a href="#section-risk" class="btn btn-outline-secondary btn-sm" data-file-jump><i class="bi bi-shield-check me-1"></i>风控参数</a>
+                        <a href="#section-global" class="btn btn-outline-secondary btn-sm" data-file-jump><i class="bi bi-sliders me-1"></i>全局</a>
+                        <a href="#section-storage" class="btn btn-outline-secondary btn-sm" data-file-jump><i class="bi bi-cloud me-1"></i>115</a>
+                        <a href="#section-risk" class="btn btn-outline-secondary btn-sm" data-file-jump><i class="bi bi-shield-check me-1"></i>风控</a>
                     </div>
                 </div>
 
-                <div class="file-summary-grid mt-3">
-                    <div class="file-stat-card">
-                        <div class="file-stat-label">同步任务</div>
-                        <div class="file-stat-value">{{ tasks | length }}</div>
-                        <div class="file-stat-help">当前已配置的目录监控任务数量。</div>
+                <div class="file-summary-strip">
+                    <span class="file-chip {% if risk.get('enabled', True) %}is-on{% else %}is-off{% endif %}">风控</span>
+                    <span class="file-chip {% if queue_alert.get('enabled', False) %}is-on{% else %}is-off{% endif %}">队列告警</span>
+                    <span class="file-chip {% if config.get('115_cookie') or config.get('web_115_cookie') %}is-on{% else %}is-off{% endif %}">115 凭证</span>
+                    <span class="file-chip {% if config.get('debug_mode', False) %}is-on{% else %}is-off{% endif %}">DEBUG</span>
+                </div>
+                <div class="file-metrics-grid">
+                    <div class="file-metric-card">
+                        <div class="file-metric-label">任务总数</div>
+                        <div class="file-metric-value">{{ tasks | length }}</div>
+                        <div class="file-metric-note">当前已经启用和维护中的目录同步任务数量。</div>
                     </div>
-                    <div class="file-stat-card">
-                        <div class="file-stat-label">秒传启用</div>
-                        <div class="file-stat-value">{{ stats.second_transfer_count }}</div>
-                        <div class="file-stat-help">开启 115 秒传能力的任务数量。</div>
+                    <div class="file-metric-card">
+                        <div class="file-metric-label">秒传任务</div>
+                        <div class="file-metric-value">{{ stats.second_transfer_count }}</div>
+                        <div class="file-metric-note">启用了秒传能力的任务数，适合快速确认上传链路状态。</div>
                     </div>
-                    <div class="file-stat-card">
-                        <div class="file-stat-label">移动类任务</div>
-                        <div class="file-stat-value">{{ stats.move_like_count }}</div>
-                        <div class="file-stat-help">包含“移动”或“复制并删除源”的任务数量。</div>
+                    <div class="file-metric-card">
+                        <div class="file-metric-label">移动类任务</div>
+                        <div class="file-metric-value">{{ stats.move_like_count }}</div>
+                        <div class="file-metric-note">包含移动和复制后删源的任务，用于观察迁移策略分布。</div>
                     </div>
-                    <div class="file-stat-card">
-                        <div class="file-stat-label">删除源文件</div>
-                        <div class="file-stat-value">{{ stats.delete_after_count }}</div>
-                        <div class="file-stat-help">秒传成功后会删除源文件的任务数量。</div>
-                    </div>
-                    <div class="file-stat-card">
-                        <div class="file-stat-label">风控统计</div>
-                        <div class="file-stat-value">{{ (download_risk_stats or {}).get('blocked_total', 0) }}</div>
-                        <div class="file-stat-help">累计被下载风控拦截的次数。</div>
-                    </div>
-                    <div class="file-stat-card">
-                        <div class="file-stat-label">运行状态</div>
-                        <div class="file-chip-row">
-                            <span class="file-chip {% if risk.get('enabled', True) %}is-on{% else %}is-off{% endif %}">风控{% if risk.get('enabled', True) %}已开{% else %}未开{% endif %}</span>
-                            <span class="file-chip {% if queue_alert.get('enabled', False) %}is-on{% else %}is-off{% endif %}">队列告警{% if queue_alert.get('enabled', False) %}已开{% else %}未开{% endif %}</span>
-                            <span class="file-chip {% if config.get('115_cookie') or config.get('web_115_cookie') %}is-on{% else %}is-off{% endif %}">115 凭证{% if config.get('115_cookie') or config.get('web_115_cookie') %}已配{% else %}待配{% endif %}</span>
-                            <span class="file-chip {% if config.get('debug_mode', False) %}is-on{% else %}is-off{% endif %}">DEBUG{% if config.get('debug_mode', False) %}已开{% else %}未开{% endif %}</span>
-                        </div>
-                        <div class="file-stat-help mt-2">这里会快速提示几个影响运行行为的重要开关。</div>
+                    <div class="file-metric-card">
+                        <div class="file-metric-label">累计拦截</div>
+                        <div class="file-metric-value">{{ (download_risk_stats or {}).get('blocked_total', 0) }}</div>
+                        <div class="file-metric-note">下载风控最近累计拦截次数，方便快速感知异常压力。</div>
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="row g-3">
-            <div class="col-xl-3">
+            <div class="col-xl-3 d-none">
                 <div class="card shadow-sm file-nav-card">
                     <div class="card-body p-3">
                         <div class="file-section-label">配置目录</div>
-                        <div class="file-nav-meta mb-3">当前管理 {{ tasks | length }} 个目录任务，根目录限制为 {{ config.allowed_browse_path }}。</div>
+                        <div class="file-nav-meta mb-2">当前 {{ tasks | length }} 个任务，根目录 {{ config.allowed_browse_path }}。</div>
 
                         <div class="file-nav-list">
                             <a href="#section-overview" class="file-nav-link active" data-file-nav>
@@ -455,8 +784,8 @@
                                 <span class="badge bg-light text-dark">表单</span>
                             </a>
                             <a href="#section-global" class="file-nav-link" data-file-nav>
-                                <span><i class="bi bi-sliders"></i>全局设置</span>
-                                <span class="badge bg-light text-dark">运行</span>
+                                <span><i class="bi bi-sliders"></i>浏览与追踪</span>
+                                <span class="badge bg-light text-dark">文件</span>
                             </a>
                             <a href="#section-storage" class="file-nav-link" data-file-nav>
                                 <span><i class="bi bi-cloud"></i>115 凭证</span>
@@ -467,25 +796,17 @@
                                 <span class="badge bg-light text-dark">{{ (download_risk_stats or {}).get('blocked_total', 0) }}</span>
                             </a>
                         </div>
-
-                        <div class="file-note-card mt-3">
-                            <strong>使用提醒</strong>
-                            <small>编辑任务时会自动跳到表单区，保存后页面会回到默认状态。</small>
-                            <small>“删除源文件”风险较高，建议只在明确有备份时开启。</small>
-                        </div>
                     </div>
                 </div>
             </div>
 
-            <div class="col-xl-9">
+            <div class="col-12">
                 <section class="file-section" id="section-tasks">
-                    <div class="file-section-header">
+                    <div class="file-section-header compact">
                         <div>
                             <div class="file-section-label">目录任务</div>
                             <h4>当前监控任务</h4>
-                            <p>这里集中展示所有文件同步规则，适合快速检查源目录、目标目录和秒传策略。</p>
                         </div>
-                        <a href="#section-editor" class="file-inline-badge text-decoration-none" data-file-jump><i class="bi bi-plus-circle"></i>新增或编辑任务</a>
                     </div>
 
                     <div class="card mb-3 shadow-sm">
@@ -497,16 +818,20 @@
                             {% if tasks %}
                                 {% for task in tasks %}
                                 <div class="list-group-item file-task-item">
-                                    <div class="d-flex justify-content-between align-items-start gap-2">
+                                    <div class="file-task-head">
                                         <div class="flex-grow-1">
-                                            <div class="d-flex align-items-center flex-wrap gap-2 mb-2">
+                                            <div class="file-task-title">
                                                 {% set action_label = '复制' if task.action == 'copy' else '移动' if task.action == 'move' else '复制并删除源' if task.action == 'copy_and_delete' else task.action %}
                                                 <span class="badge bg-primary">{{ action_label }}</span>
-                                                <span class="fw-bold text-dark"><i class="bi bi-arrow-right-short"></i>{{ task.destination_dir }}</span>
+                                                <span class="file-task-destination"><i class="bi bi-arrow-right-short"></i>{{ task.destination_dir }}</span>
+                                            </div>
+
+                                            <div class="file-task-source">
+                                                <i class="bi bi-box-arrow-in-right"></i>
+                                                <code>{{ task.source_dir }}</code>
                                             </div>
 
                                             <div class="file-task-meta">
-                                                <span><i class="bi bi-box-arrow-in-right me-1"></i>源目录 <code>{{ task.source_dir }}</code></span>
                                                 <span><i class="bi bi-file-earmark-text me-1"></i>文件稳定 {{ task.stable_time }}s</span>
                                                 <span><i class="bi bi-folder2-open me-1"></i>目录稳定 {{ task.get('dir_stable_time', 30) }}s</span>
                                                 <span><i class="bi bi-files me-1"></i>重复处理 {{ task.get('handle_duplicate', 'skip') }}</span>
@@ -524,7 +849,7 @@
                                             </div>
                                         </div>
 
-                                        <div class="ms-2 d-flex gap-1">
+                                        <div class="file-task-actions">
                                             <button type="button" class="btn btn-sm btn-outline-primary px-2 py-0"
                                                 data-task='{{ task | tojson | safe }}'
                                                 onclick='editFileTask(JSON.parse(this.getAttribute("data-task")))'>
@@ -549,14 +874,13 @@
                     </div>
                 </section>
 
-                <div class="row g-3">
-                    <div class="col-lg-7">
-                        <section class="file-section" id="section-editor">
+                <div class="row g-3 d-none">
+                    <div class="col-lg-7 d-none">
+                        <section class="file-section d-none" id="section-editor">
                             <div class="file-section-header">
                                 <div>
                                     <div class="file-section-label">任务编辑</div>
                                     <h4>新增 / 编辑监控任务</h4>
-                                    <p>把目录路径、同步动作、重复文件策略和秒传参数放在同一处修改。</p>
                                 </div>
                             </div>
 
@@ -674,7 +998,7 @@
                                             <div class="col-12 mt-2">
                                                 <div class="d-flex gap-2">
                                                     <button type="submit" id="add_file_task_btn" class="btn btn-success btn-sm flex-grow-1">保存任务</button>
-                                                    <button type="button" id="cancel_file_task_btn" class="btn btn-outline-secondary btn-sm" style="display:none;" onclick="resetFileTaskForm()">取消编辑</button>
+                                                    <button type="button" id="cancel_file_task_btn" class="btn btn-outline-secondary btn-sm" style="display:none;" onclick="cancelFileTaskEdit()">取消编辑</button>
                                                 </div>
                                             </div>
                                         </div>
@@ -689,14 +1013,13 @@
                             <div class="file-section-header">
                                 <div>
                                     <div class="file-section-label">运行设置</div>
-                                    <h4>全局与安全</h4>
-                                    <p>管理文件浏览根目录、调试开关和主页统计窗口。</p>
+                                    <h4>浏览与追踪</h4>
                                 </div>
                             </div>
 
                             <div class="card mb-3 shadow-sm">
                                 <div class="card-header bg-dark text-white">
-                                    <h5 class="mb-0 small"><i class="bi bi-shield-lock me-2"></i>全局安全设置</h5>
+                                    <h5 class="mb-0 small"><i class="bi bi-shield-lock me-2"></i>浏览与追踪设置</h5>
                                 </div>
                                 <div class="card-body p-3">
                                     <form action="{{ url_for('manage_file_config') }}" method="post" class="row g-2">
@@ -715,16 +1038,6 @@
 
                                         <div class="col-12 mb-2">
                                             <div class="form-check form-switch">
-                                                <input class="form-check-input" type="checkbox" id="debug_mode" name="debug_mode"
-                                                    {% if config.get('debug_mode', False) %}checked{% endif %}>
-                                                <label class="form-check-label small" for="debug_mode">
-                                                    <i class="bi bi-bug me-1"></i>DEBUG 模式（输出详细日志）
-                                                </label>
-                                            </div>
-                                        </div>
-
-                                        <div class="col-12 mb-2">
-                                            <div class="form-check form-switch">
                                                 <input class="form-check-input" type="checkbox" id="trace_media_detection" name="trace_media_detection"
                                                     {% if config.get('trace_media_detection', False) %}checked{% endif %}>
                                                 <label class="form-check-label small" for="trace_media_detection">
@@ -735,15 +1048,17 @@
                                         </div>
 
                                         <div class="col-12 mb-2">
-                                            <label for="log_insights_window_minutes" class="form-label small">主页概览统计窗口(分钟)</label>
-                                            <input type="number" id="log_insights_window_minutes" name="log_insights_window_minutes"
-                                                class="form-control form-control-sm" min="0" max="1440"
-                                                value="{{ config.get('log_insights_window_minutes', 5) }}">
-                                            <div class="form-text small">用于 Bot/TG 概览中的“最近下载/错误”等统计，0 表示不限制。</div>
+                                            <div class="file-subcard">
+                                                <div class="small fw-bold text-dark mb-1">已合并的全局运行偏好</div>
+                                                <div class="small text-muted">`DEBUG 模式` 和 `主页概览统计窗口` 已统一放到首页顶部快捷控制，避免和这里重复维护。</div>
+                                                <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm mt-2">
+                                                    <i class="bi bi-speedometer2 me-1"></i>前往首页快捷控制
+                                                </a>
+                                            </div>
                                         </div>
 
                                         <div class="col-12">
-                                            <button type="submit" class="btn btn-dark btn-sm w-100">保存全局设置</button>
+                                            <button type="submit" class="btn btn-dark btn-sm w-100">保存浏览与追踪设置</button>
                                         </div>
                                     </form>
                                 </div>
@@ -755,7 +1070,6 @@
                                 <div>
                                     <div class="file-section-label">网盘凭证</div>
                                     <h4>115 网盘设置</h4>
-                                    <p>集中管理 115 Cookie 和默认 CID，方便秒传与分享转存联动。</p>
                                 </div>
                             </div>
 
@@ -799,12 +1113,11 @@
                     </div>
                 </div>
 
-                <section class="file-section" id="section-risk">
+                <section class="file-section d-none" id="section-risk">
                     <div class="file-section-header">
                         <div>
                             <div class="file-section-label">下载风控</div>
                             <h4>风控、队列告警与自动降速</h4>
-                            <p>控制单频道下载速率、磁盘余量、队列长度告警和高峰期自动降并发。</p>
                         </div>
                     </div>
 
@@ -939,8 +1252,29 @@
             </div>
         </div>
 
-        <div class="text-center mt-2">
-            <a href="{{ url_for('index') }}" class="btn btn-outline-secondary btn-sm"><i class="bi bi-house-door me-1"></i>返回主页</a>
+</div>
+</div>
+
+<div class="modal fade" id="fileTaskEditorModal" tabindex="-1" aria-labelledby="fileTaskEditorModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fileTaskEditorModalLabel">新增 / 编辑监控任务</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-3" id="fileTaskEditorModalBody"></div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="fileSectionModal" tabindex="-1" aria-labelledby="fileSectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="fileSectionModalLabel">配置</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-3" id="fileSectionModalBody"></div>
         </div>
     </div>
 </div>
@@ -972,6 +1306,16 @@
     let currentBrowsePath = '';
     let selectedDirectory = '';
     let dirBrowserModalInstance;
+    let fileTaskEditorModalInstance;
+    let fileSectionModalInstance;
+    let currentFileSectionState = null;
+    const fileSectionModalTitles = {
+        '#section-overview': '配置概览',
+        '#section-tasks': '当前监控任务',
+        '#section-global': '浏览与追踪',
+        '#section-storage': '115 网盘设置',
+        '#section-risk': '下载风控'
+    };
 
     const dirTree = document.getElementById('dirTree');
     const selectedDirDisplay = document.getElementById('selectedDirDisplay');
@@ -1124,6 +1468,60 @@
         }
     }
 
+    function openFileTaskEditorModal(resetForm = true) {
+        if (resetForm) {
+            resetFileTaskForm();
+        }
+        if (fileTaskEditorModalInstance) {
+            fileTaskEditorModalInstance.show();
+        }
+    }
+
+    function restoreFileSectionModal() {
+        if (!currentFileSectionState) {
+            return;
+        }
+        const { element, parent, nextSibling, hadHiddenClass } = currentFileSectionState;
+        if (nextSibling && nextSibling.parentNode === parent) {
+            parent.insertBefore(element, nextSibling);
+        } else {
+            parent.appendChild(element);
+        }
+        if (hadHiddenClass) {
+            element.classList.add('d-none');
+        }
+        currentFileSectionState = null;
+    }
+
+    function openFileSectionModal(targetSelector) {
+        const target = document.querySelector(targetSelector);
+        const modalBody = document.getElementById('fileSectionModalBody');
+        const modalTitle = document.getElementById('fileSectionModalLabel');
+        if (!target || !modalBody || !fileSectionModalInstance) {
+            return;
+        }
+
+        restoreFileSectionModal();
+        currentFileSectionState = {
+            element: target,
+            parent: target.parentNode,
+            nextSibling: target.nextSibling,
+            hadHiddenClass: target.classList.contains('d-none')
+        };
+
+        target.classList.remove('d-none');
+        modalTitle.textContent = fileSectionModalTitles[targetSelector] || '配置';
+        modalBody.appendChild(target);
+        fileSectionModalInstance.show();
+    }
+
+    function cancelFileTaskEdit() {
+        resetFileTaskForm();
+        if (fileTaskEditorModalInstance) {
+            fileTaskEditorModalInstance.hide();
+        }
+    }
+
     function editFileTask(data) {
         const setValue = (id, value) => {
             const el = document.getElementById(id);
@@ -1168,15 +1566,10 @@
             cancelBtn.style.display = 'inline-block';
         }
 
-        const editorSection = document.getElementById('section-editor');
         const sourceInput = document.getElementById('source_dir');
-        if (editorSection) {
-            editorSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        } else if (sourceInput) {
-            sourceInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
+        openFileTaskEditorModal(false);
         if (sourceInput) {
-            setTimeout(() => sourceInput.focus(), 300);
+            setTimeout(() => sourceInput.focus(), 220);
         }
     }
 
@@ -1184,6 +1577,26 @@
         const dirBrowserModalEl = document.getElementById('dirBrowserModal');
         if (dirBrowserModalEl) {
             dirBrowserModalInstance = new bootstrap.Modal(dirBrowserModalEl);
+        }
+        const fileTaskEditorModalEl = document.getElementById('fileTaskEditorModal');
+        const fileSectionModalEl = document.getElementById('fileSectionModal');
+        const editorSection = document.getElementById('section-editor');
+        const editorCard = editorSection ? editorSection.querySelector('.card') : null;
+        const editorModalBody = document.getElementById('fileTaskEditorModalBody');
+        if (fileTaskEditorModalEl) {
+            fileTaskEditorModalInstance = new bootstrap.Modal(fileTaskEditorModalEl);
+            if (editorCard && editorModalBody && !editorModalBody.contains(editorCard)) {
+                editorModalBody.appendChild(editorCard);
+            }
+            fileTaskEditorModalEl.addEventListener('hidden.bs.modal', () => {
+                resetFileTaskForm();
+            });
+        }
+        if (fileSectionModalEl) {
+            fileSectionModalInstance = new bootstrap.Modal(fileSectionModalEl);
+            fileSectionModalEl.addEventListener('hidden.bs.modal', () => {
+                restoreFileSectionModal();
+            });
         }
 
         const test115UploadChainBtn = document.getElementById('test115UploadChainBtn');
@@ -1250,8 +1663,18 @@
         const fileNavLinks = Array.from(document.querySelectorAll('[data-file-nav]'));
         const fileJumpLinks = Array.from(document.querySelectorAll('[data-file-jump]'));
         let fileJumpTimer = null;
+        const isFileEditorTarget = (selector) => selector === '#section-editor';
+        const isFileModalTarget = (selector) => ['#section-overview', '#section-tasks', '#section-global', '#section-storage', '#section-risk'].includes(selector);
 
         const jumpToFileSection = (targetSelector) => {
+            if (isFileEditorTarget(targetSelector)) {
+                openFileTaskEditorModal(true);
+                return;
+            }
+            if (isFileModalTarget(targetSelector)) {
+                openFileSectionModal(targetSelector);
+                return;
+            }
             const target = document.querySelector(targetSelector);
             if (!target) return;
 
@@ -1280,6 +1703,7 @@
 
         if (fileNavLinks.length > 0) {
             const sections = fileNavLinks
+                .filter(link => !isFileEditorTarget(link.getAttribute('href')))
                 .map(link => document.querySelector(link.getAttribute('href')))
                 .filter(Boolean);
 
@@ -1299,7 +1723,17 @@
             };
 
             fileNavLinks.forEach((link) => {
-                link.addEventListener('click', () => {
+                link.addEventListener('click', (event) => {
+                    if (isFileEditorTarget(link.getAttribute('href'))) {
+                        event.preventDefault();
+                        openFileTaskEditorModal(true);
+                        return;
+                    }
+                    if (isFileModalTarget(link.getAttribute('href'))) {
+                        event.preventDefault();
+                        openFileSectionModal(link.getAttribute('href'));
+                        return;
+                    }
                     fileNavLinks.forEach(item => item.classList.remove('active'));
                     link.classList.add('active');
                 });

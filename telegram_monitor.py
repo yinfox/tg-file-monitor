@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Optional, List, Tuple, Dict
 from types import SimpleNamespace
 import html
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse, quote
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 import requests
 from telethon.sync import TelegramClient
@@ -25,6 +25,16 @@ from dotenv import load_dotenv
 
 # Add app directory to path
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+APP_DIR = os.path.join(BASE_DIR, 'app')
+if APP_DIR not in sys.path:
+    sys.path.append(APP_DIR)
+from proxy_helpers import (
+    build_proxy_url_from_scope_config,
+    build_requests_proxies_from_scope_config,
+    build_telethon_proxy_from_scope_config,
+    extract_proxy_scope_config,
+    normalize_proxy_scope,
+)
 
 # --- Paths & Config ---
 CONFIG_DIR = os.path.join(BASE_DIR, 'config')
@@ -339,94 +349,27 @@ def load_config() -> dict:
 
 
 def _normalize_proxy_scope(scope: Optional[str]) -> str:
-    value = str(scope or "service").strip().lower()
-    aliases = {
-        "telegram": "telegram",
-        "tg": "telegram",
-        "telethon": "telegram",
-        "service": "service",
-        "hdhive": "service",
-        "tmdb": "service",
-        "hdhive_tmdb": "service",
-        "downloader": "downloader",
-        "download": "downloader",
-        "yt": "downloader",
-    }
-    return aliases.get(value, "service")
+    return normalize_proxy_scope(scope)
 
 
 def _get_proxy_scope_config(config: Optional[dict] = None, scope: Optional[str] = None) -> dict:
     cfg = config if isinstance(config, dict) else load_config()
-    proxy_cfg = cfg.get('proxy', {}) if isinstance(cfg, dict) else {}
-    if not isinstance(proxy_cfg, dict):
-        return {}
-
-    normalized_scope = _normalize_proxy_scope(scope)
-    legacy_keys = {"addr", "port", "username", "password"}
-    if legacy_keys & set(proxy_cfg.keys()):
-        if normalized_scope in ("telegram", "service"):
-            return {
-                "addr": str(proxy_cfg.get("addr") or "").strip(),
-                "port": str(proxy_cfg.get("port") or "").strip(),
-                "username": str(proxy_cfg.get("username") or "").strip(),
-                "password": str(proxy_cfg.get("password") or "").strip(),
-            }
-        return {}
-
-    scoped_cfg = proxy_cfg.get(normalized_scope, {})
-    if not isinstance(scoped_cfg, dict):
-        return {}
-    return {
-        "addr": str(scoped_cfg.get("addr") or "").strip(),
-        "port": str(scoped_cfg.get("port") or "").strip(),
-        "username": str(scoped_cfg.get("username") or "").strip(),
-        "password": str(scoped_cfg.get("password") or "").strip(),
-    }
+    return extract_proxy_scope_config(cfg, scope, allow_legacy_proxy=True)
 
 
 def _build_proxy_url_from_config(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[str]:
     proxy_cfg = _get_proxy_scope_config(config, scope)
-    addr = str(proxy_cfg.get('addr') or '').strip()
-    port = str(proxy_cfg.get('port') or '').strip()
-    if not addr or not port:
-        return None
-
-    username = str(proxy_cfg.get('username') or '').strip()
-    password = str(proxy_cfg.get('password') or '').strip()
-    auth = ""
-    if username:
-        auth = quote(username, safe="")
-        if password:
-            auth += ":" + quote(password, safe="")
-        auth += "@"
-    return f"http://{auth}{addr}:{port}"
+    return build_proxy_url_from_scope_config(proxy_cfg)
 
 
 def _build_requests_proxies(config: Optional[dict] = None, scope: Optional[str] = None) -> Optional[dict]:
-    proxy_url = _build_proxy_url_from_config(config, scope)
-    if not proxy_url:
-        return None
-    return {
-        'http': proxy_url,
-        'https': proxy_url,
-    }
+    proxy_cfg = _get_proxy_scope_config(config, scope)
+    return build_requests_proxies_from_scope_config(proxy_cfg)
 
 
 def _build_telethon_proxy_from_config(config: Optional[dict] = None) -> Optional[tuple]:
     proxy_cfg = _get_proxy_scope_config(config, "telegram")
-    addr = proxy_cfg.get("addr") or ""
-    port = proxy_cfg.get("port") or ""
-    if not addr or not port:
-        return None
-    try:
-        return (
-            addr,
-            int(port),
-            proxy_cfg.get("username") or None,
-            proxy_cfg.get("password") or None,
-        )
-    except Exception:
-        return None
+    return build_telethon_proxy_from_scope_config(proxy_cfg)
 
 
 def _requests_request(method: str, url: str, *, config: Optional[dict] = None, proxy_scope: Optional[str] = None, **kwargs):
@@ -530,7 +473,8 @@ def load_channel_filters():
 # --- Regex & Types ---
 REAL_URL_RE = re.compile(r"https?://[^\s\"<>']+", re.IGNORECASE)
 HDHIVE_115_URL_RE = re.compile(
-    r"(?:https?://)?(?:www\.)?hdhive\.[a-z]{2,}/resource/115/[0-9A-Za-z]{16,64}",
+    # Support both legacy /resource/115/<slug> and current /resource/<slug> links.
+    r"(?:https?://)?(?:www\.)?[^/\s]*hdhive\.[a-z]{2,}/resource/(?:115/)?[0-9A-Za-z]{16,64}",
     re.IGNORECASE,
 )
 
@@ -545,7 +489,7 @@ class HdhiveLinkHit:
 def _extract_hdhive_slug(hdhive_url: str) -> Optional[str]:
     if not hdhive_url:
         return None
-    m = re.search(r"/resource/115/([0-9A-Za-z]{16,64})", hdhive_url)
+    m = re.search(r"/resource/(?:115/)?([0-9A-Za-z]{16,64})(?:[/?#]|$)", hdhive_url)
     if m:
         return m.group(1)
     # Best-effort fallback
@@ -1370,7 +1314,17 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
         data = None
     if isinstance(data, dict):
         return data
-    return {"success": False, "code": str(resp.status_code), "message": "Invalid JSON response"}
+
+    try:
+        raw_text = (resp.text or "").strip()
+    except Exception:
+        raw_text = ""
+    compact_text = re.sub(r"\s+", " ", raw_text)[:240]
+    if "Attention Required!" in compact_text and "Cloudflare" in compact_text:
+        compact_text = "Cloudflare challenge blocked request"
+    if not compact_text:
+        compact_text = "Invalid JSON response"
+    return {"success": False, "code": str(resp.status_code), "message": compact_text}
 
 
 def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
@@ -1381,8 +1335,23 @@ def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
 
 def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> dict:
     api_base = base_url.rstrip("/") + "/api/open"
-    url = f"{api_base}/resources/{slug}"
-    return _hdhive_open_api_request("GET", url, api_key)
+    legacy_url = f"{api_base}/resources/{slug}"
+    legacy_resp = _hdhive_open_api_request("GET", legacy_url, api_key)
+    if isinstance(legacy_resp, dict) and legacy_resp.get("success") is True:
+        return legacy_resp
+
+    detail_url = f"{api_base}/resources/detail/{slug}"
+    detail_resp = _hdhive_open_api_request("GET", detail_url, api_key)
+    if isinstance(detail_resp, dict) and detail_resp.get("success") is True:
+        return detail_resp
+
+    legacy_msg = str((legacy_resp or {}).get("message") or "").strip()
+    detail_msg = str((detail_resp or {}).get("message") or (detail_resp or {}).get("description") or "").strip()
+    if detail_msg and detail_msg != "Invalid JSON response":
+        return detail_resp
+    if legacy_msg:
+        return legacy_resp
+    return detail_resp if isinstance(detail_resp, dict) else legacy_resp
 
 
 def _hdhive_open_api_extract_unlock_points(data: dict) -> Optional[int]:
@@ -1968,13 +1937,14 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
         allow_open_api_direct = bool((current_config or {}).get('hdhive_open_api_direct_unlock', False))  # type: ignore[name-defined]
     except Exception:
         allow_open_api_direct = False
-    if open_api_key and allow_open_api_direct:
+    if open_api_key:
         threshold = 0
         try:
             threshold = int((current_config or {}).get('hdhive_auto_unlock_points_threshold', 0) or 0)  # type: ignore[name-defined]
         except Exception:
             threshold = 0
         skip_open_api_unlock = False
+        allow_direct_unlock_without_detail = False
         detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
         detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
         unlock_points = None
@@ -1985,20 +1955,49 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
             if real and already_owned:
                 return real, "Open API：已拥有该资源"
             unlock_points = _hdhive_open_api_extract_unlock_points(detail_data)
+            if real and unlock_points == 0:
+                return real, "Open API：免积分资源，解析成功"
         else:
-            open_api_note = "Open API：未获取积分信息，改用 Cookie 判定"
-            skip_open_api_unlock = True
-        if not already_owned:
-            if unlock_points is None:
+            detail_code = str((detail_resp or {}).get("code") or "").strip()
+            detail_msg = str((detail_resp or {}).get("description") or (detail_resp or {}).get("message") or "").strip()
+            detail_reason = " ".join(part for part in (detail_code, detail_msg) if part).strip()
+            if allow_open_api_direct:
+                allow_direct_unlock_without_detail = True
+                if detail_reason:
+                    open_api_note = f"Open API：详情接口不可用（{detail_reason}），尝试直接解锁"
+                else:
+                    open_api_note = "Open API：详情接口不可用，尝试直接解锁"
+            else:
+                if detail_reason:
+                    open_api_note = f"Open API：详情接口不可用（{detail_reason}），改用 Cookie 判定"
+                else:
+                    open_api_note = "Open API：未获取积分信息，改用 Cookie 判定"
+                skip_open_api_unlock = True
+
+        should_try_open_api_unlock = False
+        if not skip_open_api_unlock:
+            if allow_direct_unlock_without_detail:
+                should_try_open_api_unlock = True
+            elif already_owned:
+                should_try_open_api_unlock = True
+            elif unlock_points is None:
                 open_api_note = f"Open API：未获取积分信息，已跳过解锁（阈值 {threshold}）"
                 skip_open_api_unlock = True
-            elif unlock_points > 0 and unlock_points > threshold:
+            elif unlock_points == 0:
+                should_try_open_api_unlock = True
+            elif not allow_open_api_direct:
+                open_api_note = "Open API 直链解锁已关闭"
+                skip_open_api_unlock = True
+            elif unlock_points > threshold:
                 open_api_note = f"Open API：需要 {unlock_points} 积分 > 阈值 {threshold}，已跳过解锁"
                 skip_open_api_unlock = True
+            else:
+                should_try_open_api_unlock = True
+
         if skip_open_api_unlock:
             # fallback to cookie-based resolve below
             pass
-        else:
+        elif should_try_open_api_unlock:
             resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
             if isinstance(resp, dict) and resp.get("success") is True:
                 data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
@@ -2008,6 +2007,8 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
                 if real:
                     if already_owned:
                         return real, "Open API：已拥有该资源"
+                    if allow_direct_unlock_without_detail:
+                        return real, f"{open_api_note}；Open API：{msg}"
                     return real, f"Open API：{msg}"
                 open_api_note = f"Open API：{msg}，但未返回链接"
             else:
@@ -2025,8 +2026,6 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
                     open_api_note = f"Open API：网络错误（{msg}）"
                 else:
                     open_api_note = f"Open API：解锁失败（{msg}）"
-    elif open_api_key and not allow_open_api_direct:
-        open_api_note = "Open API 直链解锁已关闭"
 
     cookie = _get_hdhive_cookie_header()
     if not cookie:
@@ -2081,15 +2080,27 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
 
             if isinstance(full_url, str) and full_url.startswith('http'):
                 real = _normalize_115_url(full_url)
-                return real, "已解锁，解析成功"
+                note = "已解锁，解析成功"
+                if open_api_note:
+                    note = f"{open_api_note}；{note}"
+                return real, note
 
-            if isinstance(url, str) and url.startswith('http') and already_owned:
+            if isinstance(url, str) and url.startswith('http'):
                 if isinstance(access_code, str) and access_code and access_code not in url:
                     sep = '&' if '?' in url else '?'
                     real = _normalize_115_url(f"{url}{sep}password={access_code}")
                 else:
                     real = _normalize_115_url(url)
-                return real, "已解锁，解析成功"
+                if already_owned:
+                    note = "已解锁，解析成功"
+                    if open_api_note:
+                        note = f"{open_api_note}；{note}"
+                    return real, note
+                if unlock_points == 0:
+                    note = "免积分资源，解析成功"
+                    if open_api_note:
+                        note = f"{open_api_note}；{note}"
+                    return real, note
 
             # Locked case: has points requirement but not owned and no full_url
             if unlock_points is not None and unlock_points > 0 and not already_owned:
@@ -2190,7 +2201,7 @@ async def convert_message_hdhive_links(msg) -> Tuple[bool, str]:
         except Exception:
             pass
         hint_text = " | ".join(hint_sources)
-        if 'hdhive' in hint_text.lower() or '/resource/115/' in hint_text.lower():
+        if 'hdhive' in hint_text.lower() or '/resource/' in hint_text.lower():
             log_message(f"[HDHive] 未匹配到链接，text='{original_text[:200]}'")
         return False, original_text
 
