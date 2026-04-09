@@ -63,24 +63,12 @@ class HDHiveCheckinTestCase(unittest.TestCase):
     def test_legacy_checkin_404_returns_informative_message(self):
         with patch("app.app._hdhive_do_checkin_via_server_action", return_value=(False, "签到响应异常", None)), \
              patch("app.app._hdhive_request_json", side_effect=[(None, "404 Not Found", 404)] * 6), \
-             patch("app.app._hdhive_do_checkin_via_browser_fallback", return_value=(False, "", None)), \
              patch("app.app._hdhive_fetch_points", return_value=None):
             ok, msg, points = _hdhive_do_checkin("https://hdhive.com", "foo=bar", "normal", {})
 
         self.assertFalse(ok)
         self.assertEqual(msg, _HDHIVE_CHECKIN_ENDPOINT_404_MESSAGE)
         self.assertIsNone(points)
-
-    def test_browser_fallback_recovers_when_server_action_and_legacy_paths_fail(self):
-        with patch("app.app._hdhive_do_checkin_via_server_action", return_value=(False, "签到响应异常", None)), \
-             patch("app.app._hdhive_request_json", side_effect=[(None, "404 Not Found", 404)] * 6), \
-             patch("app.app._hdhive_do_checkin_via_browser_fallback", return_value=(True, "签到成功", 66)), \
-             patch("app.app._hdhive_fetch_points", return_value=66):
-            ok, msg, points = _hdhive_do_checkin("https://hdhive.com", "foo=bar", "normal", {})
-
-        self.assertTrue(ok)
-        self.assertEqual(msg, "签到成功")
-        self.assertEqual(points, 66)
 
 
 if __name__ == "__main__":

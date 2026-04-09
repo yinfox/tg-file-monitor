@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.43-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.44-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.43`
+Latest image: `y1nf0x/tg-file-monitor:0.5.44`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.43
+y1nf0x/tg-file-monitor:0.5.44
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,11 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.43 (2026-04-09) - Current
+### v0.5.44 (2026-04-09) - Current
+- ✅ Finalized the HDHive check-in fix with the minimal live dynamic-chunk action refresh path and removed the temporary browser fallback scaffolding
+- ✅ Manual/automatic HDHive check-in remains restored on the current site build, with real verification returning “already checked in, come back tomorrow” together with current points
+
+### v0.5.43 (2026-04-09)
 - ✅ Fixed HDHive check-in action refresh by extracting the current live `checkIn` Server Action from the homepage's dynamic chunk list
 - ✅ Restored manual/automatic HDHive check-in on the current site build; the real check-in flow now returns the site's actual response together with current points
 - ✅ Added regression coverage for dynamic chunk extraction and the refreshed HDHive check-in path to prevent fallback to stale action IDs
