@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.42-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.43-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.42`
+Latest image: `y1nf0x/tg-file-monitor:0.5.43`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.42
+y1nf0x/tg-file-monitor:0.5.43
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,12 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.42 (2026-04-09) - Current
+### v0.5.43 (2026-04-09) - Current
+- ✅ Fixed HDHive check-in action refresh by extracting the current live `checkIn` Server Action from the homepage's dynamic chunk list
+- ✅ Restored manual/automatic HDHive check-in on the current site build; the real check-in flow now returns the site's actual response together with current points
+- ✅ Added regression coverage for dynamic chunk extraction and the refreshed HDHive check-in path to prevent fallback to stale action IDs
+
+### v0.5.42 (2026-04-09)
 - ✅ Continued the lighter glass-style admin refresh across the home dashboard, config/file-sync/drama pages, public shells, and switched auth/login pages back to a light theme
 - ✅ Hardened HDHive link resolution with clearer Open API failure diagnostics; when “allow Open API direct unlock” is enabled, the resolver can fall back to direct unlock if the detail endpoint is down
 - ✅ Fixed the bot misclassifying YouTube and other normal links as raw 115 share codes, so it no longer incorrectly asks for `cid=123456`

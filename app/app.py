@@ -13,7 +13,10 @@ import time
 import re
 import datetime
 import shutil
+import tempfile
+import textwrap
 import requests
+import shlex
 from urllib.parse import quote_plus, quote
 from typing import Tuple, Optional, List
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
@@ -55,7 +58,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.42"
+VERSION = "0.5.43"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -2896,6 +2899,39 @@ def _extract_hdhive_checkin_action_id_from_js(js_text: str) -> str:
     return ""
 
 
+def _extract_hdhive_next_chunk_paths(html_text: str) -> list[str]:
+    if not html_text:
+        return []
+    matches = re.findall(
+        r'(?:(?:https?:)?//[^"\']+)?/?(?:_next/)?static/chunks/[^"\'<>\s]+\.js',
+        html_text,
+    )
+    normalized = []
+    seen = set()
+    for raw in matches:
+        value = str(raw or "").strip()
+        if not value:
+            continue
+        if value.startswith("http://") or value.startswith("https://"):
+            try:
+                from urllib.parse import urlparse
+                parsed = urlparse(value)
+                value = parsed.path or ""
+            except Exception:
+                continue
+        value = value.replace("\\/", "/")
+        if value.startswith("static/chunks/"):
+            value = "/_next/" + value
+        elif value.startswith("/static/chunks/"):
+            value = "/_next" + value
+        elif not value.startswith("/_next/static/chunks/"):
+            continue
+        if value not in seen:
+            seen.add(value)
+            normalized.append(value)
+    return normalized
+
+
 def _get_hdhive_home_router_state_tree_json(base_url: str, cookie: str = "", force_refresh: bool = False) -> str:
     global _HDHIVE_HOME_ROUTER_STATE_JSON, _HDHIVE_HOME_ROUTER_STATE_LAST_REFRESH_TS
     now = time.time()
@@ -2939,10 +2975,15 @@ def _refresh_hdhive_checkin_action_id_if_needed(base_url: str, cookie: str = "",
         headers["Cookie"] = cookie_header
     try:
         html_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + "/", timeout=20, headers=headers, proxy_scope="service").content)
-        chunk_paths = sorted(set(re.findall(r'/_next/static/[^"<> ]+\.js', html_text)))
+        chunk_paths = _extract_hdhive_next_chunk_paths(html_text)
         for path in chunk_paths[:80]:
             try:
-                js_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + path, timeout=15, headers={"User-Agent": "Mozilla/5.0"}, proxy_scope="service").content)
+                js_headers = {
+                    "User-Agent": "Mozilla/5.0",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                }
+                js_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + path, timeout=15, headers=js_headers, proxy_scope="service").content)
             except Exception:
                 continue
             action_id = _extract_hdhive_checkin_action_id_from_js(js_text)
@@ -3257,6 +3298,190 @@ def _hdhive_do_checkin_via_server_action(base_url: str, cookie: str, mode: str) 
     return False, "签到失败", _hdhive_fetch_points(base_url, cookie)
 
 
+def _run_docker_command(args: List[str], *, timeout: int = 240) -> subprocess.CompletedProcess:
+    docker_bin = shutil.which("docker") or "docker"
+    commands = []
+    if shutil.which("docker"):
+        commands.append([docker_bin, *args])
+    if shutil.which("sg"):
+        shell_cmd = " ".join(shlex.quote(part) for part in [docker_bin, *args])
+        commands.append(["sg", "docker", "-c", shell_cmd])
+
+    last_result = None
+    for cmd in commands:
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except Exception as exc:
+            last_result = exc
+            continue
+        if result.returncode == 0:
+            return result
+        stderr = (result.stderr or "").lower()
+        stdout = (result.stdout or "").lower()
+        if "permission denied" in stderr or "permission denied" in stdout:
+            last_result = result
+            continue
+        return result
+
+    if isinstance(last_result, subprocess.CompletedProcess):
+        return last_result
+    raise RuntimeError(f"Docker command failed: {last_result}")
+
+
+def _hdhive_do_checkin_via_browser_fallback(base_url: str, cookie: str, mode: str) -> Tuple[bool, str, Optional[int]]:
+    cookie_header = _normalize_hdhive_cookie(cookie)
+    if not cookie_header:
+        return False, "未配置 HDHive Cookie", None
+
+    script_text = textwrap.dedent(
+        """
+        import json
+        import os
+        import sys
+        import time
+        from playwright.sync_api import sync_playwright
+
+        base_url = os.environ.get("HDHIVE_BASE_URL", "https://hdhive.com").rstrip("/")
+        cookie_raw = os.environ.get("HDHIVE_COOKIE", "")
+        mode = (os.environ.get("HDHIVE_CHECKIN_MODE") or "normal").strip().lower()
+        button_name = "赌狗签到" if mode == "gamble" else "每日签到"
+
+        cookies = []
+        for seg in cookie_raw.split(";"):
+            seg = seg.strip()
+            if not seg or "=" not in seg:
+                continue
+            key, value = seg.split("=", 1)
+            cookies.append(
+                {
+                    "name": key.strip(),
+                    "value": value.strip(),
+                    "domain": "hdhive.com",
+                    "path": "/",
+                    "secure": True,
+                }
+            )
+
+        captured = []
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context()
+            if cookies:
+                context.add_cookies(cookies)
+            page = context.new_page()
+
+            def on_response(resp):
+                try:
+                    req = resp.request
+                    if req.headers.get("next-action"):
+                        captured.append(
+                            {
+                                "status": resp.status,
+                                "url": resp.url,
+                                "body": resp.text(),
+                            }
+                        )
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+            page.goto(base_url + "/", wait_until="networkidle", timeout=120000)
+            page.get_by_role("button", name=button_name).click(timeout=30000)
+
+            deadline = time.time() + 15
+            while time.time() < deadline and not captured:
+                page.wait_for_timeout(300)
+
+            browser.close()
+
+        print(json.dumps({"captured": captured}, ensure_ascii=False))
+        """
+    )
+
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as tmp:
+        tmp.write(script_text)
+        tmp_path = tmp.name
+
+    try:
+        result = _run_docker_command(
+            [
+                "run",
+                "--rm",
+                "-e",
+                f"HDHIVE_BASE_URL={base_url}",
+                "-e",
+                f"HDHIVE_COOKIE={cookie_header}",
+                "-e",
+                f"HDHIVE_CHECKIN_MODE={mode}",
+                "-v",
+                f"{tmp_path}:/tmp/hdhive_checkin.py:ro",
+                "mcr.microsoft.com/playwright/python:v1.58.0-noble",
+                "python",
+                "/tmp/hdhive_checkin.py",
+            ],
+            timeout=300,
+        )
+    except Exception as exc:
+        return False, f"浏览器兜底签到失败: {exc}", _hdhive_fetch_points(base_url, cookie)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+    if result.returncode != 0:
+        err = _compact_hdhive_response_text((result.stderr or "").strip() or (result.stdout or "").strip(), limit=300)
+        return False, f"浏览器兜底签到失败: {err or 'docker/playwright 执行异常'}", _hdhive_fetch_points(base_url, cookie)
+
+    try:
+        payload = json.loads((result.stdout or "").strip() or "{}")
+    except Exception:
+        payload = {}
+
+    captured = payload.get("captured") if isinstance(payload, dict) else None
+    if not isinstance(captured, list) or not captured:
+        return False, "浏览器兜底签到失败: 未捕获到签到响应", _hdhive_fetch_points(base_url, cookie)
+
+    latest = captured[-1] if isinstance(captured[-1], dict) else {}
+    status_code = latest.get("status")
+    raw_text = str(latest.get("body") or "")
+    parsed = _parse_next_action_rsc_result_text(raw_text)
+
+    if isinstance(parsed, dict):
+        if isinstance(parsed.get("response"), dict):
+            response = parsed.get("response") or {}
+            message = _normalize_hdhive_message_text(response.get("message") or response.get("description") or "")
+            points = _extract_points_from_payload(response)
+            if points is None:
+                points = _hdhive_fetch_points(base_url, cookie)
+            return True, message or "签到成功", points
+        err = parsed.get("error")
+        if isinstance(err, dict):
+            message = _normalize_hdhive_message_text(err.get("message") or "")
+            description = _normalize_hdhive_message_text(err.get("description") or "")
+            merged = " ".join(part for part in (message, description) if part).strip()
+            points = _hdhive_fetch_points(base_url, cookie)
+            lowered = merged.lower()
+            if any(token in merged for token in ("已签到", "已经签到", "已簽到", "重复签到")) or any(
+                token in lowered for token in ("already signed", "already check")
+            ):
+                return True, description or message or "今天已签到", points
+            if _hdhive_response_is_missing_endpoint(status_code=status_code, payload=parsed, text=merged):
+                return False, _HDHIVE_CHECKIN_ENDPOINT_404_MESSAGE, points
+            return False, merged or "签到失败", points
+
+    compact = _compact_hdhive_response_text(raw_text, limit=300)
+    if "server action not found" in compact.lower():
+        compact = "浏览器已触发签到，但站点仍返回 server action not found"
+    return False, compact or "浏览器兜底签到失败", _hdhive_fetch_points(base_url, cookie)
+
+
 def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tuple[bool, str, Optional[int]]:
     if not cookie:
         return False, "未配置 HDHive Cookie", None
@@ -3334,11 +3559,17 @@ def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tupl
                     last_msg = msg or last_msg
                     if ok:
                         points = _extract_points_from_payload(data)
-                        if points is None:
-                            points = _hdhive_fetch_points(base_url, cookie)
-                        return True, msg or "签到成功", points
+                    if points is None:
+                        points = _hdhive_fetch_points(base_url, cookie)
+                    return True, msg or "签到成功", points
 
-    return False, last_msg or "签到失败", _hdhive_fetch_points(base_url, cookie)
+    browser_ok, browser_msg, browser_points = _hdhive_do_checkin_via_browser_fallback(base_url, cookie, mode)
+    if browser_ok:
+        return browser_ok, browser_msg, browser_points
+    if browser_msg:
+        last_msg = f"{last_msg}；{browser_msg}" if last_msg else browser_msg
+
+    return False, last_msg or "签到失败", browser_points if browser_points is not None else _hdhive_fetch_points(base_url, cookie)
 
 
 def _run_hdhive_checkin(config: dict, reason: str = "", force: bool = False, notify: bool = True) -> None:
