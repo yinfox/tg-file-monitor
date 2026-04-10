@@ -66,6 +66,29 @@ detect_version() {
   return 1
 }
 
+set_version() {
+  local target_version="$1"
+  local version_file="$ROOT_DIR/app/app.py"
+  if [[ ! -f "$version_file" ]]; then
+    echo "[ERROR] version file not found: $version_file" >&2
+    return 1
+  fi
+
+  python3 - "$version_file" "$target_version" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target = sys.argv[2]
+text = path.read_text(encoding="utf-8")
+updated, count = re.subn(r'^VERSION\s*=\s*"[^"]*"', f'VERSION = "{target}"', text, count=1, flags=re.M)
+if count != 1:
+    raise SystemExit("VERSION assignment not found in app/app.py")
+path.write_text(updated, encoding="utf-8")
+PY
+}
+
 log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
@@ -195,9 +218,16 @@ fi
 
 require_cmd docker
 require_cmd git
+require_cmd python3
 mkdir -p "$DIST_DIR"
 
 IMAGE_TAG="$(resolve_non_duplicate_tag "$IMAGE_REPO" "$IMAGE_TAG")"
+
+CURRENT_VERSION="$(detect_version || true)"
+if [[ "$CURRENT_VERSION" != "$IMAGE_TAG" ]]; then
+  set_version "$IMAGE_TAG"
+  log "Synced app/app.py VERSION: ${CURRENT_VERSION:-unknown} -> $IMAGE_TAG"
+fi
 
 TAG_IMAGE="$IMAGE_REPO:$IMAGE_TAG"
 LATEST_IMAGE="$IMAGE_REPO:latest"
