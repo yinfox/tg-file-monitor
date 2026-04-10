@@ -1,7 +1,9 @@
 services:
   telegram-file-monitor:
-    # 镜像名称：服务器测试时直接拉固定版本，避免 latest 漂移导致不可预期变更。
-    image: y1nf0x/tg-file-monitor:0.5.44
+    # 永久修复依赖缺失：改为本地构建，镜像内会安装当前仓库 requirements.txt 的依赖。
+    build: .
+    # 本地构建镜像标签，避免继续拉取远程固定版本导致依赖不更新。
+    image: tg-file-monitor:local
     # 容器名：便于 docker logs / docker exec / docker restart 快速定位。
     container_name: tg-file-monitor
     ports:

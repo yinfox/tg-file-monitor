@@ -24,6 +24,7 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir --default-timeout=1000 -r requirements.txt
+RUN pip install --no-cache-dir --default-timeout=1000 gunicorn
 
 # Copy the application code
 COPY file_monitor.py .
@@ -36,5 +37,5 @@ COPY config/config.example.json config/config.json
 # Expose the port on which the Flask app runs
 EXPOSE 5001
 
-# Command to run the Flask application
-CMD ["python", "-u", "app/app.py"]
+# Command to run the Flask application via production WSGI server
+CMD ["gunicorn", "-c", "app/gunicorn_conf.py", "app.app:app"]

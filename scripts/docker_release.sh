@@ -15,6 +15,7 @@ IMAGE_TAG=""
 PLATFORM=""
 DO_PUSH="0"
 DO_SAVE="0"
+AUTO_BUMP_ON_DUP="1"
 
 usage() {
   cat <<'EOF'
@@ -30,12 +31,14 @@ Options:
   --platform <platform> Build platform, e.g. linux/amd64
   --push                Push image to registry
   --save                Export image tar.gz to dist/
+  --allow-duplicate-tag Allow using an existing tag without auto-bump
   -h, --help            Show this help
 
 Notes:
   - Always tags both <tag> and latest.
   - If --push is set, script uses buildx --push.
   - If --push is not set, script builds to local daemon.
+  - By default, if <tag> already exists (git tag or registry tag), auto-bumps patch version.
 EOF
 }
 
@@ -67,6 +70,75 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+is_semver_like() {
+  [[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+}
+
+bump_patch() {
+  local v="$1"
+  local major minor patch
+  IFS='.' read -r major minor patch <<<"$v"
+  patch=$((patch + 1))
+  echo "${major}.${minor}.${patch}"
+}
+
+local_tag_exists() {
+  local tag="$1"
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    if git rev-parse -q --verify "refs/tags/v${tag}" >/dev/null 2>&1; then
+      return 0
+    fi
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+remote_tag_exists() {
+  local repo="$1"
+  local tag="$2"
+  docker buildx imagetools inspect "${repo}:${tag}" >/dev/null 2>&1
+}
+
+resolve_non_duplicate_tag() {
+  local repo="$1"
+  local base_tag="$2"
+  local resolved="$base_tag"
+  local tries=0
+  local max_tries=200
+
+  if [[ "$AUTO_BUMP_ON_DUP" != "1" ]]; then
+    echo "$resolved"
+    return 0
+  fi
+
+  if ! is_semver_like "$resolved"; then
+    if local_tag_exists "$resolved" || remote_tag_exists "$repo" "$resolved"; then
+      echo "[ERROR] tag '$resolved' already exists and cannot auto-bump (not semver X.Y.Z)." >&2
+      echo "[ERROR] Please provide a new tag or use --allow-duplicate-tag." >&2
+      return 1
+    fi
+    echo "$resolved"
+    return 0
+  fi
+
+  while local_tag_exists "$resolved" || remote_tag_exists "$repo" "$resolved"; do
+    tries=$((tries + 1))
+    if (( tries > max_tries )); then
+      echo "[ERROR] unable to find available tag after ${max_tries} attempts from ${base_tag}" >&2
+      return 1
+    fi
+    resolved="$(bump_patch "$resolved")"
+  done
+
+  if [[ "$resolved" != "$base_tag" ]]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] Tag '$base_tag' already exists, auto-bumped to '$resolved'" >&2
+  fi
+
+  echo "$resolved"
+}
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --image)
@@ -87,6 +159,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --save)
       DO_SAVE="1"
+      shift
+      ;;
+    --allow-duplicate-tag)
+      AUTO_BUMP_ON_DUP="0"
       shift
       ;;
     -h|--help)
@@ -118,7 +194,10 @@ if [[ -z "$IMAGE_TAG" ]]; then
 fi
 
 require_cmd docker
+require_cmd git
 mkdir -p "$DIST_DIR"
+
+IMAGE_TAG="$(resolve_non_duplicate_tag "$IMAGE_REPO" "$IMAGE_TAG")"
 
 TAG_IMAGE="$IMAGE_REPO:$IMAGE_TAG"
 LATEST_IMAGE="$IMAGE_REPO:latest"

@@ -17,6 +17,36 @@ _DEFAULT_SCOPE_ALIASES = {
     "yt": "downloader",
 }
 
+_PROXY_SCHEME_ALIASES = {
+    "http": "http",
+    "https": "https",
+    "socks": "socks5",
+    "socks5": "socks5",
+    "socks5h": "socks5",
+    "socks4": "socks4",
+    "socks4a": "socks4",
+}
+
+
+def _parse_proxy_addr(addr: str, default_scheme: str) -> tuple[str, str]:
+    """
+    Parse optional proxy scheme prefix from address field.
+
+    Examples:
+      - "127.0.0.1" -> ("http", "127.0.0.1") for default http
+      - "socks5://127.0.0.1" -> ("socks5", "127.0.0.1")
+      - "http://proxy.example.com" -> ("http", "proxy.example.com")
+    """
+    raw = str(addr or "").strip()
+    scheme = default_scheme
+    if "://" in raw:
+        candidate, _, host = raw.partition("://")
+        mapped = _PROXY_SCHEME_ALIASES.get(str(candidate or "").strip().lower())
+        if mapped:
+            scheme = mapped
+        raw = host.strip()
+    return scheme, raw
+
 
 def normalize_proxy_scope(scope: Optional[str]) -> str:
     value = str(scope or "service").strip().lower()
@@ -55,7 +85,7 @@ def extract_proxy_scope_config(
 
 
 def build_proxy_url_from_scope_config(scope_cfg: Mapping[str, str]) -> Optional[str]:
-    addr = str(scope_cfg.get("addr") or "").strip()
+    scheme, addr = _parse_proxy_addr(scope_cfg.get("addr") or "", "http")
     port = str(scope_cfg.get("port") or "").strip()
     if not addr or not port:
         return None
@@ -68,7 +98,7 @@ def build_proxy_url_from_scope_config(scope_cfg: Mapping[str, str]) -> Optional[
         if password:
             auth += ":" + quote(password, safe="")
         auth += "@"
-    return f"http://{auth}{addr}:{port}"
+    return f"{scheme}://{auth}{addr}:{port}"
 
 
 def build_requests_proxies_from_scope_config(scope_cfg: Mapping[str, str]) -> Optional[dict[str, str]]:
@@ -82,14 +112,19 @@ def build_requests_proxies_from_scope_config(scope_cfg: Mapping[str, str]) -> Op
 
 
 def build_telethon_proxy_from_scope_config(scope_cfg: Mapping[str, str]) -> Optional[tuple]:
-    addr = str(scope_cfg.get("addr") or "").strip()
+    protocol, addr = _parse_proxy_addr(scope_cfg.get("addr") or "", "socks5")
     port = str(scope_cfg.get("port") or "").strip()
     if not addr or not port:
         return None
+    # Telethon only accepts socks5/socks4/http proxy kinds.
+    if protocol not in {"socks5", "socks4", "http"}:
+        protocol = "http"
     try:
         return (
+            protocol,
             addr,
             int(port),
+            True,
             scope_cfg.get("username") or None,
             scope_cfg.get("password") or None,
         )

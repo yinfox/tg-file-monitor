@@ -134,6 +134,52 @@
     .compact-accordion .accordion-body {
         padding: 0.5rem 0.7rem !important;
     }
+
+    .self-service-compact-form .form-text {
+        margin-top: 0.12rem !important;
+        margin-bottom: 0 !important;
+    }
+    .self-service-compact-form .form-label {
+        margin-bottom: 0.15rem !important;
+    }
+    .hdhive-compact-form .form-text {
+        margin-top: 0.12rem !important;
+        margin-bottom: 0 !important;
+    }
+    .hdhive-compact-form .form-label {
+        margin-bottom: 0.15rem !important;
+    }
+    .hdhive-compact-form .hdhive-pane {
+        border: 1px solid rgba(15, 23, 42, 0.09);
+        border-radius: 0.7rem;
+        padding: 0.6rem 0.65rem;
+        background: rgba(248, 252, 255, 0.85);
+        height: 100%;
+    }
+    .hdhive-compact-form .hdhive-pane-title {
+        font-size: 0.76rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: #35506a;
+        margin-bottom: 0.45rem;
+    }
+    .hdhive-compact-form .hdhive-inline-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+    }
+    .hdhive-compact-form .hdhive-inline-actions .btn {
+        min-width: 112px;
+    }
+    .hdhive-compact-form textarea.form-control {
+        min-height: 4.8rem;
+    }
+    @media (max-width: 991.98px) {
+        .hdhive-compact-form .hdhive-pane {
+            height: auto;
+        }
+    }
     
     .list-group-item .badge {
         font-size: 0.6rem !important;
@@ -687,6 +733,12 @@
     .tg-compact .small,
     .tg-compact .form-text {
         color: var(--tg-muted) !important;
+    }
+
+    /* Keep header titles readable when they use .small for size */
+    .tg-compact .card-header small,
+    .tg-compact .card-header .small {
+        color: inherit !important;
     }
 
     .tg-compact .text-dark,
@@ -1697,221 +1749,219 @@
                                 <div id="hdhiveSettingsCollapse" class="accordion-collapse collapse"
                                     aria-labelledby="hdhiveSettingsHeading" data-bs-parent="#tgAdvancedAccordion">
                                     <div class="accordion-body p-2">
-                                        <form action="{{ url_for('manage_config') }}" method="POST">
+                                        <form action="{{ url_for('manage_config') }}" method="POST" class="hdhive-compact-form">
                                             <input type="hidden" name="action" value="update_hdhive_cookie">
+                                            {% set hdhive_monitor = config.get('hdhive_cookie_monitor', {}) %}
+                                            {% set hdhive_checkin = config.get('hdhive_checkin', {}) %}
+                                            {% set monitor_state = hdhive_cookie_monitor_state or {} %}
+                                            {% set checkin_state = hdhive_checkin_state or {} %}
+                                            {% set on_invalid = hdhive_monitor.get('on_invalid', 'notify') %}
+                                            {% set checkin_mode = hdhive_checkin.get('mode', 'normal') %}
                                             <div class="row g-2 mb-2">
-                                                <div class="col-12">
-                                                    <label for="hdhive_auto_unlock_points_threshold" class="form-label small">自动解锁阈值(积分):</label>
-                                                    <input type="number" class="form-control form-control-sm" id="hdhive_auto_unlock_points_threshold"
-                                                        name="hdhive_auto_unlock_points_threshold" min="0" step="1"
-                                                        value="{{ config.get('hdhive_auto_unlock_points_threshold', 0) }}"
-                                                        placeholder="0 = 仅自动解锁 0 积分资源">
-                                                    <div class="form-text">当资源需要的解锁积分 ≤ 该阈值时自动解锁；0 表示只自动解锁 0 积分资源。</div>
+                                                <div class="col-lg-5">
+                                                    <div class="hdhive-pane">
+                                                        <div class="hdhive-pane-title">凭证与转换</div>
+                                                        <div class="mb-2">
+                                                            <label for="hdhive_open_api_key" class="form-label small">Open API Key:</label>
+                                                            <input type="password" class="form-control form-control-sm" id="hdhive_open_api_key"
+                                                                name="hdhive_open_api_key" value="{{ config.get('hdhive_open_api_key', '') }}"
+                                                                placeholder="X-API-Key">
+                                                            <div class="form-text">用于 /api/open 访问，可用于影巢链接转换与自助观影申请。</div>
+                                                        </div>
+                                                        <div class="mb-2">
+                                                            <label for="hdhive_cookie" class="form-label small">Cookie:</label>
+                                                            <textarea class="form-control form-control-sm" id="hdhive_cookie" name="hdhive_cookie"
+                                                                rows="3" placeholder="粘贴 Cookie（key=value; key2=value2）。留空=清除"></textarea>
+                                                            <div class="form-text">
+                                                                {% if config.get('hdhive_cookie') %}
+                                                                当前状态：<span class="text-success">已设置</span>（出于安全考虑不回显内容）
+                                                                {% else %}
+                                                                当前状态：<span class="text-muted">未设置</span>
+                                                                {% endif %}
+                                                            </div>
+                                                        </div>
+                                                        <div class="row g-2 mb-2">
+                                                            <div class="col-sm-6">
+                                                                <label for="hdhive_auto_unlock_points_threshold" class="form-label small">自动解锁阈值(积分):</label>
+                                                                <input type="number" class="form-control form-control-sm" id="hdhive_auto_unlock_points_threshold"
+                                                                    name="hdhive_auto_unlock_points_threshold" min="0" step="1"
+                                                                    value="{{ config.get('hdhive_auto_unlock_points_threshold', 0) }}"
+                                                                    placeholder="0 = 仅自动解锁 0 积分资源">
+                                                            </div>
+                                                            <div class="col-sm-6">
+                                                                <label for="hdhive_base_url" class="form-label small">HDHive 地址:</label>
+                                                                <input type="text" class="form-control form-control-sm" id="hdhive_base_url"
+                                                                    name="hdhive_base_url" value="{{ config.get('hdhive_base_url', 'https://hdhive.com') }}"
+                                                                    placeholder="https://hdhive.com">
+                                                            </div>
+                                                        </div>
+                                                        <div class="mb-2">
+                                                            <label for="hdhive_cookie_test_resource" class="form-label small">Cookie 测试资源链接/slug:</label>
+                                                            <input type="text" class="form-control form-control-sm" id="hdhive_cookie_test_resource"
+                                                                name="hdhive_cookie_test_resource" value="{{ config.get('hdhive_cookie_test_resource', '') }}"
+                                                                placeholder="https://hdhive.com/resource/115/xxxx 或 slug">
+                                                            <div class="form-text">用于状态检测放宽：能解析出积分即判 Cookie 可用。</div>
+                                                        </div>
+                                                        <div class="form-check form-switch mb-2">
+                                                            <input class="form-check-input" type="checkbox" id="hdhive_open_api_direct_unlock"
+                                                                name="hdhive_open_api_direct_unlock" {% if config.get('hdhive_open_api_direct_unlock', False) %}checked{% endif %}>
+                                                            <label class="form-check-label small" for="hdhive_open_api_direct_unlock">允许 Open API 直链解锁</label>
+                                                            <div class="form-text">开启后会优先查询积分再决定是否解锁；若无法获取积分信息，将跳过解锁。</div>
+                                                        </div>
+                                                        <div class="form-check form-switch mb-2">
+                                                            <input class="form-check-input" type="checkbox" id="hdhive_cookie_clear"
+                                                                name="hdhive_cookie_clear">
+                                                            <label class="form-check-label small" for="hdhive_cookie_clear">清除 Cookie</label>
+                                                            <div class="form-text">勾选后将清空已保存的 Cookie。</div>
+                                                        </div>
+                                                        <div class="hdhive-inline-actions mt-2">
+                                                            <button type="submit" class="btn btn-primary btn-sm flex-grow-1">保存 HDHive 设置</button>
+                                                            <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestBtn">测试(API优先)</button>
+                                                            <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestCookieBtn">测试 Cookie</button>
+                                                        </div>
+                                                        <div class="form-text mt-2">如已配置 Open API Key，“测试(API优先)”会优先验证 API Key；“测试 Cookie”强制验证 Cookie。</div>
+                                                        <div class="form-text mt-2" id="hdhiveTestResult"></div>
+                                                    </div>
+                                                </div>
+                                                <div class="col-lg-7">
+                                                    <div class="row g-2">
+                                                        <div class="col-12">
+                                                            <div class="hdhive-pane">
+                                                                <div class="hdhive-pane-title">Cookie 监测</div>
+                                                                <div class="row g-2 mb-2">
+                                                                    <div class="col-md-6">
+                                                                        <div class="form-check form-switch">
+                                                                            <input class="form-check-input" type="checkbox" id="hdhive_cookie_monitor_enabled"
+                                                                                name="hdhive_cookie_monitor_enabled" {% if hdhive_monitor.get('enabled', False) %}checked{% endif %}>
+                                                                            <label class="form-check-label small" for="hdhive_cookie_monitor_enabled">启用 Cookie 失效监测</label>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="col-md-6">
+                                                                        <div class="form-check form-switch">
+                                                                            <input class="form-check-input" type="checkbox" id="hdhive_cookie_monitor_force_cookie_test"
+                                                                                name="hdhive_cookie_monitor_force_cookie_test" {% if hdhive_monitor.get('force_cookie_test', True) %}checked{% endif %}>
+                                                                            <label class="form-check-label small" for="hdhive_cookie_monitor_force_cookie_test">强制 Cookie 测试</label>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row g-2 mb-2">
+                                                                    <div class="col-md-4">
+                                                                        <label for="hdhive_cookie_monitor_interval_minutes" class="form-label small">检测间隔（分钟）</label>
+                                                                        <input type="number" class="form-control form-control-sm" id="hdhive_cookie_monitor_interval_minutes"
+                                                                            name="hdhive_cookie_monitor_interval_minutes" min="1" step="1"
+                                                                            value="{{ hdhive_monitor.get('interval_minutes', 60) }}">
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label for="hdhive_cookie_monitor_on_invalid" class="form-label small">失效后动作</label>
+                                                                        <select class="form-select form-select-sm" id="hdhive_cookie_monitor_on_invalid" name="hdhive_cookie_monitor_on_invalid">
+                                                                            <option value="notify" {% if on_invalid == 'notify' %}selected{% endif %}>仅通知</option>
+                                                                            <option value="switch_open_api" {% if on_invalid == 'switch_open_api' %}selected{% endif %}>切换到 Open API</option>
+                                                                            <option value="clear_cookie" {% if on_invalid == 'clear_cookie' %}selected{% endif %}>清空 Cookie</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label for="hdhive_cookie_monitor_notify_user_ids" class="form-label small">通知用户 ID（可选）</label>
+                                                                        <input type="text" class="form-control form-control-sm" id="hdhive_cookie_monitor_notify_user_ids"
+                                                                            name="hdhive_cookie_monitor_notify_user_ids"
+                                                                            value="{{ hdhive_monitor.get('notify_user_ids', '') }}"
+                                                                            placeholder="123, @admin">
+                                                                    </div>
+                                                                </div>
+                                                                <div class="form-text mb-0">开启：监测只测 Cookie（含积分解析）；关闭：若配置了 Open API Key，则优先检测 Open API。</div>
+                                                                <div class="form-text mb-0">状态：<span class="{% if monitor_state.get('last_status') == 'ok' %}text-success{% elif monitor_state.get('last_status') %}text-danger{% else %}text-muted{% endif %}">
+                                                                    {{ monitor_state.get('last_message') or '未检测' }}
+                                                                </span>
+                                                                {% if monitor_state.get('last_check_at') %}
+                                                                （{{ monitor_state.get('last_check_at') }}）
+                                                                {% endif %}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        <div class="col-12">
+                                                            <div class="hdhive-pane">
+                                                                <div class="hdhive-pane-title">自动签到与积分</div>
+                                                                <div class="row g-2 mb-2">
+                                                                    <div class="col-md-4">
+                                                                        <div class="form-check form-switch">
+                                                                            <input class="form-check-input" type="checkbox" id="hdhive_checkin_enabled"
+                                                                                name="hdhive_checkin_enabled" {% if hdhive_checkin.get('enabled', False) %}checked{% endif %}>
+                                                                            <label class="form-check-label small" for="hdhive_checkin_enabled">启用自动签到</label>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label for="hdhive_checkin_mode" class="form-label small">签到模式</label>
+                                                                        <select class="form-select form-select-sm" id="hdhive_checkin_mode" name="hdhive_checkin_mode">
+                                                                            <option value="normal" {% if checkin_mode == 'normal' %}selected{% endif %}>普通签到</option>
+                                                                            <option value="gamble" {% if checkin_mode == 'gamble' %}selected{% endif %}>赌狗签到</option>
+                                                                        </select>
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label for="hdhive_checkin_time" class="form-label small">签到时间</label>
+                                                                        <input type="time" class="form-control form-control-sm" id="hdhive_checkin_time"
+                                                                            name="hdhive_checkin_time" value="{{ hdhive_checkin.get('schedule_time', '09:00') }}">
+                                                                    </div>
+                                                                </div>
+                                                                <div class="row g-2 mb-2">
+                                                                    <div class="col-md-4">
+                                                                        <div class="form-check form-switch pt-1">
+                                                                            <input class="form-check-input" type="checkbox" id="hdhive_checkin_run_on_start"
+                                                                                name="hdhive_checkin_run_on_start" {% if hdhive_checkin.get('run_on_start', True) %}checked{% endif %}>
+                                                                            <label class="form-check-label small" for="hdhive_checkin_run_on_start">重启后立即补签到</label>
+                                                                        </div>
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label for="hdhive_checkin_normal_path" class="form-label small">普通签到接口(可选)</label>
+                                                                        <input type="text" class="form-control form-control-sm" id="hdhive_checkin_normal_path"
+                                                                            name="hdhive_checkin_normal_path"
+                                                                            value="{{ hdhive_checkin.get('normal_path', '') }}"
+                                                                            placeholder="/go-api/customer/sign">
+                                                                    </div>
+                                                                    <div class="col-md-4">
+                                                                        <label for="hdhive_checkin_gamble_path" class="form-label small">赌狗签到接口(可选)</label>
+                                                                        <input type="text" class="form-control form-control-sm" id="hdhive_checkin_gamble_path"
+                                                                            name="hdhive_checkin_gamble_path"
+                                                                            value="{{ hdhive_checkin.get('gamble_path', '') }}"
+                                                                            placeholder="/go-api/customer/sign">
+                                                                    </div>
+                                                                </div>
+                                                                <div class="mb-2">
+                                                                    <label for="hdhive_checkin_notify_user_ids" class="form-label small">通知用户 ID（可选）</label>
+                                                                    <input type="text" class="form-control form-control-sm" id="hdhive_checkin_notify_user_ids"
+                                                                        name="hdhive_checkin_notify_user_ids"
+                                                                        value="{{ hdhive_checkin.get('notify_user_ids', '') }}"
+                                                                        placeholder="123, @admin (逗号分隔)">
+                                                                    <div class="form-text">留空则使用自助观影通知用户。手动签到不会额外推送通知。</div>
+                                                                </div>
+                                                                <div class="form-text mb-0">状态：<span class="{% if checkin_state.get('last_status') == 'ok' %}text-success{% elif checkin_state.get('last_status') and checkin_state.get('last_status') != 'disabled' %}text-danger{% else %}text-muted{% endif %}">
+                                                                    {{ checkin_state.get('last_message') or '未执行' }}
+                                                                </span>
+                                                                {% if checkin_state.get('last_checkin_at') %}
+                                                                （{{ checkin_state.get('last_checkin_at') }}）
+                                                                {% endif %}
+                                                                </div>
+                                                                <div class="form-text">
+                                                                    当前积分：<span class="fw-bold" id="hdhiveCurrentPointsValue">{{ checkin_state.get('last_points', '-') or '-' }}</span>
+                                                                    {% if checkin_state.get('last_points_at') %}
+                                                                    ，更新时间：<span id="hdhiveCurrentPointsAt">{{ checkin_state.get('last_points_at') }}</span>
+                                                                    {% else %}
+                                                                    ，更新时间：<span id="hdhiveCurrentPointsAt">未刷新</span>
+                                                                    {% endif %}
+                                                                    {% if checkin_state.get('next_run_at') %}
+                                                                    ，下次执行：{{ checkin_state.get('next_run_at') }}
+                                                                    {% endif %}
+                                                                </div>
+                                                                <div class="hdhive-inline-actions mt-2">
+                                                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveCheckinBtn">立即签到</button>
+                                                                    <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhivePointsBtn">刷新积分</button>
+                                                                </div>
+                                                                <div class="form-text mt-1" id="hdhiveCheckinResult"></div>
+                                                            </div>
+                                                        </div>
+                                                    </div>
                                                 </div>
                                             </div>
-                            <div class="mb-2">
-                                <textarea class="form-control form-control-sm" id="hdhive_cookie" name="hdhive_cookie"
-                                    rows="3" placeholder="粘贴 Cookie（key=value; key2=value2）。留空=清除"></textarea>
-                                <div class="form-text">
-                                    {% if config.get('hdhive_cookie') %}
-                                    当前状态：<span class="text-success">已设置</span>（出于安全考虑不回显内容）
-                                    {% else %}
-                                    当前状态：<span class="text-muted">未设置</span>
-                                    {% endif %}
-                                </div>
-                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="hdhive_cookie_clear"
-                                    name="hdhive_cookie_clear">
-                                <label class="form-check-label small" for="hdhive_cookie_clear">清除 Cookie</label>
-                                <div class="form-text">勾选后将清空已保存的 Cookie。</div>
-                            </div>
-                                            <div class="mb-2">
-                                                <label for="hdhive_base_url" class="form-label small">HDHive 地址:</label>
-                                                <input type="text" class="form-control form-control-sm" id="hdhive_base_url"
-                                                    name="hdhive_base_url" value="{{ config.get('hdhive_base_url', 'https://hdhive.com') }}"
-                                                    placeholder="https://hdhive.com">
-                                                <div class="form-text">如遇备用网址或域名变更，可在此调整。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="hdhive_cookie_test_resource" class="form-label small">Cookie 测试资源链接/slug:</label>
-                                                <input type="text" class="form-control form-control-sm" id="hdhive_cookie_test_resource"
-                                                    name="hdhive_cookie_test_resource" value="{{ config.get('hdhive_cookie_test_resource', '') }}"
-                                                    placeholder="https://hdhive.com/resource/115/xxxx 或 slug">
-                                                <div class="form-text">用于状态检测放宽：能解析出积分即判 Cookie 可用。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="hdhive_open_api_key" class="form-label small">Open API Key:</label>
-                                                <input type="password" class="form-control form-control-sm" id="hdhive_open_api_key"
-                                                    name="hdhive_open_api_key" value="{{ config.get('hdhive_open_api_key', '') }}"
-                                                    placeholder="X-API-Key">
-                                                <div class="form-text">用于 /api/open 访问，可用于影巢链接转换与自助观影申请。</div>
-                                            </div>
-                            <div class="form-check form-switch mb-2">
-                                <input class="form-check-input" type="checkbox" id="hdhive_open_api_direct_unlock"
-                                    name="hdhive_open_api_direct_unlock" {% if config.get('hdhive_open_api_direct_unlock', False) %}checked{% endif %}>
-                                <label class="form-check-label small" for="hdhive_open_api_direct_unlock">允许 Open API 直链解锁</label>
-                                <div class="form-text">开启后会优先查询积分再决定是否解锁；若无法获取积分信息，将跳过解锁。</div>
-                            </div>
-                            {% set hdhive_monitor = config.get('hdhive_cookie_monitor', {}) %}
-                            <div class="card border-light-subtle mb-2">
-                                <div class="card-body p-2">
-                                    <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" id="hdhive_cookie_monitor_enabled"
-                                            name="hdhive_cookie_monitor_enabled" {% if hdhive_monitor.get('enabled', False) %}checked{% endif %}>
-                                        <label class="form-check-label small" for="hdhive_cookie_monitor_enabled">启用 Cookie 失效监测</label>
-                                    </div>
-                                    <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" id="hdhive_cookie_monitor_force_cookie_test"
-                                            name="hdhive_cookie_monitor_force_cookie_test" {% if hdhive_monitor.get('force_cookie_test', True) %}checked{% endif %}>
-                                        <label class="form-check-label small" for="hdhive_cookie_monitor_force_cookie_test">强制 Cookie 测试</label>
-                                        <div class="form-text">开启：监测只测 Cookie（含积分解析）；关闭：若配置了 Open API Key，则优先检测 Open API。</div>
-                                    </div>
-                                    <div class="row g-2 mb-2">
-                                        <div class="col-md-6">
-                                            <label for="hdhive_cookie_monitor_interval_minutes" class="form-label small">检测间隔（分钟）</label>
-                                            <input type="number" class="form-control form-control-sm" id="hdhive_cookie_monitor_interval_minutes"
-                                                name="hdhive_cookie_monitor_interval_minutes" min="1" step="1"
-                                                value="{{ hdhive_monitor.get('interval_minutes', 60) }}">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label for="hdhive_cookie_monitor_on_invalid" class="form-label small">失效后动作</label>
-                                            <select class="form-select form-select-sm" id="hdhive_cookie_monitor_on_invalid" name="hdhive_cookie_monitor_on_invalid">
-                                                {% set on_invalid = hdhive_monitor.get('on_invalid', 'notify') %}
-                                                <option value="notify" {% if on_invalid == 'notify' %}selected{% endif %}>仅通知</option>
-                                                <option value="switch_open_api" {% if on_invalid == 'switch_open_api' %}selected{% endif %}>切换到 Open API</option>
-                                                <option value="clear_cookie" {% if on_invalid == 'clear_cookie' %}selected{% endif %}>清空 Cookie</option>
-                                            </select>
-                                        </div>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label for="hdhive_cookie_monitor_notify_user_ids" class="form-label small">通知用户 ID（可选）</label>
-                                        <input type="text" class="form-control form-control-sm" id="hdhive_cookie_monitor_notify_user_ids"
-                                            name="hdhive_cookie_monitor_notify_user_ids"
-                                            value="{{ hdhive_monitor.get('notify_user_ids', '') }}"
-                                            placeholder="123, @admin (逗号分隔)">
-                                        <div class="form-text">留空则使用自助观影的通知用户。</div>
-                                    </div>
-                                    {% set monitor_state = hdhive_cookie_monitor_state or {} %}
-                                    <div class="form-text mb-0">
-                                        状态：<span class="{% if monitor_state.get('last_status') == 'ok' %}text-success{% elif monitor_state.get('last_status') %}text-danger{% else %}text-muted{% endif %}">
-                                            {{ monitor_state.get('last_message') or '未检测' }}
-                                        </span>
-                                        {% if monitor_state.get('last_check_at') %}
-                                        （{{ monitor_state.get('last_check_at') }}）
-                                        {% endif %}
-                                    </div>
-                                </div>
-                            </div>
-                            {% set hdhive_checkin = config.get('hdhive_checkin', {}) %}
-                            <div class="card border-light-subtle mb-2">
-                                <div class="card-body p-2">
-                                    <div class="form-check form-switch mb-2">
-                                        <input class="form-check-input" type="checkbox" id="hdhive_checkin_enabled"
-                                            name="hdhive_checkin_enabled" {% if hdhive_checkin.get('enabled', False) %}checked{% endif %}>
-                                        <label class="form-check-label small" for="hdhive_checkin_enabled">启用 HDHive 自动签到</label>
-                                    </div>
-                                    <div class="row g-2 mb-2">
-                                        <div class="col-md-4">
-                                            <label for="hdhive_checkin_mode" class="form-label small">签到模式</label>
-                                            {% set checkin_mode = hdhive_checkin.get('mode', 'normal') %}
-                                            <select class="form-select form-select-sm" id="hdhive_checkin_mode" name="hdhive_checkin_mode">
-                                                <option value="normal" {% if checkin_mode == 'normal' %}selected{% endif %}>普通签到</option>
-                                                <option value="gamble" {% if checkin_mode == 'gamble' %}selected{% endif %}>赌狗签到</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label for="hdhive_checkin_time" class="form-label small">签到时间</label>
-                                            <input type="time" class="form-control form-control-sm" id="hdhive_checkin_time"
-                                                name="hdhive_checkin_time" value="{{ hdhive_checkin.get('schedule_time', '09:00') }}">
-                                        </div>
-                                        <div class="col-md-4">
-                                            <label class="form-label small">&nbsp;</label>
-                                            <div class="form-check form-switch">
-                                                <input class="form-check-input" type="checkbox" id="hdhive_checkin_run_on_start"
-                                                    name="hdhive_checkin_run_on_start" {% if hdhive_checkin.get('run_on_start', True) %}checked{% endif %}>
-                                                <label class="form-check-label small" for="hdhive_checkin_run_on_start">重启后立即补签到</label>
-                                            </div>
-                                        </div>
-                                    </div>
-                                    <div class="mb-2">
-                                        <label for="hdhive_checkin_notify_user_ids" class="form-label small">通知用户 ID（可选）</label>
-                                        <input type="text" class="form-control form-control-sm" id="hdhive_checkin_notify_user_ids"
-                                            name="hdhive_checkin_notify_user_ids"
-                                            value="{{ hdhive_checkin.get('notify_user_ids', '') }}"
-                                            placeholder="123, @admin (逗号分隔)">
-                                        <div class="form-text">留空则使用自助观影通知用户。手动签到不会额外推送通知。</div>
-                                    </div>
-                                    <div class="row g-2 mb-2">
-                                        <div class="col-md-6">
-                                            <label for="hdhive_checkin_normal_path" class="form-label small">普通签到接口(可选)</label>
-                                            <input type="text" class="form-control form-control-sm" id="hdhive_checkin_normal_path"
-                                                name="hdhive_checkin_normal_path"
-                                                value="{{ hdhive_checkin.get('normal_path', '') }}"
-                                                placeholder="/go-api/customer/sign">
-                                        </div>
-                                        <div class="col-md-6">
-                                            <label for="hdhive_checkin_gamble_path" class="form-label small">赌狗签到接口(可选)</label>
-                                            <input type="text" class="form-control form-control-sm" id="hdhive_checkin_gamble_path"
-                                                name="hdhive_checkin_gamble_path"
-                                                value="{{ hdhive_checkin.get('gamble_path', '') }}"
-                                                placeholder="/go-api/customer/sign">
-                                        </div>
-                                    </div>
-                                    {% set checkin_state = hdhive_checkin_state or {} %}
-                                    <div class="form-text mb-0">
-                                        状态：<span class="{% if checkin_state.get('last_status') == 'ok' %}text-success{% elif checkin_state.get('last_status') and checkin_state.get('last_status') != 'disabled' %}text-danger{% else %}text-muted{% endif %}">
-                                            {{ checkin_state.get('last_message') or '未执行' }}
-                                        </span>
-                                        {% if checkin_state.get('last_checkin_at') %}
-                                        （{{ checkin_state.get('last_checkin_at') }}）
-                                        {% endif %}
-                                    </div>
-                                    <div class="form-text">
-                                        当前积分：<span class="fw-bold" id="hdhiveCurrentPointsValue">{{ checkin_state.get('last_points', '-') or '-' }}</span>
-                                        {% if checkin_state.get('last_points_at') %}
-                                        ，更新时间：<span id="hdhiveCurrentPointsAt">{{ checkin_state.get('last_points_at') }}</span>
-                                        {% else %}
-                                        ，更新时间：<span id="hdhiveCurrentPointsAt">未刷新</span>
-                                        {% endif %}
-                                        {% if checkin_state.get('next_run_at') %}
-                                        ，下次执行：{{ checkin_state.get('next_run_at') }}
-                                        {% endif %}
-                                    </div>
-                                    <div class="d-flex gap-2 mt-2">
-                                        <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveCheckinBtn">立即签到</button>
-                                        <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhivePointsBtn">刷新积分</button>
-                                    </div>
-                                    <div class="form-text mt-1" id="hdhiveCheckinResult"></div>
-                                </div>
-                            </div>
-                                            <div class="d-flex gap-2">
-                                                <button type="submit" class="btn btn-primary btn-sm flex-grow-1">保存 HDHive 设置</button>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestBtn">测试(API优先)</button>
-                                                <button type="button" class="btn btn-outline-secondary btn-sm" id="hdhiveTestCookieBtn">测试 Cookie</button>
-                                            </div>
-                                            <div class="form-text mt-2">如已配置 Open API Key，“测试(API优先)”会优先验证 API Key；“测试 Cookie”强制验证 Cookie。</div>
-                                            <div class="form-text mt-2" id="hdhiveTestResult"></div>
+                                            <div class="form-text mb-0">提示：阈值为 0 时仅自动解锁 0 积分资源，建议先测试通过再开启自动流程。</div>
                                         </form>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="accordion-item">
-                                <h2 class="accordion-header" id="proxySettingsHeading">
-                                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
-                                        data-bs-target="#proxySettingsCollapse" aria-expanded="false"
-                                        aria-controls="proxySettingsCollapse">
-                                        <i class="bi bi-diagram-3 me-2"></i>🌐 网络代理
-                                    </button>
-                                </h2>
-                                <div id="proxySettingsCollapse" class="accordion-collapse collapse"
-                                    aria-labelledby="proxySettingsHeading" data-bs-parent="#tgAdvancedAccordion">
-                                    <div class="accordion-body p-2">
-                                        <div class="form-text mb-2">代理设置已移到独立页面，建议从左侧导航进入维护三类代理：Telegram、HDHive / TMDB、下载器。</div>
-                                        <a href="{{ url_for('proxy_config') }}" class="btn btn-outline-primary btn-sm w-100">
-                                            <i class="bi bi-box-arrow-up-right me-1"></i>打开代理设置页面
-                                        </a>
                                     </div>
                                 </div>
                             </div>
@@ -1927,36 +1977,108 @@
                                 <div id="selfServiceSettingsCollapse" class="accordion-collapse collapse"
                                     aria-labelledby="selfServiceSettingsHeading" data-bs-parent="#tgAdvancedAccordion">
                                     <div class="accordion-body p-2">
-                                        <form action="{{ url_for('manage_config') }}" method="POST">
+                                        <form action="{{ url_for('manage_config') }}" method="POST" class="self-service-compact-form">
                                             <input type="hidden" name="action" value="update_self_service">
-                                            <div class="form-check form-switch mb-2">
-                                                <input class="form-check-input" type="checkbox" id="self_service_enabled"
-                                                    name="self_service_enabled" {% if config.get('self_service_enabled', False) %}checked{% endif %}>
-                                                <label class="form-check-label small" for="self_service_enabled">启用自助观影申请</label>
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-md-4">
+                                                    <div class="form-check form-switch mb-0">
+                                                        <input class="form-check-input" type="checkbox" id="self_service_enabled"
+                                                            name="self_service_enabled" {% if config.get('self_service_enabled', False) %}checked{% endif %}>
+                                                        <label class="form-check-label small" for="self_service_enabled">启用自助观影申请</label>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <div class="form-check form-switch mb-0">
+                                                        <input class="form-check-input" type="checkbox" id="self_service_public_enabled"
+                                                            name="self_service_public_enabled" {% if config.get('self_service_public_enabled', False) %}checked{% endif %}>
+                                                        <label class="form-check-label small" for="self_service_public_enabled">启用公共提交页面</label>
+                                                    </div>
+                                                </div>
+                                                <div class="col-md-4">
+                                                    <div class="form-check form-switch mb-0">
+                                                        <input class="form-check-input" type="checkbox" id="self_service_public_rate_limit_enabled"
+                                                            name="self_service_public_rate_limit_enabled"
+                                                            {% if config.get('self_service_public_rate_limit', {}).get('enabled', True) %}checked{% endif %}>
+                                                        <label class="form-check-label small" for="self_service_public_rate_limit_enabled">启用公共入口防刷</label>
+                                                    </div>
+                                                </div>
                                             </div>
-                                            <div class="form-check form-switch mb-2">
-                                                <input class="form-check-input" type="checkbox" id="self_service_public_enabled"
-                                                    name="self_service_public_enabled" {% if config.get('self_service_public_enabled', False) %}checked{% endif %}>
-                                                <label class="form-check-label small" for="self_service_public_enabled">启用公共提交页面</label>
-                                                <div class="form-text">公共入口：<code>/self_service_public</code></div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_public_access_key" class="form-label small">公共访问口令（可选）:</label>
-                                                <input type="password" class="form-control form-control-sm" id="self_service_public_access_key"
-                                                    name="self_service_public_access_key"
-                                                    value="{{ config.get('self_service_public_access_key', '') }}"
-                                                    placeholder="留空则不需要口令">
-                                                <div class="form-text">设置后，非登录用户提交必须输入口令。</div>
-                                            </div>
-                                            <div class="form-check form-switch mb-2">
-                                                <input class="form-check-input" type="checkbox" id="self_service_public_rate_limit_enabled"
-                                                    name="self_service_public_rate_limit_enabled"
-                                                    {% if config.get('self_service_public_rate_limit', {}).get('enabled', True) %}checked{% endif %}>
-                                                <label class="form-check-label small" for="self_service_public_rate_limit_enabled">启用公共入口防刷（按 IP）</label>
-                                            </div>
+                                            <div class="form-text mb-2">公共入口：<code>/self_service_public</code></div>
+
                                             <div class="row g-2 mb-2">
                                                 <div class="col-md-6">
-                                                    <label for="self_service_public_rate_limit_window_seconds" class="form-label small">时间窗口(秒):</label>
+                                                    <label for="self_service_target_user_ids" class="form-label small">接收用户 ID:</label>
+                                                    <input type="text" class="form-control form-control-sm" id="self_service_target_user_ids"
+                                                        name="self_service_target_user_ids"
+                                                        value="{{ config.get('self_service_target_user_ids', '') }}"
+                                                        placeholder="123, @user (逗号分隔)">
+                                                    <div class="form-text">默认接收用户。</div>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <label for="self_service_notify_user_ids" class="form-label small">通知用户 ID（可选）:</label>
+                                                    <input type="text" class="form-control form-control-sm" id="self_service_notify_user_ids"
+                                                        name="self_service_notify_user_ids"
+                                                        value="{{ config.get('self_service_notify_user_ids', '') }}"
+                                                        placeholder="123, @admin (逗号分隔)">
+                                                    <div class="form-text">留空则使用接收用户。</div>
+                                                </div>
+                                            </div>
+
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-md-6">
+                                                    <label for="self_service_notify_sender" class="form-label small">通知发送方式:</label>
+                                                    {% set notify_sender = config.get('self_service_notify_sender', 'telegram_monitor') %}
+                                                    <select class="form-select form-select-sm" id="self_service_notify_sender" name="self_service_notify_sender">
+                                                        <option value="telegram_monitor" {% if notify_sender in ['telegram_monitor', 'userbot'] %}selected{% endif %}>Telegram Monitor（用户态）</option>
+                                                        <option value="bot_monitor" {% if notify_sender in ['bot_monitor', 'bot'] %}selected{% endif %}>Bot Monitor（机器人）</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-6" id="selfServicePublicOptions">
+                                                    <label for="self_service_public_access_key" class="form-label small">公共访问口令（可选）:</label>
+                                                    <input type="password" class="form-control form-control-sm" id="self_service_public_access_key"
+                                                        name="self_service_public_access_key"
+                                                        value="{{ config.get('self_service_public_access_key', '') }}"
+                                                        placeholder="留空则不需要口令">
+                                                </div>
+                                            </div>
+
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-md-3">
+                                                    <label for="self_service_storage_mode" class="form-label small">网盘筛选:</label>
+                                                    <select class="form-select form-select-sm" id="self_service_storage_mode" name="self_service_storage_mode">
+                                                        {% set storage_mode = config.get('self_service_storage_mode', 'any') %}
+                                                        <option value="any" {% if storage_mode == 'any' %}selected{% endif %}>不限</option>
+                                                        <option value="115" {% if storage_mode == '115' %}selected{% endif %}>仅 115</option>
+                                                        <option value="123" {% if storage_mode == '123' %}selected{% endif %}>仅 123</option>
+                                                        <option value="115_123" {% if storage_mode == '115_123' %}selected{% endif %}>115/123</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label for="self_service_search_max_results" class="form-label small">搜索候选数:</label>
+                                                    <input type="number" class="form-control form-control-sm" id="self_service_search_max_results"
+                                                        name="self_service_search_max_results" min="1" max="20" step="1"
+                                                        value="{{ config.get('self_service_search_max_results', 5) }}">
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label for="self_service_use_open_api" class="form-label small">Open API:</label>
+                                                    <select class="form-select form-select-sm" id="self_service_use_open_api" name="self_service_use_open_api">
+                                                        <option value="off" {% if not config.get('self_service_use_open_api', False) %}selected{% endif %}>关闭</option>
+                                                        <option value="on" {% if config.get('self_service_use_open_api', False) %}selected{% endif %}>开启</option>
+                                                    </select>
+                                                </div>
+                                                <div class="col-md-3">
+                                                    <label for="self_service_cookie_check_mode" class="form-label small">Cookie 校验:</label>
+                                                    <select class="form-select form-select-sm" id="self_service_cookie_check_mode" name="self_service_cookie_check_mode">
+                                                        <option value="warn" {% if config.get('self_service_cookie_check_mode', 'warn') == 'warn' %}selected{% endif %}>提示</option>
+                                                        <option value="strict" {% if config.get('self_service_cookie_check_mode', 'warn') == 'strict' %}selected{% endif %}>严格</option>
+                                                        <option value="off" {% if config.get('self_service_cookie_check_mode', 'warn') == 'off' %}selected{% endif %}>不检测</option>
+                                                    </select>
+                                                </div>
+                                            </div>
+
+                                            <div id="selfServicePublicRateLimitFields" class="row g-2 mb-2">
+                                                <div class="col-md-6">
+                                                    <label for="self_service_public_rate_limit_window_seconds" class="form-label small">防刷窗口(秒):</label>
                                                     <input type="number" class="form-control form-control-sm" id="self_service_public_rate_limit_window_seconds"
                                                         name="self_service_public_rate_limit_window_seconds" min="10" step="1"
                                                         value="{{ config.get('self_service_public_rate_limit', {}).get('window_seconds', 300) }}">
@@ -1968,66 +2090,8 @@
                                                         value="{{ config.get('self_service_public_rate_limit', {}).get('max_requests', 3) }}">
                                                 </div>
                                             </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_target_user_ids" class="form-label small">接收用户 ID:</label>
-                                                <input type="text" class="form-control form-control-sm" id="self_service_target_user_ids"
-                                                    name="self_service_target_user_ids"
-                                                    value="{{ config.get('self_service_target_user_ids', '') }}"
-                                                    placeholder="123, @user (逗号分隔)">
-                                                <div class="form-text">默认接收用户（通知用户未配置时使用）。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_notify_user_ids" class="form-label small">通知用户 ID（可选）:</label>
-                                                <input type="text" class="form-control form-control-sm" id="self_service_notify_user_ids"
-                                                    name="self_service_notify_user_ids"
-                                                    value="{{ config.get('self_service_notify_user_ids', '') }}"
-                                                    placeholder="123, @admin (逗号分隔)">
-                                                <div class="form-text">填写后，自助观影提交/结果通知优先发送到此处；留空则使用接收用户 ID。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_notify_sender" class="form-label small">通知发送方式:</label>
-                                                {% set notify_sender = config.get('self_service_notify_sender', 'telegram_monitor') %}
-                                                <select class="form-select form-select-sm" id="self_service_notify_sender" name="self_service_notify_sender">
-                                                    <option value="telegram_monitor" {% if notify_sender in ['telegram_monitor', 'userbot'] %}selected{% endif %}>Telegram Monitor（用户态）</option>
-                                                    <option value="bot_monitor" {% if notify_sender in ['bot_monitor', 'bot'] %}selected{% endif %}>Bot Monitor（机器人）</option>
-                                                </select>
-                                                <div class="form-text">选择由哪个进程发送通知；使用 Bot 时请确保机器人已加入目标群或可私聊。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_storage_mode" class="form-label small">网盘筛选:</label>
-                                                <select class="form-select form-select-sm" id="self_service_storage_mode" name="self_service_storage_mode">
-                                                    {% set storage_mode = config.get('self_service_storage_mode', 'any') %}
-                                                    <option value="any" {% if storage_mode == 'any' %}selected{% endif %}>不限</option>
-                                                    <option value="115" {% if storage_mode == '115' %}selected{% endif %}>仅 115</option>
-                                                    <option value="123" {% if storage_mode == '123' %}selected{% endif %}>仅 123</option>
-                                                    <option value="115_123" {% if storage_mode == '115_123' %}selected{% endif %}>115/123</option>
-                                                </select>
-                                                <div class="form-text">只返回选定网盘类型的链接。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_search_max_results" class="form-label small">搜索候选数:</label>
-                                                <input type="number" class="form-control form-control-sm" id="self_service_search_max_results"
-                                                    name="self_service_search_max_results" min="1" max="20" step="1"
-                                                    value="{{ config.get('self_service_search_max_results', 5) }}">
-                                                <div class="form-text">用于搜索候选资源的最大数量，默认 5。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_use_open_api" class="form-label small">使用 Open API:</label>
-                                                <select class="form-select form-select-sm" id="self_service_use_open_api" name="self_service_use_open_api">
-                                                    <option value="off" {% if not config.get('self_service_use_open_api', False) %}selected{% endif %}>关闭</option>
-                                                    <option value="on" {% if config.get('self_service_use_open_api', False) %}selected{% endif %}>开启</option>
-                                                </select>
-                                                <div class="form-text">开启后将优先使用 HDHive Open API（需配置 API Key）。</div>
-                                            </div>
-                                            <div class="mb-2">
-                                                <label for="self_service_cookie_check_mode" class="form-label small">Cookie 校验:</label>
-                                                <select class="form-select form-select-sm" id="self_service_cookie_check_mode" name="self_service_cookie_check_mode">
-                                                    <option value="warn" {% if config.get('self_service_cookie_check_mode', 'warn') == 'warn' %}selected{% endif %}>提示但继续</option>
-                                                    <option value="strict" {% if config.get('self_service_cookie_check_mode', 'warn') == 'strict' %}selected{% endif %}>严格拦截</option>
-                                                    <option value="off" {% if config.get('self_service_cookie_check_mode', 'warn') == 'off' %}selected{% endif %}>不检测</option>
-                                                </select>
-                                                <div class="form-text">若你确认 Cookie 可用但测试不通过，可选择“提示但继续”。</div>
-                                            </div>
+
+                                            <div class="form-text mb-2">提示：开启 Open API 可加速搜索；严格 Cookie 校验会在凭证异常时拦截提交。</div>
                                             <button type="submit" class="btn btn-info btn-sm w-100">保存自助观影配置</button>
                                         </form>
                                     </div>
@@ -2138,6 +2202,38 @@
         '#section-services': '扩展服务',
         '#section-bot': 'Bot Token'
     };
+
+    function updateSelfServiceCompactVisibility() {
+        const publicEnabledInput = document.getElementById('self_service_public_enabled');
+        const publicOptions = document.getElementById('selfServicePublicOptions');
+        const rateLimitEnabledInput = document.getElementById('self_service_public_rate_limit_enabled');
+        const rateLimitFields = document.getElementById('selfServicePublicRateLimitFields');
+
+        const publicEnabled = !!(publicEnabledInput && publicEnabledInput.checked);
+        const rateEnabled = !!(rateLimitEnabledInput && rateLimitEnabledInput.checked);
+
+        if (publicOptions) {
+            publicOptions.style.display = publicEnabled ? '' : 'none';
+        }
+        if (rateLimitFields) {
+            rateLimitFields.style.display = (publicEnabled && rateEnabled) ? '' : 'none';
+        }
+    }
+
+    function bindSelfServiceCompactEvents() {
+        const publicEnabledInput = document.getElementById('self_service_public_enabled');
+        const rateLimitEnabledInput = document.getElementById('self_service_public_rate_limit_enabled');
+        if (publicEnabledInput && !publicEnabledInput.dataset.compactBound) {
+            publicEnabledInput.addEventListener('change', updateSelfServiceCompactVisibility);
+            publicEnabledInput.dataset.compactBound = '1';
+        }
+        if (rateLimitEnabledInput && !rateLimitEnabledInput.dataset.compactBound) {
+            rateLimitEnabledInput.addEventListener('change', updateSelfServiceCompactVisibility);
+            rateLimitEnabledInput.dataset.compactBound = '1';
+        }
+        updateSelfServiceCompactVisibility();
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
         var dirBrowserModalEl = document.getElementById('dirBrowserModal');
         if (dirBrowserModalEl) {
@@ -2163,6 +2259,7 @@
                 restoreSettingsSectionModal();
             });
         }
+        bindSelfServiceCompactEvents();
     });
 
     // Ensure these elements are accessed after DOM is ready
@@ -2447,6 +2544,7 @@
         }
         modalTitle.textContent = settingsSectionModalTitles[targetSelector] || '配置';
         modalBody.appendChild(target);
+        bindSelfServiceCompactEvents();
         settingsSectionModalInstance.show();
     }
 

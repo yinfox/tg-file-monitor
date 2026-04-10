@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import telegram_monitor
 from app.app import app, _build_proxy_url_from_config, _build_tmdb_proxy_env, _try_115_share_transfer
 from app.api_115 import Client115
+from app.proxy_helpers import build_telethon_proxy_from_scope_config
 
 
 class ProxySupportTestCase(unittest.TestCase):
@@ -31,6 +32,36 @@ class ProxySupportTestCase(unittest.TestCase):
         expected = "http://user%40example.com:p%40ss%3Aword@127.0.0.1:7890"
         self.assertEqual(_build_proxy_url_from_config(config, "service"), expected)
         self.assertEqual(telegram_monitor._build_proxy_url_from_config(config, "service"), expected)
+
+    def test_proxy_url_builder_respects_scheme_in_addr(self):
+        config = {
+            "proxy": {
+                "service": {
+                    "addr": "socks5://127.0.0.1",
+                    "port": "7890",
+                }
+            }
+        }
+        expected = "socks5://127.0.0.1:7890"
+        self.assertEqual(_build_proxy_url_from_config(config, "service"), expected)
+        self.assertEqual(telegram_monitor._build_proxy_url_from_config(config, "service"), expected)
+
+    def test_telethon_proxy_builder_defaults_to_socks5_and_parses_http_scheme(self):
+        plain = build_telethon_proxy_from_scope_config({
+            "addr": "127.0.0.1",
+            "port": "7890",
+            "username": "",
+            "password": "",
+        })
+        self.assertEqual(plain, ("socks5", "127.0.0.1", 7890, True, None, None))
+
+        with_http = build_telethon_proxy_from_scope_config({
+            "addr": "http://127.0.0.1",
+            "port": "8080",
+            "username": "u",
+            "password": "p",
+        })
+        self.assertEqual(with_http, ("http", "127.0.0.1", 8080, True, "u", "p"))
 
     def test_config_page_renders_proxy_settings_section(self):
         self._login()

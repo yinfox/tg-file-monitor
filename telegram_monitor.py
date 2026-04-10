@@ -2587,7 +2587,9 @@ async def ensure_client_connected():
         telethon_proxy = _build_telethon_proxy_from_config(current_config)
         if telethon_proxy:
             try:
-                log_message(f"使用 Telegram 代理：{telethon_proxy[0]}:{telethon_proxy[1]}")
+                proxy_host = telethon_proxy[1] if len(telethon_proxy) > 1 else "?"
+                proxy_port = telethon_proxy[2] if len(telethon_proxy) > 2 else "?"
+                log_message(f"使用 Telegram 代理：{proxy_host}:{proxy_port}")
                 client_args['proxy'] = telethon_proxy
             except Exception as e:
                 log_message(f"解析 Telegram 代理配置失败，将不使用代理: {e}")

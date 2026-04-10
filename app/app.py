@@ -14,6 +14,7 @@ import re
 import datetime
 import shutil
 import requests
+import copy
 from urllib.parse import quote_plus, quote
 from typing import Tuple, Optional, List
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
@@ -55,7 +56,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.44"
+VERSION = "0.5.46"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -87,11 +88,23 @@ LOG_REFRESH_INTERVAL_DEFAULT = 10
 SELF_SERVICE_RESULT_TTL_SECONDS = None
 SELF_SERVICE_RESULT_MAX_ITEMS = 200
 SELF_SERVICE_RECENT_DISPLAY_LIMIT = 8
+TMDB_SEARCH_CACHE_TTL_SECONDS = 1800
+OPEN_API_RESOURCES_CACHE_TTL_SECONDS = 600
+OPEN_API_RESOURCE_DETAIL_CACHE_TTL_SECONDS = 600
+_TMDB_SEARCH_CACHE_MAX_ITEMS = 1024
+_OPEN_API_RESOURCES_CACHE_MAX_ITEMS = 2048
+_OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS = 2048
 
 _MESSAGE_QUEUE_LOCK = threading.Lock()
 _SELF_SERVICE_RESULT_LOCK = threading.Lock()
+_TMDB_SEARCH_CACHE_LOCK = threading.Lock()
+_OPEN_API_RESOURCES_CACHE_LOCK = threading.Lock()
+_OPEN_API_RESOURCE_DETAIL_CACHE_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_CACHE = {}
+_TMDB_SEARCH_CACHE = {}
+_OPEN_API_RESOURCES_CACHE = {}
+_OPEN_API_RESOURCE_DETAIL_CACHE = {}
 
 # Load environment variables from config/.env
 try:
@@ -3824,9 +3837,10 @@ def _fetch_hdhive_urls_from_url(
     debug_info: list,
     tmdb_urls: list = None,
     tmdb_ids: list = None,
+    request_timeout: int = 20,
 ) -> None:
     try:
-        resp = _requests_get(url, timeout=20, headers=headers, proxy_scope="service")
+        resp = _requests_get(url, timeout=request_timeout, headers=headers, proxy_scope="service")
     except Exception as e:
         debug_info.append(f"url={url} error={type(e).__name__}")
         return
@@ -3869,10 +3883,52 @@ def _fetch_hdhive_urls_from_url(
         pass
 
 
+def _cache_get(cache: dict, lock: threading.Lock, key, ttl_seconds: int):
+    now = time.time()
+    with lock:
+        entry = cache.get(key)
+        if not isinstance(entry, dict):
+            return None
+        ts = float(entry.get("ts") or 0)
+        if ttl_seconds > 0 and now - ts > ttl_seconds:
+            cache.pop(key, None)
+            return None
+        try:
+            return copy.deepcopy(entry.get("value"))
+        except Exception:
+            return entry.get("value")
+
+
+def _cache_set(cache: dict, lock: threading.Lock, key, value, max_items: int = 1024) -> None:
+    with lock:
+        cache[key] = {"ts": time.time(), "value": value}
+        if isinstance(max_items, int) and max_items > 0 and len(cache) > max_items:
+            try:
+                items = sorted(cache.items(), key=lambda kv: float((kv[1] or {}).get("ts") or 0), reverse=True)
+                cache.clear()
+                for k, v in items[:max_items]:
+                    cache[k] = v
+            except Exception:
+                while len(cache) > max_items:
+                    try:
+                        cache.pop(next(iter(cache)))
+                    except Exception:
+                        break
+
+
 def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, language: str = "zh-CN") -> list:
     api_key = (api_key or '').strip()
     if not api_key or not query:
         return []
+    cache_key = (
+        media_type,
+        str(language or "").strip().lower(),
+        str(query or "").strip().lower(),
+        str(year or "").strip(),
+    )
+    cached = _cache_get(_TMDB_SEARCH_CACHE, _TMDB_SEARCH_CACHE_LOCK, cache_key, TMDB_SEARCH_CACHE_TTL_SECONDS)
+    if isinstance(cached, list):
+        return [int(x) for x in cached if str(x).strip().isdigit()]
     base = "https://api.themoviedb.org/3/search"
     url = f"{base}/{media_type}"
     params = {"api_key": api_key, "query": query, "language": language}
@@ -3893,7 +3949,32 @@ def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, langu
     for item in results:
         if isinstance(item, dict) and item.get("id"):
             ids.append(int(item.get("id")))
+    _cache_set(_TMDB_SEARCH_CACHE, _TMDB_SEARCH_CACHE_LOCK, cache_key, ids, max_items=_TMDB_SEARCH_CACHE_MAX_ITEMS)
     return ids
+
+
+def _merge_tmdb_ids(tv_ids: list, movie_ids: list, limit: int = 30) -> list:
+    tv_list = [str(x) for x in (tv_ids or []) if str(x)]
+    movie_list = [str(x) for x in (movie_ids or []) if str(x)]
+    merged = []
+    seen = set()
+    max_len = max(len(tv_list), len(movie_list))
+    for idx in range(max_len):
+        if idx < len(tv_list):
+            tid = tv_list[idx]
+            if tid not in seen:
+                seen.add(tid)
+                merged.append(tid)
+                if limit > 0 and len(merged) >= limit:
+                    break
+        if idx < len(movie_list):
+            mid = movie_list[idx]
+            if mid not in seen:
+                seen.add(mid)
+                merged.append(mid)
+                if limit > 0 and len(merged) >= limit:
+                    break
+    return merged
 
 
 def _normalize_hdhive_test_slug(raw: str) -> str:
@@ -4083,9 +4164,33 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
 
 
 def _hdhive_open_api_resources(base_url: str, api_key: str, media_type: str, tmdb_id: str) -> dict:
+    cache_key = (
+        str(base_url or "").rstrip("/").lower(),
+        str(media_type or "").strip().lower(),
+        str(tmdb_id or "").strip(),
+    )
+    cached = _cache_get(
+        _OPEN_API_RESOURCES_CACHE,
+        _OPEN_API_RESOURCES_CACHE_LOCK,
+        cache_key,
+        OPEN_API_RESOURCES_CACHE_TTL_SECONDS,
+    )
+    if isinstance(cached, dict):
+        return cached
     api_base = base_url.rstrip("/") + "/api/open"
     url = f"{api_base}/resources/{media_type}/{tmdb_id}"
-    return _hdhive_open_api_request("GET", url, api_key)
+    resp = _hdhive_open_api_request("GET", url, api_key)
+    if isinstance(resp, dict) and resp.get("success") is True:
+        data = resp.get("data")
+        if isinstance(data, list):
+            _cache_set(
+                _OPEN_API_RESOURCES_CACHE,
+                _OPEN_API_RESOURCES_CACHE_LOCK,
+                cache_key,
+                resp,
+                max_items=_OPEN_API_RESOURCES_CACHE_MAX_ITEMS,
+            )
+    return resp
 
 
 def _hdhive_open_api_ping(base_url: str, api_key: str) -> dict:
@@ -4101,15 +4206,46 @@ def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
 
 
 def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> dict:
+    cache_key = (
+        str(base_url or "").rstrip("/").lower(),
+        str(slug or "").strip(),
+    )
+    cached = _cache_get(
+        _OPEN_API_RESOURCE_DETAIL_CACHE,
+        _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK,
+        cache_key,
+        OPEN_API_RESOURCE_DETAIL_CACHE_TTL_SECONDS,
+    )
+    if isinstance(cached, dict):
+        return cached
+
     api_base = base_url.rstrip("/") + "/api/open"
     legacy_url = f"{api_base}/resources/{slug}"
     legacy_resp = _hdhive_open_api_request("GET", legacy_url, api_key)
     if isinstance(legacy_resp, dict) and legacy_resp.get("success") is True:
+        data = legacy_resp.get("data")
+        if isinstance(data, dict):
+            _cache_set(
+                _OPEN_API_RESOURCE_DETAIL_CACHE,
+                _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK,
+                cache_key,
+                legacy_resp,
+                max_items=_OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS,
+            )
         return legacy_resp
 
     detail_url = f"{api_base}/resources/detail/{slug}"
     detail_resp = _hdhive_open_api_request("GET", detail_url, api_key)
     if isinstance(detail_resp, dict) and detail_resp.get("success") is True:
+        data = detail_resp.get("data")
+        if isinstance(data, dict):
+            _cache_set(
+                _OPEN_API_RESOURCE_DETAIL_CACHE,
+                _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK,
+                cache_key,
+                detail_resp,
+                max_items=_OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS,
+            )
         return detail_resp
 
     legacy_msg = str((legacy_resp or {}).get("message") or "").strip()
@@ -4347,6 +4483,26 @@ def _resource_title(item: dict) -> str:
     return ""
 
 
+def _resource_query_match_score(item: dict, query_texts: list) -> int:
+    if not isinstance(item, dict):
+        return 0
+    title_norm = _normalize_title_for_match(_resource_title(item))
+    if not title_norm:
+        return 0
+    best = 0
+    for text in query_texts or []:
+        norm = _normalize_title_for_match(text)
+        if not norm:
+            continue
+        if norm == title_norm:
+            best = max(best, 4)
+            continue
+        if norm in title_norm:
+            best = max(best, 3)
+            continue
+    return best
+
+
 def _resource_collect_meta_text(
     item: dict,
     *,
@@ -4523,7 +4679,8 @@ def _build_self_service_interactive_resources(
         seen.add(uniq_key)
 
         merged = dict(base_item)
-        if slug and open_api_key:
+        need_detail_fetch = bool(slug and open_api_key and storage_mode != "any" and not _resource_guess_storage_mode(merged))
+        if need_detail_fetch:
             try:
                 detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
             except Exception:
@@ -5244,7 +5401,13 @@ def _list_self_service_results(limit: int = 30) -> list:
     return items
 
 
-def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header: str = "", base_url: str = "https://hdhive.com"):
+def _search_hdhive_resource_urls(
+    query: str,
+    max_results: int = 5,
+    cookie_header: str = "",
+    base_url: str = "https://hdhive.com",
+    request_timeout: int = 20,
+):
     query = (query or "").strip()
     if not query:
         return [], [], [], []
@@ -5285,12 +5448,13 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
             debug_info,
             tmdb_urls=tmdb_urls,
             tmdb_ids=tmdb_ids,
+            request_timeout=request_timeout,
         )
         if len(results) >= max_results:
             return results, debug_info, tmdb_urls, tmdb_ids
 
         try:
-            html_text = _requests_get(url, timeout=20, headers=headers, proxy_scope="service").text
+            html_text = _requests_get(url, timeout=request_timeout, headers=headers, proxy_scope="service").text
         except Exception:
             html_text = ""
         next_data = _extract_next_data_json(html_text)
@@ -5324,7 +5488,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
                 ]
                 for durl in data_urls:
                     try:
-                        dresp = _requests_get(durl, timeout=20, headers=headers, proxy_scope="service")
+                        dresp = _requests_get(durl, timeout=request_timeout, headers=headers, proxy_scope="service")
                     except Exception:
                         continue
                     debug_info.append(f"data_url={durl} status={getattr(dresp, 'status_code', 'NA')}")
@@ -5350,7 +5514,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
         try:
             headers_json = dict(headers)
             headers_json["x-nextjs-data"] = "1"
-            jresp = _requests_get(url, timeout=20, headers=headers_json, proxy_scope="service")
+            jresp = _requests_get(url, timeout=request_timeout, headers=headers_json, proxy_scope="service")
             debug_info.append(f"nextjs_data={getattr(jresp, 'status_code', 'NA')}")
             if jresp.status_code == 200 and jresp.text:
                 raw = jresp.text.strip()
@@ -5383,7 +5547,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
         ]
         for api_url in api_urls:
             try:
-                aresp = _requests_get(api_url, timeout=20, headers=json_headers, proxy_scope="service")
+                aresp = _requests_get(api_url, timeout=request_timeout, headers=json_headers, proxy_scope="service")
             except Exception:
                 continue
             debug_info.append(f"api_url={api_url} status={getattr(aresp, 'status_code', 'NA')}")
@@ -5408,7 +5572,7 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
         # Try RSC parameter (some pages require _rsc)
         try:
             rsc_url = f"{url}{'&' if '?' in url else '?'}_rsc={int(time.time() * 1000)}"
-            rresp = _requests_get(rsc_url, timeout=20, headers=headers, proxy_scope="service")
+            rresp = _requests_get(rsc_url, timeout=request_timeout, headers=headers, proxy_scope="service")
             debug_info.append(f"rsc_url={rsc_url} status={getattr(rresp, 'status_code', 'NA')}")
             if rresp.status_code == 200 and rresp.text:
                 _collect_hdhive_urls_from_text(rresp.text, base_url, results, max_results)
@@ -5421,7 +5585,15 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
 
         if not results and (tmdb_urls or tmdb_ids):
             for tmdb_url in tmdb_urls[:10]:
-                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, results, max_results, debug_info)
+                _fetch_hdhive_urls_from_url(
+                    tmdb_url,
+                    headers,
+                    base_url,
+                    results,
+                    max_results,
+                    debug_info,
+                    request_timeout=request_timeout,
+                )
                 if len(results) >= max_results:
                     return results, debug_info, tmdb_urls, tmdb_ids
             for key in tmdb_ids[:10]:
@@ -5430,7 +5602,15 @@ def _search_hdhive_resource_urls(query: str, max_results: int = 5, cookie_header
                 except Exception:
                     continue
                 tmdb_url = f"{base_url}/tmdb/{mt}/{tid}?_rsc={int(time.time() * 1000)}"
-                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, results, max_results, debug_info)
+                _fetch_hdhive_urls_from_url(
+                    tmdb_url,
+                    headers,
+                    base_url,
+                    results,
+                    max_results,
+                    debug_info,
+                    request_timeout=request_timeout,
+                )
                 if len(results) >= max_results:
                     return results, debug_info, tmdb_urls, tmdb_ids
 
@@ -5447,6 +5627,9 @@ def _run_self_service_request(payload: dict) -> None:
     target_ids = payload.get("notify_targets") or payload.get("targets", [])
     max_results = int(payload.get("max_results", 5) or 5)
     max_results = max(1, min(max_results, 20))
+    # Fetch a wider candidate pool, then rank/filter down to max_results.
+    search_fetch_limit = max(max_results, 15)
+    open_api_pick_limit = max(max_results, 20)
     hdhive_cookie = payload.get("hdhive_cookie", "") or ""
     base_url = payload.get("base_url", "") or "https://hdhive.com"
     request_type = payload.get("type", "")
@@ -5662,6 +5845,41 @@ def _run_self_service_request(payload: dict) -> None:
         elif request_type in ("电视剧", "tv"):
             media_type = "tv"
 
+        query_terms = []
+        for candidate in (title_for_search, title, query):
+            text = str(candidate or "").strip()
+            if text and text not in query_terms:
+                query_terms.append(text)
+
+        collected_resources = []
+        seen_resource_keys = set()
+
+        def _append_open_api_resource(raw_item: dict, **meta) -> None:
+            if not isinstance(raw_item, dict):
+                return
+            item = dict(raw_item)
+            slug = _normalize_hdhive_test_slug(
+                item.get("slug")
+                or item.get("resource_slug")
+                or item.get("url")
+                or item.get("full_url")
+                or ""
+            )
+            if slug:
+                item["slug"] = slug
+            key = slug or _normalize_title_for_match(_resource_title(item))
+            if not key or key in seen_resource_keys:
+                return
+            seen_resource_keys.add(key)
+            if meta:
+                item.update(meta)
+            collected_resources.append(item)
+
+        keyword_search_limit = max(max_results * 3, 15)
+        keyword_probe_limit = max(max_results * 2, 10)
+        keyword_slugs = []
+        tv_tmdb_ids = []
+        movie_tmdb_ids = []
         tmdb_ids = []
         if tmdb_id_input:
             tmdb_ids = [tmdb_id_input]
@@ -5671,43 +5889,116 @@ def _run_self_service_request(payload: dict) -> None:
                 if media_type:
                     tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, media_type)]
                 else:
-                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")]
-                    if len(tmdb_ids) < 3:
-                        tmdb_ids += [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")]
+                    tv_tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")]
+                    movie_tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")]
+                    prefer_tv_first = bool(requested_seasons)
+                    if prefer_tv_first:
+                        tmdb_ids = tv_tmdb_ids + [x for x in movie_tmdb_ids if x not in tv_tmdb_ids]
+                    else:
+                        tmdb_ids = movie_tmdb_ids + [x for x in tv_tmdb_ids if x not in movie_tmdb_ids]
+                    tmdb_ids = tmdb_ids[:40]
 
-        if not tmdb_ids:
-            detail = _build_self_service_detail([
-                f"片名: {title}" if title else "",
-                f"网盘: {storage_label}" if storage_label != "不限" else "",
-                "说明: 未找到 TMDB 资源",
-                f"分辨率: {resolution_label}" if resolution_preference else "",
-            ])
-            _record_result(False, detail=detail, resolved=False)
-            _append_self_service_log([f"[{ts}] [WARN] open_api no tmdb id query={query}"])
-            return
-
-        collected_resources = []
-        for tid in tmdb_ids[:5]:
-            mt_candidates = [media_type] if media_type else ["tv", "movie"]
+        tmdb_probe_limit = 5 if media_type else 10
+        tmdb_call_count = 0
+        tv_tmdb_set = set(tv_tmdb_ids)
+        movie_tmdb_set = set(movie_tmdb_ids)
+        for tid in tmdb_ids[:tmdb_probe_limit]:
+            if media_type:
+                mt_candidates = [media_type]
+            elif tmdb_id_input:
+                mt_candidates = ["movie", "tv"]
+            else:
+                mt_candidates = []
+                if tid in movie_tmdb_set:
+                    mt_candidates.append("movie")
+                if tid in tv_tmdb_set:
+                    mt_candidates.append("tv")
+                if not mt_candidates:
+                    mt_candidates = ["movie", "tv"]
             for mt in mt_candidates:
-                resp = _hdhive_open_api_resources(base_url, open_api_key, mt, tid)
-                if not resp.get("success"):
+                tmdb_call_count += 1
+                try:
+                    resp = _hdhive_open_api_resources(base_url, open_api_key, mt, tid)
+                    resp = resp if isinstance(resp, dict) else {}
+                    if not resp.get("success"):
+                        continue
+                    data = resp.get("data") if isinstance(resp, dict) else None
+                    if isinstance(data, list) and data:
+                        for item in data:
+                            if isinstance(item, dict):
+                                _append_open_api_resource(item, _tmdb_id=tid, _media_type=mt, _source="tmdb")
+                except Exception:
                     continue
-                data = resp.get("data") if isinstance(resp, dict) else None
-                if isinstance(data, list) and data:
-                    for item in data:
-                        if isinstance(item, dict):
-                            item["_tmdb_id"] = tid
-                            item["_media_type"] = mt
-                            collected_resources.append(item)
-            if collected_resources:
-                break
+            if query_terms and collected_resources:
+                try:
+                    current_best_score = max(_resource_query_match_score(item, query_terms) for item in collected_resources)
+                except Exception:
+                    current_best_score = 0
+                min_candidates_for_break = max(3, min(max_results, 4))
+                if current_best_score >= 4 and len(collected_resources) >= min_candidates_for_break:
+                    break
+                if current_best_score >= 3 and len(collected_resources) >= (min_candidates_for_break + 2):
+                    break
+
+        best_tmdb_score = 0
+        if query_terms and collected_resources:
+            best_tmdb_score = max(_resource_query_match_score(item, query_terms) for item in collected_resources)
+
+        need_keyword_fallback = (not collected_resources) or best_tmdb_score < 3
+        if need_keyword_fallback:
+            seen_keyword_slugs = set()
+            for term in query_terms[:3]:
+                urls, _debug, _tmdb_urls, _tmdb_ids = _search_hdhive_resource_urls(
+                    term,
+                    max_results=keyword_search_limit,
+                    cookie_header=hdhive_cookie,
+                    base_url=base_url,
+                    request_timeout=8,
+                )
+                for res_url in urls:
+                    slug = _normalize_hdhive_test_slug(res_url)
+                    if not slug or slug in seen_keyword_slugs:
+                        continue
+                    seen_keyword_slugs.add(slug)
+                    keyword_slugs.append(slug)
+                    if len(keyword_slugs) >= keyword_probe_limit:
+                        break
+                if len(keyword_slugs) >= keyword_probe_limit:
+                    break
+
+            keyword_detail_probe_limit = max(max_results * 2, 10)
+            for slug in keyword_slugs[:keyword_detail_probe_limit]:
+                detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
+                detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
+                if not isinstance(detail_data, dict):
+                    continue
+                detail_item = dict(detail_data)
+                detail_item.setdefault("slug", slug)
+                _append_open_api_resource(detail_item, _source="keyword")
+                if len(collected_resources) >= keyword_detail_probe_limit:
+                    break
+
+        if query_terms and collected_resources:
+            scored_items = []
+            for idx, item in enumerate(collected_resources):
+                score = _resource_query_match_score(item, query_terms)
+                scored_items.append((score, idx, item))
+            if any(score > 0 for score, _idx, _item in scored_items):
+                scored_items.sort(key=lambda x: (-x[0], x[1]))
+                collected_resources = [item for _score, _idx, item in scored_items]
+
+        collect_cap = max(open_api_pick_limit * 3, 30)
+        if len(collected_resources) > collect_cap:
+            collected_resources = collected_resources[:collect_cap]
+        _append_self_service_log([
+            f"[{ts}] [INFO] open_api candidates query={query} keyword_slugs={len(keyword_slugs)} tmdb_ids={len(tmdb_ids)} tmdb_calls={tmdb_call_count} resources={len(collected_resources)}"
+        ])
 
         if not collected_resources:
             detail = _build_self_service_detail([
                 f"片名: {title}" if title else "",
                 f"网盘: {storage_label}" if storage_label != "不限" else "",
-                "说明: Open API 未返回可用资源",
+                "说明: Open API 与站内关键词均未返回可用资源",
                 f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
             _record_result(False, detail=detail, resolved=False)
@@ -5848,7 +6139,8 @@ def _run_self_service_request(payload: dict) -> None:
         picked_resp = None
         picked_full_url = ""
         filtered_count = 0
-        for item in candidate_pool[:max_results]:
+        fallback_non115 = None
+        for item in candidate_pool[:open_api_pick_limit]:
             slug = item.get("slug") or ""
             if not slug:
                 continue
@@ -5870,11 +6162,18 @@ def _run_self_service_request(payload: dict) -> None:
             if full_url and not _match_storage_mode(full_url, storage_mode):
                 filtered_count += 1
                 continue
+            if storage_mode == "any" and full_url and not _is_115_url(full_url):
+                if fallback_non115 is None:
+                    fallback_non115 = (item, slug, unlock_resp, full_url)
+                continue
             picked = item
             picked_slug = slug
             picked_resp = unlock_resp
             picked_full_url = full_url
             break
+
+        if not picked and fallback_non115:
+            picked, picked_slug, picked_resp, picked_full_url = fallback_non115
 
         if not picked:
             detail = _build_self_service_detail([
@@ -5951,7 +6250,7 @@ def _run_self_service_request(payload: dict) -> None:
         for q in query_candidates:
             candidates, debug_info, found_tmdb_urls, found_tmdb_ids = _search_hdhive_resource_urls(
                 q,
-                max_results=max_results,
+                max_results=search_fetch_limit,
                 cookie_header=hdhive_cookie,
                 base_url=base_url,
             )
@@ -5981,9 +6280,9 @@ def _run_self_service_request(payload: dict) -> None:
                 elif request_type == "电视剧":
                     tmdb_ids = _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")
                 else:
-                    tmdb_ids = _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")
-                    if len(tmdb_ids) < 3:
-                        tmdb_ids += _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")
+                    tv_ids = _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")
+                    movie_ids = _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")
+                    tmdb_ids = _merge_tmdb_ids(tv_ids, movie_ids, limit=40)
             if tmdb_ids:
                 headers = {
                     "User-Agent": "Mozilla/5.0",
@@ -5993,10 +6292,11 @@ def _run_self_service_request(payload: dict) -> None:
                 }
                 if hdhive_cookie:
                     headers["Cookie"] = hdhive_cookie
-                for tid in tmdb_ids[:5]:
+                tmdb_probe_limit = 5 if request_type in ("电影", "movie", "电视剧", "tv") else 12
+                for tid in tmdb_ids[:tmdb_probe_limit]:
                     for prefix in ("movie", "tv"):
                         tmdb_url = f"{base_url}/tmdb/{prefix}/{tid}?_rsc={int(time.time() * 1000)}"
-                        _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, candidates, max_results, debug_lines)
+                        _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, candidates, search_fetch_limit, debug_lines)
                         if candidates:
                             used_query = f"tmdb:{prefix}:{tid}"
                             break
@@ -6044,18 +6344,26 @@ def _run_self_service_request(payload: dict) -> None:
     real_url = None
     note = ""
     candidate_notes = []
+    fallback_non115 = None
     try:
         import telegram_monitor as tg_monitor
         tg_monitor.current_config = tg_monitor.load_config()
         for idx, cand in enumerate(candidates[:max_results], start=1):
-            real_url, note = tg_monitor._resolve_hdhive_115_url_with_note_sync(cand)
-            if real_url and not _match_storage_mode(real_url, storage_mode):
-                real_url = None
+            resolved_url, resolved_note = tg_monitor._resolve_hdhive_115_url_with_note_sync(cand)
+            if resolved_url and not _match_storage_mode(resolved_url, storage_mode):
+                resolved_url = None
                 if storage_mode != "any":
-                    note = f"非 {storage_label} 网盘已过滤"
-            candidate_notes.append((cand, note))
-            if real_url:
+                    resolved_note = f"非 {storage_label} 网盘已过滤"
+            if resolved_url and storage_mode == "any" and not _is_115_url(resolved_url):
+                if fallback_non115 is None:
+                    fallback_non115 = (cand, resolved_url, resolved_note or "仅解析到非115网盘")
+                candidate_notes.append((cand, (resolved_note or "非115网盘，继续查找115候选")))
+                continue
+            candidate_notes.append((cand, resolved_note))
+            if resolved_url:
                 primary = cand
+                real_url = resolved_url
+                note = resolved_note
                 break
 
         if not real_url and (tmdb_urls or tmdb_ids):
@@ -6069,29 +6377,38 @@ def _run_self_service_request(payload: dict) -> None:
             if hdhive_cookie:
                 headers["Cookie"] = hdhive_cookie
             for tmdb_url in tmdb_urls[:10]:
-                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, extra_candidates, max_results, debug_lines)
+                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, extra_candidates, search_fetch_limit, debug_lines)
             for key in tmdb_ids[:10]:
                 try:
                     mt, tid = key.split(":", 1)
                 except Exception:
                     continue
                 tmdb_url = f"{base_url}/tmdb/{mt}/{tid}?_rsc={int(time.time() * 1000)}"
-                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, extra_candidates, max_results, debug_lines)
+                _fetch_hdhive_urls_from_url(tmdb_url, headers, base_url, extra_candidates, search_fetch_limit, debug_lines)
             if extra_candidates:
                 extra_candidates = _apply_dolby_preference_to_urls(extra_candidates)
             tried = {url for url, _ in candidate_notes}
             for cand in extra_candidates:
                 if cand in tried:
                     continue
-                real_url, note = tg_monitor._resolve_hdhive_115_url_with_note_sync(cand)
-                if real_url and not _match_storage_mode(real_url, storage_mode):
-                    real_url = None
+                resolved_url, resolved_note = tg_monitor._resolve_hdhive_115_url_with_note_sync(cand)
+                if resolved_url and not _match_storage_mode(resolved_url, storage_mode):
+                    resolved_url = None
                     if storage_mode != "any":
-                        note = f"非 {storage_label} 网盘已过滤"
-                candidate_notes.append((cand, note))
-                if real_url:
+                        resolved_note = f"非 {storage_label} 网盘已过滤"
+                if resolved_url and storage_mode == "any" and not _is_115_url(resolved_url):
+                    if fallback_non115 is None:
+                        fallback_non115 = (cand, resolved_url, resolved_note or "仅解析到非115网盘")
+                    candidate_notes.append((cand, (resolved_note or "非115网盘，继续查找115候选")))
+                    continue
+                candidate_notes.append((cand, resolved_note))
+                if resolved_url:
                     primary = cand
+                    real_url = resolved_url
+                    note = resolved_note
                     break
+        if not real_url and fallback_non115:
+            primary, real_url, note = fallback_non115
     except Exception as e:
         real_url = None
         note = f"解析异常: {e}"

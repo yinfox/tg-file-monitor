@@ -5,6 +5,7 @@ yt-dlp>=2024.01.01
 nest_asyncio
 emoji
 requests
+PySocks
 croniter
 imageio-ffmpeg
 p115client>=0.0.7
