@@ -92,6 +92,7 @@ test_output/
 
 # Local runtime/state files
 config/drama_calendar_state.json
+config/emby_gap_fill_state.json
 config/self_service_results.json
 config/tmdb_tv_status_cache.json
 user.env
