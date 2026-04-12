@@ -1795,13 +1795,6 @@
                                                                     placeholder="https://hdhive.com">
                                                             </div>
                                                         </div>
-                                                        <div class="mb-2">
-                                                            <label for="hdhive_cookie_test_resource" class="form-label small">Cookie 测试资源链接/slug:</label>
-                                                            <input type="text" class="form-control form-control-sm" id="hdhive_cookie_test_resource"
-                                                                name="hdhive_cookie_test_resource" value="{{ config.get('hdhive_cookie_test_resource', '') }}"
-                                                                placeholder="https://hdhive.com/resource/115/xxxx 或 slug">
-                                                            <div class="form-text">用于状态检测放宽：能解析出积分即判 Cookie 可用。</div>
-                                                        </div>
                                                         <div class="form-check form-switch mb-2">
                                                             <input class="form-check-input" type="checkbox" id="hdhive_open_api_direct_unlock"
                                                                 name="hdhive_open_api_direct_unlock" {% if config.get('hdhive_open_api_direct_unlock', False) %}checked{% endif %}>

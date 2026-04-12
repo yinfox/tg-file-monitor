@@ -1067,6 +1067,268 @@
     .drama-status-item-value {
         font-size: 0.96rem;
     }
+
+    /* Visual refresh pass */
+    :root {
+        --glass-bg: rgba(255, 255, 255, 0.52);
+        --glass-bg-strong: rgba(255, 255, 255, 0.72);
+        --glass-border: rgba(148, 163, 184, 0.32);
+        --glass-shadow: 0 22px 50px rgba(8, 47, 73, 0.14);
+        --ink-900: #0b2436;
+        --ink-700: #1f3d54;
+        --ink-500: #4f6b80;
+        --accent-cyan: #22d3ee;
+        --accent-blue: #0ea5a4;
+        --accent-emerald: #10b981;
+        --accent-violet: #f59e0b;
+    }
+
+    .drama-layout {
+        padding: 0.15rem 0.1rem 2rem;
+    }
+
+    .drama-layout::before {
+        inset: -100px -54px 0;
+        background:
+            radial-gradient(circle at 10% 14%, rgba(34, 211, 238, 0.23), transparent 34%),
+            radial-gradient(circle at 88% 10%, rgba(245, 158, 11, 0.2), transparent 29%),
+            radial-gradient(circle at 50% 85%, rgba(16, 185, 129, 0.16), transparent 41%),
+            linear-gradient(180deg, rgba(248, 252, 255, 0.95), rgba(235, 245, 250, 0.98));
+    }
+
+    .drama-hero {
+        position: relative;
+        overflow: hidden;
+        border: 1px solid rgba(125, 211, 252, 0.35);
+        background:
+            radial-gradient(circle at 85% 16%, rgba(251, 191, 36, 0.3), transparent 33%),
+            radial-gradient(circle at 11% 85%, rgba(45, 212, 191, 0.24), transparent 31%),
+            linear-gradient(128deg, rgba(8, 47, 73, 0.98), rgba(13, 116, 122, 0.94), rgba(12, 74, 110, 0.96));
+        box-shadow: 0 22px 46px rgba(8, 47, 73, 0.22);
+    }
+
+    .drama-hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background-image: linear-gradient(120deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0));
+        mix-blend-mode: screen;
+    }
+
+    .drama-hero-chip {
+        border: 1px solid rgba(125, 211, 252, 0.34);
+        background: rgba(8, 47, 73, 0.28);
+    }
+
+    .drama-hero-chip-label {
+        color: #fcd34d;
+    }
+
+    .drama-hero-chip-value {
+        color: #fef3c7;
+    }
+
+    .drama-hero-action-btn {
+        border: 1px solid rgba(255, 255, 255, 0.34);
+        box-shadow: 0 8px 20px rgba(8, 47, 73, 0.2);
+    }
+
+    .drama-hero-action-btn.btn-light {
+        background: linear-gradient(135deg, #fef3c7, #fde68a);
+        color: #78350f;
+        border-color: rgba(245, 158, 11, 0.42);
+    }
+
+    .drama-hero-action-btn.btn-outline-light {
+        background: rgba(15, 118, 110, 0.22);
+    }
+
+    .card,
+    .source-panel,
+    .drama-overview-card,
+    .source-card,
+    .drama-note-card {
+        border-radius: 1rem;
+    }
+
+    .drama-overview-card {
+        position: relative;
+        overflow: hidden;
+        background: linear-gradient(160deg, rgba(255, 255, 255, 0.84), rgba(236, 253, 245, 0.68));
+    }
+
+    .drama-overview-card::after {
+        content: "";
+        position: absolute;
+        inset: auto -12% -58% 36%;
+        height: 130px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(34, 211, 238, 0.16), transparent 66%);
+        pointer-events: none;
+    }
+
+    .drama-status-card {
+        border: 1px solid rgba(125, 211, 252, 0.26);
+        background: linear-gradient(165deg, rgba(12, 74, 110, 0.7), rgba(8, 47, 73, 0.82));
+    }
+
+    .drama-status-summary-value.accent-removed {
+        color: #fcd34d;
+    }
+
+    .drama-status-summary-value.accent-result {
+        color: #6ee7b7;
+    }
+
+    .source-card {
+        background:
+            linear-gradient(160deg, rgba(255, 255, 255, 0.78), rgba(240, 249, 255, 0.66)),
+            radial-gradient(circle at 90% -15%, rgba(34, 211, 238, 0.16), transparent 45%);
+        border-color: rgba(125, 211, 252, 0.3);
+    }
+
+    .source-card .badge {
+        border-radius: 999px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+    }
+
+    .source-option input[type="checkbox"]:checked + .source-card {
+        border-color: rgba(13, 148, 136, 0.65);
+        background:
+            linear-gradient(160deg, rgba(236, 253, 245, 0.93), rgba(224, 242, 254, 0.85)),
+            radial-gradient(circle at 94% -10%, rgba(16, 185, 129, 0.22), transparent 42%);
+        box-shadow: 0 16px 34px rgba(15, 118, 110, 0.16);
+    }
+
+    .source-panel {
+        border-color: rgba(125, 211, 252, 0.33);
+        background:
+            linear-gradient(160deg, rgba(255, 255, 255, 0.8), rgba(236, 253, 245, 0.54));
+    }
+
+    .panel-toggle-heading,
+    .source-panel-title {
+        color: #0f766e;
+    }
+
+    .drama-quick-nav-card {
+        margin-bottom: 0.85rem;
+        border: 1px solid rgba(125, 211, 252, 0.3);
+        background:
+            linear-gradient(150deg, rgba(239, 246, 255, 0.86), rgba(236, 253, 245, 0.76));
+    }
+
+    .drama-quick-nav-link {
+        border-color: rgba(125, 211, 252, 0.28);
+        background: rgba(255, 255, 255, 0.62);
+    }
+
+    .drama-quick-nav-link i {
+        color: #0f766e;
+    }
+
+    .drama-quick-nav-link.active {
+        color: #0b3a53;
+        background: linear-gradient(145deg, rgba(186, 230, 253, 0.55), rgba(167, 243, 208, 0.46));
+        border-color: rgba(13, 148, 136, 0.4);
+    }
+
+    .drama-note-grid {
+        margin-bottom: 1rem;
+    }
+
+    .drama-note-card {
+        background: linear-gradient(160deg, rgba(255, 255, 255, 0.7), rgba(240, 249, 255, 0.55));
+        border: 1px dashed rgba(56, 189, 248, 0.36);
+    }
+
+    .action-bar .btn {
+        border-radius: 0.9rem;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        box-shadow: 0 12px 24px rgba(8, 47, 73, 0.09);
+    }
+
+    [data-drama-action="apply"] {
+        background: linear-gradient(135deg, #0ea5a4, #0891b2);
+        border-color: rgba(8, 145, 178, 0.8);
+    }
+
+    [data-drama-action="preview"] {
+        background: linear-gradient(135deg, #22d3ee, #0ea5e9);
+        border-color: rgba(14, 165, 233, 0.8);
+    }
+
+    [data-drama-action="clear"] {
+        border-color: rgba(248, 113, 113, 0.5);
+    }
+
+    .drama-hero,
+    .drama-overview-card,
+    .drama-quick-nav-card,
+    .drama-note-card,
+    .source-panel,
+    .card.shadow-sm.border-primary {
+        animation: dramaFadeUp 0.56s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .drama-overview-card:nth-child(2) {
+        animation-delay: 0.06s;
+    }
+
+    .drama-overview-card:nth-child(3) {
+        animation-delay: 0.12s;
+    }
+
+    .drama-overview-card:nth-child(4) {
+        animation-delay: 0.18s;
+    }
+
+    .drama-quick-nav-card {
+        animation-delay: 0.24s;
+    }
+
+    .drama-note-grid .drama-note-card:nth-child(1) {
+        animation-delay: 0.28s;
+    }
+
+    .drama-note-grid .drama-note-card:nth-child(2) {
+        animation-delay: 0.32s;
+    }
+
+    .drama-note-grid .drama-note-card:nth-child(3) {
+        animation-delay: 0.36s;
+    }
+
+    @keyframes dramaFadeUp {
+        from {
+            opacity: 0;
+            transform: translateY(10px);
+        }
+        to {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .drama-hero,
+        .drama-overview-card,
+        .drama-quick-nav-card,
+        .drama-note-card,
+        .source-panel,
+        .card.shadow-sm.border-primary {
+            animation: none !important;
+        }
+
+        .source-card,
+        .drama-quick-nav-link,
+        .action-bar .btn {
+            transition: none !important;
+        }
+    }
 </style>
 {% endblock %}
 
@@ -1299,6 +1561,50 @@
                 <div class="drama-overview-label">写入模式</div>
                 <div class="drama-overview-value">{{ '追加' if drama_cfg.get('append_to_whitelist', True) else '覆盖' }}</div>
                 <div class="drama-overview-note">建议先预览再执行写入，避免直接覆盖现有追剧白名单结果。</div>
+            </div>
+        </div>
+
+        <div class="card drama-quick-nav-card border-0">
+            <div class="card-body p-3">
+                <div class="drama-quick-nav-head">
+                    <div>
+                        <div class="drama-quick-nav-title"><i class="bi bi-signpost-2 me-1"></i>快速导航</div>
+                        <div class="drama-quick-nav-meta">建议顺序：来源配置 -> 预览提取 -> 执行写入 -> 白名单微调。</div>
+                    </div>
+                    <span class="badge text-bg-light">Workflow</span>
+                </div>
+                <div class="drama-quick-nav-grid">
+                    <a href="#section-config-main" class="drama-quick-nav-link" data-drama-nav>
+                        <span>来源配置</span><i class="bi bi-sliders2"></i>
+                    </a>
+                    <a href="#section-write-settings" class="drama-quick-nav-link" data-drama-nav>
+                        <span>写入设置</span><i class="bi bi-save2"></i>
+                    </a>
+                    <a href="#section-finish-settings" class="drama-quick-nav-link" data-drama-nav>
+                        <span>TMDB 判定</span><i class="bi bi-stars"></i>
+                    </a>
+                    <a href="#section-schedule" class="drama-quick-nav-link" data-drama-nav>
+                        <span>自动调度</span><i class="bi bi-clock-history"></i>
+                    </a>
+                    <a href="#section-whitelist" class="drama-quick-nav-link" data-drama-nav>
+                        <span>白名单编辑</span><i class="bi bi-pencil-square"></i>
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="drama-note-grid">
+            <div class="drama-note-card">
+                <strong><i class="bi bi-rocket-takeoff"></i>推荐操作节奏</strong>
+                <small>先保存参数，再点“预览提取”确认命中结果，最后执行写入，能显著降低误改配置概率。</small>
+            </div>
+            <div class="drama-note-card">
+                <strong><i class="bi bi-diagram-3"></i>多来源合并策略</strong>
+                <small>来源可以多选，“全部来源”会覆盖单项选择。遇到冲突标题时会自动去重后再写入。</small>
+            </div>
+            <div class="drama-note-card">
+                <strong><i class="bi bi-broadcast-pin"></i>调度建议</strong>
+                <small>{% if scheduler_state.get('enabled') %}当前调度已启用，建议每次修改来源后先手动预览一次。{% else %}当前调度未启用，建议配置稳定后再开启定时执行。{% endif %}</small>
             </div>
         </div>
 
@@ -2589,9 +2895,13 @@
             if (!sections.length) {
                 return;
             }
+            const visibleSections = sections.filter((section) => !section.classList.contains('d-none'));
+            if (!visibleSections.length) {
+                return;
+            }
             const offset = window.innerWidth < 992 ? 140 : 96;
-            let activeId = sections[0].id;
-            sections.forEach((section) => {
+            let activeId = visibleSections[0].id;
+            visibleSections.forEach((section) => {
                 const rect = section.getBoundingClientRect();
                 if (rect.top - offset <= 0) {
                     activeId = section.id;

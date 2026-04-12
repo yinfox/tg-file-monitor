@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.44-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.49-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-Latest image: `y1nf0x/tg-file-monitor:0.5.44`
+Latest image: `y1nf0x/tg-file-monitor:0.5.49`
 
 Upgrade example:
 
@@ -87,7 +87,7 @@ docker compose up -d
 To pin a version, update `docker-compose.yml` with:
 
 ```
-y1nf0x/tg-file-monitor:0.5.44
+y1nf0x/tg-file-monitor:0.5.49
 ```
 
 ### ☁️ 115 Share Transfer (Bot)
@@ -238,7 +238,7 @@ Try:
 
 ## 📊 Release History
 
-### v0.5.44 (2026-04-09) - Current
+### v0.5.44 (2026-04-09)
 - ✅ Finalized the HDHive check-in fix with the minimal live dynamic-chunk action refresh path and removed the temporary browser fallback scaffolding
 - ✅ Manual/automatic HDHive check-in remains restored on the current site build, with real verification returning “already checked in, come back tomorrow” together with current points
 

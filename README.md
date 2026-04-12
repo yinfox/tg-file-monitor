@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.44-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.49-orange.svg)](.)
 
 </div>
 
@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.44`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.49`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.44
+y1nf0x/tg-file-monitor:0.5.49
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -395,7 +395,7 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.44 (2026-04-09) - 当前版本
+### v0.5.44 (2026-04-09)
 - ✅ HDHive 签到修复定稿：保留动态 chunk 刷新获取 live `checkIn` action 的最小修复集，移除实验性的浏览器兜底代码
 - ✅ 当前站点下手动/自动签到维持可用，真实验证返回“你已经签到过了，明天再来吧”并同步当前积分
 

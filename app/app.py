@@ -56,7 +56,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.48"
+VERSION = "0.5.49"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -168,7 +168,6 @@ def load_config():
         "hdhive_base_url": "https://hdhive.com",
         "hdhive_open_api_key": "",
         "hdhive_open_api_direct_unlock": False,
-        "hdhive_cookie_test_resource": "",
         "hdhive_cookie_monitor": {
             "enabled": False,
             "interval_minutes": 60,
@@ -366,8 +365,6 @@ def load_config():
                     merged_monitor = default_config["hdhive_cookie_monitor"].copy()
                     merged_monitor.update(config.get("hdhive_cookie_monitor") or {})
                     config["hdhive_cookie_monitor"] = merged_monitor
-                if "hdhive_cookie_test_resource" not in config:
-                    config["hdhive_cookie_test_resource"] = default_config["hdhive_cookie_test_resource"]
                 if "hdhive_checkin" not in config or not isinstance(config.get("hdhive_checkin"), dict):
                     config["hdhive_checkin"] = default_config["hdhive_checkin"].copy()
                 else:
@@ -3555,7 +3552,6 @@ def _hdhive_cookie_monitor_loop():
         last_check_ts = now
         base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip()
         cookie = (config.get("hdhive_cookie") or "").strip()
-        test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
         api_key = (config.get("hdhive_open_api_key") or "").strip()
 
         if not force_cookie_test and api_key:
@@ -3571,7 +3567,7 @@ def _hdhive_cookie_monitor_loop():
                 status = "missing"
                 message = "未配置 HDHive Cookie"
             else:
-                result = _test_hdhive_cookie(base_url, cookie, test_resource)
+                result = _test_hdhive_cookie(base_url, cookie)
                 status = "ok" if result.get("success") else "invalid"
                 message = result.get("message") or ("Cookie 有效" if status == "ok" else "Cookie 无效")
 
@@ -4000,7 +3996,7 @@ def _normalize_hdhive_test_slug(raw: str) -> str:
     return text.rstrip('/').split('/')[-1]
 
 
-def _test_hdhive_cookie(base_url: str, cookie: str, test_resource: str = "") -> dict:
+def _test_hdhive_cookie(base_url: str, cookie: str) -> dict:
     base_url = (base_url or "https://hdhive.com").rstrip('/')
     cookie = _normalize_hdhive_cookie(cookie or '')
     if not cookie:
@@ -4038,6 +4034,10 @@ def _test_hdhive_cookie(base_url: str, cookie: str, test_resource: str = "") -> 
             except Exception:
                 data = None
             if isinstance(data, dict):
+                points = _extract_points_from_payload(data)
+                if points is not None:
+                    details.append(f"points={points}")
+                    return {"success": True, "message": f"Cookie 有效 (账户积分: {points})", "details": details}
                 if data.get('success') is True:
                     return {"success": True, "message": "Cookie 有效 (API 成功)", "details": details}
                 msg = str(data.get('message') or data.get('description') or '')
@@ -4046,19 +4046,17 @@ def _test_hdhive_cookie(base_url: str, cookie: str, test_resource: str = "") -> 
                 if data.get('data') is not None or data.get('user') is not None:
                     return {"success": True, "message": "Cookie 有效 (API 返回数据)", "details": details}
         else:
+            points = _extract_hdhive_current_points_from_html(text)
+            if points is not None:
+                details.append(f"points={points}")
+                return {"success": True, "message": f"Cookie 有效 (页面积分: {points})", "details": details}
             if any(token in text for token in ("退出登录", "个人中心", "账户中心", "logout")):
                 return {"success": True, "message": "Cookie 可能有效 (页面已登录)", "details": details}
 
-    test_slug = _normalize_hdhive_test_slug(test_resource)
-    if test_slug:
-        try:
-            points = _hdhive_cookie_query_unlock_points(test_slug, cookie)
-        except Exception:
-            points = None
-        if points is not None:
-            details.append(f"points={points}")
-            details.append(f"slug={test_slug}")
-            return {"success": True, "message": f"Cookie 可用 (可解析积分: {points})", "details": details}
+    points = _hdhive_fetch_points(base_url, cookie)
+    if points is not None:
+        details.append(f"points={points}")
+        return {"success": True, "message": f"Cookie 有效 (账户积分: {points})", "details": details}
 
     return {"success": False, "message": "Cookie 无效或登录失效", "details": details}
 
@@ -4888,7 +4886,6 @@ def _get_self_service_runtime(config: dict) -> dict:
         "effective_targets": effective_targets,
         "max_results": max_results,
         "hdhive_cookie": (config.get("hdhive_cookie") or "").strip(),
-        "hdhive_cookie_test_resource": (config.get("hdhive_cookie_test_resource") or "").strip(),
         "hdhive_api_key": (config.get("hdhive_open_api_key") or "").strip(),
         "use_open_api": bool(config.get("self_service_use_open_api", False)),
         "allow_open_api_direct": bool(config.get("hdhive_open_api_direct_unlock", False)),
@@ -4934,7 +4931,6 @@ def _submit_self_service_request(
             cookie_check = _test_hdhive_cookie(
                 runtime.get("base_url") or "https://hdhive.com",
                 runtime.get("hdhive_cookie") or "",
-                runtime.get("hdhive_cookie_test_resource") or "",
             )
             if not cookie_check.get("success"):
                 msg = cookie_check.get("message") or "Cookie 无效或登录失效"
@@ -7770,7 +7766,6 @@ def manage_config():
             hdhive_cookie_clear = request.form.get('hdhive_cookie_clear') == 'on'
             threshold_raw = (request.form.get('hdhive_auto_unlock_points_threshold') or '').strip()
             hdhive_base_url = (request.form.get('hdhive_base_url') or '').strip()
-            hdhive_cookie_test_resource = (request.form.get('hdhive_cookie_test_resource') or '').strip()
             hdhive_open_api_key = (request.form.get('hdhive_open_api_key') or '').strip()
             hdhive_open_api_direct_unlock = (request.form.get('hdhive_open_api_direct_unlock') or 'off').strip().lower() == 'on'
             monitor_enabled = request.form.get('hdhive_cookie_monitor_enabled') == 'on'
@@ -7815,7 +7810,6 @@ def manage_config():
 
             if hdhive_base_url:
                 config['hdhive_base_url'] = hdhive_base_url
-            config['hdhive_cookie_test_resource'] = hdhive_cookie_test_resource
             if hdhive_open_api_key:
                 config['hdhive_open_api_key'] = hdhive_open_api_key
             config['hdhive_open_api_direct_unlock'] = hdhive_open_api_direct_unlock
@@ -9709,8 +9703,7 @@ def api_hdhive_test_cookie():
         return jsonify({"success": False, "message": msg, "details": [detail]})
 
     cookie = (config.get('hdhive_cookie') or '').strip()
-    test_resource = (config.get("hdhive_cookie_test_resource") or "").strip()
-    result = _test_hdhive_cookie(base_url, cookie, test_resource)
+    result = _test_hdhive_cookie(base_url, cookie)
     _update_monitor_state(bool(result.get("success")), result.get("message") or "")
     return jsonify(result)
 

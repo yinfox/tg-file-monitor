@@ -8,6 +8,7 @@ import re
 import shutil
 import sys
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 from urllib.parse import urljoin, urlparse, parse_qs, urlencode, urlunparse
@@ -53,6 +54,7 @@ SOURCE_CHOICES = (
 )
 _TMDB_CACHE_LOCK = threading.Lock()
 _TMDB_PROXY_URL = (os.environ.get("DRAMA_TMDB_PROXY_URL") or os.environ.get("TMDB_PROXY_URL") or "").strip()
+_RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
 
 
 def _tmdb_request_get(url: str, **kwargs):
@@ -714,15 +716,42 @@ def _resolve_tmdb_movie_release_date_batch(
     return resolved, errors, True
 
 
-def fetch_text(url: str, timeout: int = 20) -> str:
+def _is_retryable_request_error(err: Exception) -> bool:
+    if isinstance(err, (requests.Timeout, requests.ConnectionError)):
+        return True
+    status_code = getattr(getattr(err, "response", None), "status_code", None)
+    return status_code in _RETRYABLE_HTTP_STATUS_CODES
+
+
+def fetch_text(url: str, timeout: int = 20, retries: int = 3, retry_backoff_seconds: float = 1.0) -> str:
     headers = {
         "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     }
-    resp = requests.get(url, headers=headers, timeout=timeout)
-    resp.raise_for_status()
-    resp.encoding = resp.apparent_encoding or resp.encoding or "utf-8"
-    return resp.text
+    attempts = max(1, int(retries or 1))
+    last_error: Optional[Exception] = None
+    for attempt in range(1, attempts + 1):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout)
+            resp.raise_for_status()
+            resp.encoding = resp.apparent_encoding or resp.encoding or "utf-8"
+            return resp.text
+        except requests.RequestException as e:
+            last_error = e
+            if attempt >= attempts or (not _is_retryable_request_error(e)):
+                raise
+            status_code = getattr(getattr(e, "response", None), "status_code", None)
+            wait_seconds = max(0.2, float(retry_backoff_seconds or 1.0) * attempt)
+            status_note = f" status={status_code}" if status_code is not None else ""
+            print(
+                f"[WARN] 网络请求失败，准备重试 ({attempt}/{attempts}) url={url}{status_note} err={e}",
+                file=sys.stderr,
+            )
+            time.sleep(wait_seconds)
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError(f"请求失败: {url}")
 
 
 def find_latest_calendar_post_url(home_html: str, home_url: str = HOME_URL) -> str:
@@ -2104,8 +2133,10 @@ def main() -> int:
         include_all_sources = "all" in selected_sources
 
         if "calendar" in selected_sources or include_all_sources:
-            home_html = fetch_text(args.home_url)
-            post_url = args.post_url.strip() or find_latest_calendar_post_url(home_html, args.home_url)
+            post_url = (args.post_url or "").strip()
+            if not post_url:
+                home_html = fetch_text(args.home_url)
+                post_url = find_latest_calendar_post_url(home_html, args.home_url)
             post_html = fetch_text(post_url)
 
             text = strip_html(post_html)
@@ -2800,7 +2831,14 @@ def main() -> int:
 
         return 0
     except requests.RequestException as e:
-        print(f"[ERROR] 网络请求失败: {e}", file=sys.stderr)
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        if status_code == 522:
+            print(
+                f"[ERROR] 网络请求失败: {e} (HTTP 522，目标站点可能暂时不可用，建议稍后重试或先切换到其他数据源)",
+                file=sys.stderr,
+            )
+        else:
+            print(f"[ERROR] 网络请求失败: {e}", file=sys.stderr)
         return 1
     except Exception as e:
         print(f"[ERROR] 执行失败: {e}", file=sys.stderr)
