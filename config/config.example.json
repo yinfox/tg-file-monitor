@@ -93,5 +93,21 @@
     "min_concurrency": 1
   },
   "hdhive_cookie": "",
-  "hdhive_auto_unlock_points_threshold": 0
+  "hdhive_auto_unlock_points_threshold": 0,
+  "drama_calendar": {
+    "emby_gap_fill": {
+      "enabled": false,
+      "base_url": "",
+      "api_key": "",
+      "user_id": "",
+      "library_ids": "",
+      "only_aired": true,
+      "max_series": 0,
+      "max_missing_requests": 3,
+      "request_cooldown_hours": 24,
+      "auto_sync_interval_minutes": 360,
+      "auto_sync_cron_expr": "",
+      "notify_user_ids": ""
+    }
+  }
 }

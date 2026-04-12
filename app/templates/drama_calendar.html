@@ -1351,8 +1351,35 @@
         {% set tmdb_min_score_value = drama_cfg.get('tmdb_min_score', 70) %}
         {% set tmdb_advanced_open = tmdb_language_value != 'zh-CN' or tmdb_region_value != 'CN' or tmdb_year_tolerance_value != 2 or tmdb_min_score_value != 70 %}
         {% set auto_sync_enabled = drama_cfg.get('auto_sync_enabled', False) %}
+        {% set emby_gap_cfg = drama_cfg.get('emby_gap_fill', {}) %}
+        {% if emby_gap_cfg is not mapping %}
+            {% set emby_gap_cfg = {} %}
+        {% endif %}
+        {% set emby_gap_state = emby_gap_fill_state or {} %}
+        {% set emby_gap_enabled = emby_gap_cfg.get('enabled', False) %}
+        {% set emby_gap_only_aired = emby_gap_cfg.get('only_aired', True) %}
+        {% set emby_gap_status = emby_gap_state.get('last_status', '') %}
+        {% set emby_gap_running = emby_gap_state.get('running', False) %}
+        {% set emby_gap_status_text = emby_gap_state.get('last_message', '') or '暂无执行记录' %}
+        {% if emby_gap_running %}
+            {% set emby_gap_status_emoji = '⏳' %}
+        {% elif emby_gap_status == 'success' %}
+            {% set emby_gap_status_emoji = '✅' %}
+        {% elif emby_gap_status in ['warning', 'disabled'] %}
+            {% set emby_gap_status_emoji = '⚠️' %}
+        {% elif emby_gap_status == 'error' %}
+            {% set emby_gap_status_emoji = '❌' %}
+        {% else %}
+            {% set emby_gap_status_emoji = 'ℹ️' %}
+        {% endif %}
+        {% set emby_summary = emby_gap_state.get('last_summary', {}) if emby_gap_state is mapping else {} %}
+        {% set emby_missing_items = emby_gap_state.get('last_missing_items', []) if emby_gap_state is mapping else [] %}
+        {% if emby_missing_items is not sequence %}
+            {% set emby_missing_items = [] %}
+        {% endif %}
         {% set write_panel_open = False %}
         {% set finish_panel_open = False %}
+        {% set emby_panel_open = emby_gap_enabled %}
         {% set write_advanced_open = not drama_cfg.get('managed_scope_source_only', True) %}
         {% set env_files_count = env_files_raw.splitlines()|length if '\n' in env_files_raw else (env_files_raw.split(',')|select|list|length if env_files_raw else 0) %}
         {% if 'all' in selected_sources %}
@@ -1386,6 +1413,9 @@
                         </a>
                         <a href="#section-schedule" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
                             <i class="bi bi-clock-history me-1"></i>自动调度
+                        </a>
+                        <a href="#section-emby-gap-fill" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
+                            <i class="bi bi-collection-play me-1"></i>Emby 补缺
                         </a>
                         <a href="{{ url_for('drama_calendar_log') }}" class="btn btn-outline-light btn-sm drama-hero-action-btn">
                             <i class="bi bi-journal-text me-1"></i>日志
@@ -1586,6 +1616,9 @@
                     <a href="#section-schedule" class="drama-quick-nav-link" data-drama-nav>
                         <span>自动调度</span><i class="bi bi-clock-history"></i>
                     </a>
+                    <a href="#section-emby-gap-fill" class="drama-quick-nav-link" data-drama-nav>
+                        <span>Emby 补缺</span><i class="bi bi-collection-play"></i>
+                    </a>
                     <a href="#section-whitelist" class="drama-quick-nav-link" data-drama-nav>
                         <span>白名单编辑</span><i class="bi bi-pencil-square"></i>
                     </a>
@@ -1771,7 +1804,8 @@
                     <strong><i class="bi bi-lightning-charge"></i>配置区说明</strong>
                     <small>这里集中管理来源抓取参数、写入方式、TMDB 判定和自动调度。建议先保存参数，再按需执行“预览提取”或“执行写入”。</small>
                 </div>
-                <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-3">
+                <form id="drama_main_form" action="{{ url_for('drama_calendar_settings') }}" method="POST" class="mb-3">
+                    <input type="hidden" name="action" id="drama_action_hidden" value="">
 
                     <div class="mb-2" data-drama-modal-block="source-select">
                         <label class="form-label small">数据源</label>
@@ -2425,22 +2459,166 @@
                         </div>
                     </div>
 
-                    <div class="action-bar" data-drama-modal-block="actions">
-                        <button type="submit" name="action" value="update_drama_calendar_settings" class="btn btn-outline-primary btn-sm" data-drama-action="save">保存追剧配置</button>
+                    <div class="source-panel drama-section-anchor" id="section-emby-gap-fill" data-drama-modal-block="emby">
+                        <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_emby_gap_fill_panel"
+                            aria-expanded="{{ 'true' if emby_panel_open else 'false' }}" aria-controls="drama_emby_gap_fill_panel">
+                            <span class="panel-toggle-copy">
+                                <span class="panel-toggle-heading">Emby 自动查漏补缺</span>
+                                <span class="panel-toggle-meta">
+                                    {% if emby_gap_state.get('enabled') %}
+                                        已启用 · 下次执行 {{ emby_gap_state.get('next_run_at', '未启用') or '未启用' }}
+                                    {% else %}
+                                        未启用 · 可手动触发一次补缺
+                                    {% endif %}
+                                </span>
+                            </span>
+                            <i class="bi bi-chevron-down panel-toggle-icon"></i>
+                        </button>
 
-                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-info btn-sm" data-drama-action="preview"
+                        <div id="drama_emby_gap_fill_panel" class="collapse{% if emby_panel_open %} show{% endif %}">
+                            <div class="panel-collapse-body">
+                                <div class="mb-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" id="drama_emby_gap_fill_enabled" name="drama_emby_gap_fill_enabled"
+                                            {% if emby_gap_enabled %}checked{% endif %}>
+                                        <label class="form-check-label small" for="drama_emby_gap_fill_enabled">
+                                            开启 Emby 自动查漏补缺（自动提交自助观影申请）
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div class="dense-grid">
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_base_url">Emby 地址</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_emby_base_url" name="drama_emby_base_url"
+                                            value="{{ emby_gap_cfg.get('base_url', '') }}" placeholder="http://127.0.0.1:8096">
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_api_key">Emby API Key</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_emby_api_key" name="drama_emby_api_key"
+                                            value="{{ emby_gap_cfg.get('api_key', '') }}" placeholder="Emby API Key">
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_user_id">Emby 用户 ID（可选）</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_emby_user_id" name="drama_emby_user_id"
+                                            value="{{ emby_gap_cfg.get('user_id', '') }}" placeholder="留空自动选取管理员/首个用户">
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_library_ids">媒体库 ID（可选）</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_emby_library_ids" name="drama_emby_library_ids"
+                                            value="{{ emby_gap_cfg.get('library_ids', '') }}" placeholder="多个用逗号分隔；留空扫描全部库">
+                                    </div>
+                                </div>
+
+                                <div class="dense-grid mt-2">
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_auto_sync_interval_minutes">扫描间隔（分钟）</label>
+                                        <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_emby_auto_sync_interval_minutes" name="drama_emby_auto_sync_interval_minutes"
+                                            value="{{ emby_gap_cfg.get('auto_sync_interval_minutes', 360) }}" placeholder="360">
+                                        <div class="form-text">留空 Cron 时按该间隔执行。</div>
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_auto_sync_cron_expr">Cron 表达式（可选）</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_emby_auto_sync_cron_expr" name="drama_emby_auto_sync_cron_expr"
+                                            value="{{ emby_gap_cfg.get('auto_sync_cron_expr', '') }}" placeholder="例如：15 */6 * * *">
+                                        <div class="form-text">标准 5 段，优先于间隔。</div>
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_max_series">单次扫描剧集上限</label>
+                                        {% set emby_max_series_value = emby_gap_cfg.get('max_series', 0) %}
+                                        <input type="number" min="0" step="1" class="form-control form-control-sm" id="drama_emby_max_series" name="drama_emby_max_series"
+                                            value="{{ '' if (emby_max_series_value|string) in ['0', ''] else emby_max_series_value }}" placeholder="留空或 0 表示全部剧集">
+                                        <div class="form-text">留空或填 0 表示扫描全部剧集。</div>
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_series_workers">查漏并发数</label>
+                                        <input type="number" min="1" max="12" step="1" class="form-control form-control-sm" id="drama_emby_series_workers" name="drama_emby_series_workers"
+                                            value="{{ emby_gap_cfg.get('series_workers', 6) }}" placeholder="6">
+                                        <div class="form-text">仅影响 Emby 查漏请求并发，建议 4~8（跨境网络可适当提高）。</div>
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_max_missing_requests">单次提交上限</label>
+                                        <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_emby_max_missing_requests" name="drama_emby_max_missing_requests"
+                                            value="{{ emby_gap_cfg.get('max_missing_requests', 3) }}" placeholder="3">
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_request_cooldown_hours">同季补缺冷却（小时）</label>
+                                        <input type="number" min="1" step="1" class="form-control form-control-sm" id="drama_emby_request_cooldown_hours" name="drama_emby_request_cooldown_hours"
+                                            value="{{ emby_gap_cfg.get('request_cooldown_hours', 24) }}" placeholder="24">
+                                    </div>
+                                    <div>
+                                        <label class="form-label small" for="drama_emby_notify_user_ids">运行通知用户（可选）</label>
+                                        <input type="text" class="form-control form-control-sm" id="drama_emby_notify_user_ids" name="drama_emby_notify_user_ids"
+                                            value="{{ emby_gap_cfg.get('notify_user_ids', '') }}" placeholder="留空复用自助观影通知用户">
+                                    </div>
+                                </div>
+
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="drama_emby_only_aired" name="drama_emby_only_aired"
+                                        {% if emby_gap_only_aired %}checked{% endif %}>
+                                    <label class="form-check-label small" for="drama_emby_only_aired">仅处理已播出的缺失剧集（忽略未来首播）</label>
+                                </div>
+
+                                <div class="form-text mt-2">
+                                    状态：
+                                    <span class="{% if emby_gap_status == 'success' %}text-success{% elif emby_gap_status in ['warning', 'disabled'] %}text-warning{% elif emby_gap_status == 'error' %}text-danger{% else %}text-muted{% endif %}">
+                                        {{ emby_gap_status_emoji }} {{ emby_gap_status_text }}
+                                    </span>
+                                    {% if emby_gap_state.get('last_run_at') %}（{{ emby_gap_state.get('last_run_at') }}）{% endif %}
+                                </div>
+                                <div class="form-text text-muted" id="embyGapUiPendingHint" aria-live="polite">
+                                    {% if emby_gap_running %}⏳ 后台执行中，页面会自动刷新显示最新进度。{% else %}🟢 页面就绪，可执行 Emby 查漏或补缺。{% endif %}
+                                </div>
+                                <div class="form-text">
+                                    上次统计：扫描 {{ emby_summary.get('scanned', '0') or '0' }}，缺季 {{ emby_summary.get('missing', '0') or '0' }}，待提交 {{ emby_summary.get('pending', '0') or '0' }}，已提交 {{ emby_summary.get('submitted', '0') or '0' }}。
+                                </div>
+                                {% if emby_missing_items %}
+                                <div class="mt-2">
+                                    <button type="button" class="btn btn-outline-dark btn-sm" data-bs-toggle="modal" data-bs-target="#embyMissingDetailModal">
+                                        <i class="bi bi-card-list me-1"></i>查看缺失详情弹窗
+                                    </button>
+                                </div>
+                                <div class="border rounded bg-light p-2 mt-2" style="max-height: 260px; overflow-y: auto;">
+                                    <div class="small fw-semibold mb-1">最近查漏列表（{{ emby_missing_items|length }}）</div>
+                                    <div class="small">
+                                        {% for item in emby_missing_items %}
+                                        <div class="mb-1">
+                                            {{ item.get('title', '未知剧集') }} · {{ item.get('season_label', '') }} · 缺 {{ item.get('missing_episodes', 0) }} 集
+                                            {% if item.get('cooldown_active') %}
+                                            <span class="text-warning">（冷却中{{ item.get('cooldown_remaining_hours', 0) }}h）</span>
+                                            {% endif %}
+                                        </div>
+                                        {% endfor %}
+                                    </div>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="action-bar" data-drama-modal-block="actions">
+                        <button type="submit" form="drama_main_form" name="action" value="update_drama_calendar_settings" class="btn btn-outline-primary btn-sm" data-drama-action="save">保存追剧配置</button>
+
+                        <button type="submit" form="drama_main_form" name="action" value="run_drama_calendar" class="btn btn-info btn-sm" data-drama-action="preview"
                             onclick="document.getElementById('run_mode').value='preview';">
                             <i class="bi bi-search me-1"></i>预览提取
                         </button>
 
-                        <button type="submit" name="action" value="run_drama_calendar" class="btn btn-primary btn-sm" data-drama-action="apply"
+                        <button type="submit" form="drama_main_form" name="action" value="run_drama_calendar" class="btn btn-primary btn-sm" data-drama-action="apply"
                             onclick="document.getElementById('run_mode').value='apply'; return confirm('确认把提取后的正则写入 tvchannel_filters.json 吗？');">
                             <i class="bi bi-download me-1"></i>执行写入
                         </button>
 
-                        <button type="submit" name="action" value="clear_drama_calendar_env" class="btn btn-outline-danger btn-sm" data-drama-action="clear"
+                        <button type="submit" form="drama_main_form" name="action" value="clear_drama_calendar_env" class="btn btn-outline-danger btn-sm" data-drama-action="clear"
                             onclick="return confirm('确认清空 tvchannel_filters.json 的追剧白名单吗？');">
                             <i class="bi bi-eraser me-1"></i>清空追剧白名单
+                        </button>
+                        <button type="submit" form="drama_main_form" name="action" value="list_emby_gap_fill" class="btn btn-outline-secondary btn-sm" data-drama-action="emby-list">
+                            <i class="bi bi-list-check me-1"></i>Emby 先查漏
+                        </button>
+                        <button type="submit" form="drama_main_form" name="action" value="run_emby_gap_fill" class="btn btn-outline-success btn-sm" data-drama-action="emby-run"
+                            onclick="return confirm('确认立即执行 Emby 自动查漏补缺吗？');">
+                            <i class="bi bi-collection-play me-1"></i>Emby 立即补缺
                         </button>
                     </div>
                     <input type="hidden" id="run_mode" name="run_mode" value="preview">
@@ -2470,6 +2648,89 @@
         </div>
     </div>
 </div>
+
+<div class="modal fade" id="embyMissingDetailModal" tabindex="-1" aria-labelledby="embyMissingDetailModalLabel" aria-hidden="true"
+    data-auto-open="{{ '1' if show_emby_missing_modal else '0' }}">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="embyMissingDetailModalLabel">Emby 缺失详情</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                <div class="small text-muted mb-2">
+                    执行状态：{{ emby_gap_status_emoji }} {{ emby_gap_status_text }}{% if emby_gap_state.get('last_run_at') %}（{{ emby_gap_state.get('last_run_at') }}）{% endif %}
+                </div>
+                <div class="small text-muted mb-2" id="embyGapModalPendingHint" aria-live="polite">
+                    {% if emby_gap_running %}⏳ 后台执行中，弹窗会随页面刷新同步进度。{% else %}🟢 弹窗就绪，可单独提交补缺。{% endif %}
+                </div>
+                <div class="small text-muted mb-3">
+                    扫描 {{ emby_summary.get('scanned', '0') or '0' }} 部剧 · 缺季 {{ emby_summary.get('missing', '0') or '0' }} · 待提交 {{ emby_summary.get('pending', '0') or '0' }} · 已提交 {{ emby_summary.get('submitted', '0') or '0' }}
+                </div>
+                {% if emby_missing_items %}
+                <div class="table-responsive">
+                    <table class="table table-sm table-striped align-middle">
+                        <thead>
+                            <tr>
+                                <th style="width: 64px;">#</th>
+                                <th>剧名</th>
+                                <th style="width: 100px;">季</th>
+                                <th style="width: 120px;">缺失集数</th>
+                                <th style="width: 180px;">冷却状态</th>
+                                <th style="width: 180px;">上次提交</th>
+                                <th style="width: 120px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for item in emby_missing_items %}
+                            <tr>
+                                <td>{{ loop.index }}</td>
+                                <td>{{ item.get('title', '未知剧集') }}</td>
+                                <td>{{ item.get('season_label', '') }}</td>
+                                <td>{{ item.get('missing_episodes', 0) }}</td>
+                                <td>
+                                    {% if item.get('cooldown_active') %}
+                                        <span class="text-warning">冷却中 {{ item.get('cooldown_remaining_hours', 0) }}h</span>
+                                    {% else %}
+                                        <span class="text-success">可提交</span>
+                                    {% endif %}
+                                </td>
+                                <td>{{ item.get('last_submitted_at', '') or '-' }}</td>
+                                <td>
+                                    <form action="{{ url_for('drama_calendar_settings') }}" method="POST" class="d-inline js-emby-gap-submit-form"
+                                        data-emby-title="{{ item.get('title', '')|e }}"
+                                        data-emby-season="{{ item.get('season_label', '')|e }}">
+                                        <input type="hidden" name="action" value="submit_emby_gap_item">
+                                        <input type="hidden" name="emby_series_id" value="{{ item.get('series_id', '') }}">
+                                        <input type="hidden" name="emby_title" value="{{ item.get('title', '') }}">
+                                        <input type="hidden" name="emby_year" value="{{ item.get('year', '') }}">
+                                        <input type="hidden" name="emby_season" value="{{ item.get('season', '') }}">
+                                        <input type="hidden" name="emby_season_label" value="{{ item.get('season_label', '') }}">
+                                        <input type="hidden" name="emby_missing_episodes" value="{{ item.get('missing_episodes', 0) }}">
+                                        <button type="submit" class="btn btn-outline-primary btn-sm"
+                                            {% if item.get('cooldown_active') %}disabled{% endif %}
+                                            {% if not item.get('cooldown_active') %}onclick="return confirm('确认提交 {{ item.get('title', '') }} {{ item.get('season_label', '') }} 的补缺申请吗？');"{% endif %}>
+                                            {% if item.get('cooldown_active') %}冷却中{% else %}提交补缺{% endif %}
+                                        </button>
+                                    </form>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% else %}
+                <div class="alert alert-secondary mb-0">
+                    本次没有检测到缺季缺集详情。
+                </div>
+                {% endif %}
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary btn-sm" data-bs-dismiss="modal">关闭</button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -2484,21 +2745,24 @@
             '#section-config-main',
             '#section-write-settings',
             '#section-finish-settings',
-            '#section-schedule'
+            '#section-schedule',
+            '#section-emby-gap-fill'
         ]);
         const dramaModalContainers = {
             '#section-whitelist': '#section-whitelist',
             '#section-config-main': '#section-config-main',
             '#section-write-settings': '#section-config-main',
             '#section-finish-settings': '#section-config-main',
-            '#section-schedule': '#section-config-main'
+            '#section-schedule': '#section-config-main',
+            '#section-emby-gap-fill': '#section-config-main'
         };
         const dramaSectionModalTitles = {
             '#section-whitelist': '白名单编辑',
             '#section-config-main': '来源配置',
             '#section-write-settings': '写入设置',
             '#section-finish-settings': 'TMDB 判定',
-            '#section-schedule': '自动调度'
+            '#section-schedule': '自动调度',
+            '#section-emby-gap-fill': 'Emby 补缺'
         };
         let currentDramaSectionState = null;
         let currentDramaScopedBlocks = [];
@@ -2536,7 +2800,8 @@
                 '#section-config-main': new Set(['source-select', 'source-params', 'actions', 'secondary']),
                 '#section-write-settings': new Set(['write', 'actions', 'secondary']),
                 '#section-finish-settings': new Set(['finish', 'actions']),
-                '#section-schedule': new Set(['schedule', 'actions'])
+                '#section-schedule': new Set(['schedule', 'actions']),
+                '#section-emby-gap-fill': new Set(['emby', 'actions'])
             };
             const visible = visibleMap[targetSelector];
             if (!visible) {
@@ -2553,7 +2818,8 @@
             const visibleActionsMap = {
                 '#section-write-settings': new Set(['save', 'preview', 'apply', 'clear']),
                 '#section-finish-settings': new Set(['save']),
-                '#section-schedule': new Set(['save'])
+                '#section-schedule': new Set(['save']),
+                '#section-emby-gap-fill': new Set(['save', 'emby-list', 'emby-run'])
             };
             const visibleActions = visibleActionsMap[targetSelector];
             if (visibleActions) {
@@ -2728,6 +2994,91 @@
 
         syncSourceState();
 
+        const mainDramaForm = document.getElementById('drama_main_form');
+        const dramaActionHidden = document.getElementById('drama_action_hidden');
+        const embyGapUiPendingHint = document.getElementById('embyGapUiPendingHint');
+        const embyGapModalPendingHint = document.getElementById('embyGapModalPendingHint');
+        const embyMissingDetailModalEl = document.getElementById('embyMissingDetailModal');
+        const embyGapRunning = {{ 'true' if emby_gap_running else 'false' }};
+
+        function setEmbyPendingHint(text) {
+            const message = String(text || '').trim();
+            if (!message) {
+                return;
+            }
+            [embyGapUiPendingHint, embyGapModalPendingHint].forEach((el) => {
+                if (!el) {
+                    return;
+                }
+                el.textContent = message;
+                el.classList.remove('text-muted', 'text-success', 'text-warning', 'text-danger');
+                el.classList.add('text-primary', 'fw-semibold');
+            });
+        }
+
+        function lockPendingButton(button, pendingLabel) {
+            if (!button || button.dataset.pendingLocked === '1') {
+                return;
+            }
+            button.dataset.pendingLocked = '1';
+            button.disabled = true;
+            if (pendingLabel) {
+                button.textContent = pendingLabel;
+            }
+        }
+
+        if (embyGapRunning) {
+            setEmbyPendingHint('⏳ 后台执行中，页面每 8 秒自动刷新一次...');
+            window.setTimeout(() => {
+                window.location.reload();
+            }, 8000);
+        }
+
+        if (mainDramaForm && dramaActionHidden) {
+            mainDramaForm.querySelectorAll('button[data-drama-action][name="action"]').forEach((btn) => {
+                btn.addEventListener('click', () => {
+                    dramaActionHidden.value = btn.value || '';
+                });
+            });
+
+            mainDramaForm.addEventListener('submit', (event) => {
+                const submitter = event.submitter || null;
+                const actionValue = String(
+                    (submitter && submitter.value) || dramaActionHidden.value || ''
+                ).trim();
+                if (actionValue === 'list_emby_gap_fill') {
+                    setEmbyPendingHint('🔍 Emby 正在查漏，请稍候…');
+                    lockPendingButton(submitter, '🔍 查漏中...');
+                } else if (actionValue === 'run_emby_gap_fill') {
+                    setEmbyPendingHint('🚀 Emby 正在补缺，请稍候…');
+                    lockPendingButton(submitter, '🚀 补缺中...');
+                }
+            });
+        }
+
+        document.querySelectorAll('form.js-emby-gap-submit-form').forEach((formEl) => {
+            formEl.addEventListener('submit', (event) => {
+                const title = String(formEl.dataset.embyTitle || '').trim();
+                const season = String(formEl.dataset.embySeason || '').trim();
+                const titleLabel = [title, season].filter(Boolean).join(' ');
+                if (titleLabel) {
+                    setEmbyPendingHint(`📤 正在提交 ${titleLabel} 的补缺申请，请稍候…`);
+                } else {
+                    setEmbyPendingHint('📤 正在提交补缺申请，请稍候…');
+                }
+                const submitter = event.submitter || formEl.querySelector('button[type="submit"]');
+                lockPendingButton(submitter, '📤 提交中...');
+            });
+        });
+
+        if (embyMissingDetailModalEl) {
+            embyMissingDetailModalEl.addEventListener('shown.bs.modal', () => {
+                if (embyGapModalPendingHint && embyGapModalPendingHint.classList.contains('text-muted')) {
+                    embyGapModalPendingHint.textContent = '🟢 弹窗就绪，可单独提交补缺。';
+                }
+            });
+        }
+
     })();
 
     (function () {
@@ -2822,7 +3173,8 @@
             ['#section-whitelist', 'env_edit_panel'],
             ['#section-write-settings', 'drama_write_panel'],
             ['#section-finish-settings', 'drama_finish_panel'],
-            ['#section-schedule', 'drama_auto_sync_panel']
+            ['#section-schedule', 'drama_auto_sync_panel'],
+            ['#section-emby-gap-fill', 'drama_emby_gap_fill_panel']
         ]);
         let jumpTimer = null;
 
@@ -2931,6 +3283,22 @@
         updateDramaNav();
         window.addEventListener('scroll', updateDramaNav, { passive: true });
         window.addEventListener('resize', updateDramaNav);
+
+        const initialHash = window.location.hash || '';
+        if (initialHash && document.querySelector(initialHash)) {
+            window.setTimeout(() => {
+                jumpToDramaSection(initialHash);
+                updateDramaNav();
+            }, 80);
+        }
+
+        const embyMissingDetailModalEl = document.getElementById('embyMissingDetailModal');
+        if (embyMissingDetailModalEl && embyMissingDetailModalEl.dataset.autoOpen === '1') {
+            window.setTimeout(() => {
+                const modal = bootstrap.Modal.getOrCreateInstance(embyMissingDetailModalEl);
+                modal.show();
+            }, 180);
+        }
     })();
 </script>
 {% endblock %}

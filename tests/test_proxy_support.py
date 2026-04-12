@@ -183,6 +183,63 @@ class ProxySupportTestCase(unittest.TestCase):
         fake_p115.upload_info.assert_called_once()
         fake_p115.upload_init.assert_called_once()
 
+    def test_115_second_transfer_falls_back_to_upload_info_when_upload_key_raises(self):
+        client = Client115(cookie="cookie=value")
+        fake_p115 = Mock()
+        fake_p115.upload_key.side_effect = RuntimeError(
+            "code=405 method='GET' url='https://proapi.115.com/android/2.0/user/upload_key' "
+            "reason='Method Not Allowed'"
+        )
+        fake_p115.upload_info.return_value = {
+            "state": True,
+            "userkey": "fallback-key",
+            "userid": "123456",
+        }
+        fake_p115.upload_init.return_value = {
+            "state": True,
+            "status": 2,
+            "data": {"file_id": "123", "pick_code": "pick"},
+        }
+        client.p115_client = fake_p115
+        result = client.check_file_exists(
+            "9e5198f1f78afb17f373f1e8f5ffa857888352fe",
+            879039017,
+            "test.mp4",
+            target="U_1_123456",
+            file_path=__file__,
+        )
+        self.assertTrue(result["success"])
+        self.assertTrue(result["already_exists"])
+        self.assertEqual(fake_p115.upload_key.call_count, 1)
+        self.assertEqual(fake_p115.upload_info.call_count, 1)
+        fake_p115.upload_init.assert_called_once()
+
+    def test_115_upload_chain_falls_back_to_upload_info_when_upload_key_raises(self):
+        client = Client115(cookie="cookie=value")
+        fake_p115 = Mock()
+        fake_p115.upload_key.side_effect = RuntimeError(
+            "code=405 method='GET' url='https://proapi.115.com/android/2.0/user/upload_key' "
+            "reason='Method Not Allowed'"
+        )
+        fake_p115.upload_info.return_value = {
+            "state": True,
+            "userkey": "fallback-key",
+            "userid": "123456",
+        }
+        fake_p115.upload_init.return_value = {
+            "state": True,
+            "status": 1,
+            "reuse": False,
+            "data": {},
+        }
+        client.p115_client = fake_p115
+        result = client.test_upload_chain(target="U_1_123456")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["credential_source"], "upload_info")
+        self.assertEqual(fake_p115.upload_key.call_count, 1)
+        self.assertEqual(fake_p115.upload_info.call_count, 1)
+        fake_p115.upload_init.assert_called_once()
+
     def test_web_downloader_uses_only_downloader_proxy_scope(self):
         self._login()
         with tempfile.TemporaryDirectory() as tmpdir:

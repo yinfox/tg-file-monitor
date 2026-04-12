@@ -75,7 +75,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.49`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.57`
 
 升级示例：
 
@@ -87,7 +87,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.49
+y1nf0x/tg-file-monitor:0.5.57
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -395,6 +395,12 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
+### v0.5.57 (2026-04-12)
+- ✅ Emby 自动补缺调度改为全量提交，不再受“单次提交上限”限制；保留同季冷却控制，减少重复申请
+- ✅ 115 秒传/上传链路继续加固：`upload_key` 异常可回退 `upload_info`，秒传命中后目标目录补全失败会自动回退本地同步
+- ✅ 自助观影 Open API 资源筛选与回退策略增强，季匹配、网盘识别与过滤行为更稳定
+- ✅ 文档统一为中文，并同步镜像版本标注到 `y1nf0x/tg-file-monitor:0.5.57`
+
 ### v0.5.44 (2026-04-09)
 - ✅ HDHive 签到修复定稿：保留动态 chunk 刷新获取 live `checkIn` action 的最小修复集，移除实验性的浏览器兜底代码
 - ✅ 当前站点下手动/自动签到维持可用，真实验证返回“你已经签到过了，明天再来吧”并同步当前积分

@@ -120,6 +120,71 @@ class Client115:
                 break
         return user_id, user_key
 
+    def _call_upload_credential_api(self, api_name: str, **kwargs) -> Dict[str, Any]:
+        """调用上传凭证接口并将异常标准化为字典，确保可继续执行回退逻辑。"""
+        method = getattr(self.p115_client, api_name, None)
+        if not callable(method):
+            return {
+                'state': False,
+                'error': f'{api_name} not available on p115client',
+            }
+
+        try:
+            resp = method(**kwargs)
+        except Exception as e:
+            return {
+                'state': False,
+                'error': f'{api_name} exception: {e}',
+                'exception_type': type(e).__name__,
+            }
+
+        if isinstance(resp, dict):
+            return resp
+
+        return {
+            'state': False,
+            'error': f'{api_name} returned invalid response',
+            'response': str(resp),
+        }
+
+    def _resolve_upload_credentials(self, *, verbose: bool = False) -> Dict[str, Any]:
+        """
+        获取上传凭证（先 upload_key，再 upload_info 回退）。
+        upload_key/upload_info 抛异常时也会转成错误结果，避免直接中断流程。
+        """
+        credential_source = 'upload_key'
+        key_result = self._call_upload_credential_api('upload_key', app='android')
+        if verbose:
+            print(f"[凭证结果] {json.dumps(key_result, ensure_ascii=False, indent=2, default=str)}")
+
+        user_id, user_key = self._extract_upload_credentials(key_result)
+        last_credential_error = key_result
+        info_result = None
+
+        if not user_key:
+            if verbose:
+                print("\n[步骤1-回退] upload_key 不可用，尝试 p115client.upload_info()...")
+            info_result = self._call_upload_credential_api('upload_info')
+            if verbose:
+                print(f"[上传信息结果] {json.dumps(info_result, ensure_ascii=False, indent=2, default=str)}")
+
+            info_user_id, info_user_key = self._extract_upload_credentials(info_result)
+            if info_user_key:
+                user_id = info_user_id
+                user_key = info_user_key
+                credential_source = 'upload_info'
+            else:
+                last_credential_error = info_result
+
+        return {
+            'user_id': user_id,
+            'user_key': user_key,
+            'credential_source': credential_source,
+            'last_credential_error': last_credential_error,
+            'key_result': key_result,
+            'info_result': info_result,
+        }
+
     def _run_upload_init_with_credentials(
         self,
         *,
@@ -205,24 +270,11 @@ class Client115:
         try:
             # ======== 步骤1：刷新 user_key（交给 p115client 原生处理） ========
             print("\n[步骤1] 刷新上传凭证（p115client.upload_key）...")
-            key_result = self.p115_client.upload_key(app='android')
-            print(f"[凭证结果] {json.dumps(key_result, ensure_ascii=False, indent=2)}")
-
-            user_id, user_key = self._extract_upload_credentials(key_result if isinstance(key_result, dict) else {})
-            credential_source = 'upload_key'
-            last_credential_error = key_result if isinstance(key_result, dict) else {"error": "upload_key returned invalid response"}
-
-            if not user_key:
-                print("\n[步骤1-回退] upload_key 不可用，尝试 p115client.upload_info()...")
-                info_result = self.p115_client.upload_info()
-                print(f"[上传信息结果] {json.dumps(info_result, ensure_ascii=False, indent=2)}")
-                info_user_id, info_user_key = self._extract_upload_credentials(info_result if isinstance(info_result, dict) else {})
-                if info_user_key:
-                    user_id = info_user_id
-                    user_key = info_user_key
-                    credential_source = 'upload_info'
-                else:
-                    last_credential_error = info_result if isinstance(info_result, dict) else last_credential_error
+            credential_result = self._resolve_upload_credentials(verbose=True)
+            user_id = credential_result.get('user_id', '')
+            user_key = credential_result.get('user_key', '')
+            credential_source = credential_result.get('credential_source', 'upload_key')
+            last_credential_error = credential_result.get('last_credential_error') or {'error': 'unknown credential error'}
 
             if not user_key:
                 errno = last_credential_error.get('errno') if isinstance(last_credential_error, dict) else ''
@@ -366,20 +418,11 @@ class Client115:
                 tmp.write(probe_content)
                 temp_path = tmp.name
 
-            key_result = self.p115_client.upload_key(app='android')
-            user_id, user_key = self._extract_upload_credentials(key_result if isinstance(key_result, dict) else {})
-            credential_source = 'upload_key'
-            last_credential_error = key_result if isinstance(key_result, dict) else {"error": "upload_key returned invalid response"}
-
-            if not user_key:
-                info_result = self.p115_client.upload_info()
-                info_user_id, info_user_key = self._extract_upload_credentials(info_result if isinstance(info_result, dict) else {})
-                if info_user_key:
-                    user_id = info_user_id
-                    user_key = info_user_key
-                    credential_source = 'upload_info'
-                else:
-                    last_credential_error = info_result if isinstance(info_result, dict) else last_credential_error
+            credential_result = self._resolve_upload_credentials()
+            user_id = credential_result.get('user_id', '')
+            user_key = credential_result.get('user_key', '')
+            credential_source = credential_result.get('credential_source', 'upload_key')
+            last_credential_error = credential_result.get('last_credential_error') or {'error': 'unknown credential error'}
 
             if not user_key:
                 errno = last_credential_error.get('errno') if isinstance(last_credential_error, dict) else ''

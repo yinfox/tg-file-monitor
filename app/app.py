@@ -15,6 +15,7 @@ import datetime
 import shutil
 import requests
 import copy
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import quote_plus, quote
 from typing import Tuple, Optional, List
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session, send_file
@@ -56,7 +57,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.49"
+VERSION = "0.5.57"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -70,6 +71,8 @@ DOWNLOAD_RISK_STATS_FILE = os.path.join(CONFIG_DIR, 'download_risk_stats.json')
 DOWNLOAD_QUEUE_STATS_FILE = os.path.join(CONFIG_DIR, 'download_queue_stats.json')
 DRAMA_CALENDAR_LOG_FILE = os.path.join(LOG_DIR, 'drama_calendar.log')
 DRAMA_CALENDAR_STATE_FILE = os.path.join(CONFIG_DIR, 'drama_calendar_state.json')
+EMBY_GAP_FILL_LOG_FILE = os.path.join(LOG_DIR, 'emby_gap_fill.log')
+EMBY_GAP_FILL_STATE_FILE = os.path.join(CONFIG_DIR, 'emby_gap_fill_state.json')
 TV_CHANNEL_FILTERS_FILE = os.path.join(CONFIG_DIR, 'tvchannel_filters.json')
 TV_FILTERS_STATE_KEY = 'tvchannel_filters.json'
 DRAMA_RUN_BUSY_MESSAGE = '当前已有追剧任务在运行（可能是自动调度），请稍后重试。'
@@ -124,6 +127,24 @@ def _normalize_self_service_storage_mode(mode) -> str:
     if normalized not in ("any", "115", "123", "115_123"):
         return "any"
     return normalized
+
+
+def _default_emby_gap_fill_config() -> dict:
+    return {
+        "enabled": False,
+        "base_url": "",
+        "api_key": "",
+        "user_id": "",
+        "library_ids": "",
+        "only_aired": True,
+        "max_series": 0,
+        "max_missing_requests": 3,
+        "request_cooldown_hours": 24,
+        "series_workers": 6,
+        "auto_sync_interval_minutes": 360,
+        "auto_sync_cron_expr": "",
+        "notify_user_ids": "",
+    }
 
 
 def load_config():
@@ -269,7 +290,8 @@ def load_config():
             "finish_detect_mode": "hybrid",
             "tmdb_api_key": "",
             "tmdb_language": "zh-CN",
-            "tmdb_region": "CN"
+            "tmdb_region": "CN",
+            "emby_gap_fill": _default_emby_gap_fill_config(),
         }
     }
     if not os.path.exists(CONFIG_FILE):
@@ -432,6 +454,14 @@ def load_config():
                     merged_drama = default_config["drama_calendar"].copy()
                     raw_drama = config.get("drama_calendar") or {}
                     merged_drama.update(raw_drama)
+                    default_emby_gap_cfg = _default_emby_gap_fill_config()
+                    raw_emby_gap_cfg = raw_drama.get("emby_gap_fill")
+                    if isinstance(raw_emby_gap_cfg, dict):
+                        merged_emby_gap_cfg = default_emby_gap_cfg.copy()
+                        merged_emby_gap_cfg.update(raw_emby_gap_cfg)
+                        merged_drama["emby_gap_fill"] = merged_emby_gap_cfg
+                    else:
+                        merged_drama["emby_gap_fill"] = default_emby_gap_cfg
                     for key in (
                         "douban_asia_top_n",
                         "douban_domestic_top_n",
@@ -809,6 +839,10 @@ _SEASON_EP_RE = re.compile(
     r'S(?:eason)?\s*0*(\d{1,2})\s*[^0-9A-Za-z]*\s*E\s*\d{1,3}',
     re.IGNORECASE,
 )
+_EPISODE_TOKEN_RE = re.compile(
+    r'(?:\bE(?:pisode)?\s*0*(\d{1,4})\b)|(?:第\s*([0-9]{1,4})\s*集)',
+    re.IGNORECASE,
+)
 
 
 def _chinese_numeral_to_int(text: str) -> Optional[int]:
@@ -850,6 +884,26 @@ def _coerce_season_int(value) -> Optional[int]:
     if 1 <= num <= 99:
         return num
     return None
+
+
+def _coerce_episode_int(value) -> Optional[int]:
+    try:
+        num = int(value)
+    except Exception:
+        return None
+    if 1 <= num <= 5000:
+        return num
+    return None
+
+
+def _extract_episode_index_from_name(text: str) -> Optional[int]:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    match = _EPISODE_TOKEN_RE.search(raw)
+    if not match:
+        return None
+    return _coerce_episode_int(match.group(1) or match.group(2))
 
 
 def _extract_season_candidates(text: str) -> list:
@@ -2707,6 +2761,11 @@ _DRAMA_SCHEDULER_STOP_EVENT = threading.Event()
 _DRAMA_SCHEDULER_THREAD = None
 _DRAMA_SCHEDULER_LOCK = threading.Lock()
 _DRAMA_RUN_LOCK = threading.Lock()
+_EMBY_GAP_FILL_SCHEDULER_STOP_EVENT = threading.Event()
+_EMBY_GAP_FILL_SCHEDULER_THREAD = None
+_EMBY_GAP_FILL_SCHEDULER_LOCK = threading.Lock()
+_EMBY_GAP_FILL_RUN_LOCK = threading.Lock()
+_EMBY_GAP_FILL_STATE_LOCK = threading.Lock()
 _HDHIVE_COOKIE_MONITOR_STOP_EVENT = threading.Event()
 _HDHIVE_COOKIE_MONITOR_THREAD = None
 _HDHIVE_COOKIE_MONITOR_LOCK = threading.Lock()
@@ -2758,6 +2817,22 @@ _DRAMA_SCHEDULER_STATE = {
     'last_prune_at': '',
     'schedule_mode': 'interval',
 }
+_EMBY_GAP_FILL_SCHEDULER_STATE = {
+    'enabled': False,
+    'running': False,
+    'next_run_at': '未启用',
+    'last_run_at': '',
+    'last_status': '',
+    'last_message': '',
+    'last_summary': {
+        'scanned': '0',
+        'missing': '0',
+        'submitted': '0',
+        'pending': '0',
+    },
+    'last_missing_items': [],
+    'schedule_mode': 'interval',
+}
 
 
 def _format_scheduler_ts(ts: float) -> str:
@@ -2775,6 +2850,17 @@ def get_drama_scheduler_state() -> dict:
     _ensure_drama_scheduler_started()
     with _DRAMA_SCHEDULER_LOCK:
         return dict(_DRAMA_SCHEDULER_STATE)
+
+
+def _set_emby_gap_fill_scheduler_state(**kwargs):
+    with _EMBY_GAP_FILL_SCHEDULER_LOCK:
+        _EMBY_GAP_FILL_SCHEDULER_STATE.update(kwargs)
+
+
+def get_emby_gap_fill_scheduler_state() -> dict:
+    _ensure_emby_gap_fill_scheduler_started()
+    with _EMBY_GAP_FILL_SCHEDULER_LOCK:
+        return dict(_EMBY_GAP_FILL_SCHEDULER_STATE)
 
 
 def _set_hdhive_cookie_monitor_state(**kwargs):
@@ -3522,6 +3608,36 @@ def _ensure_drama_scheduler_started():
             )
         else:
             _set_drama_scheduler_state(enabled=False, running=False, schedule_mode='interval', next_run_at='未启用')
+    except Exception:
+        pass
+
+
+def _ensure_emby_gap_fill_scheduler_started():
+    if _EMBY_GAP_FILL_SCHEDULER_THREAD and _EMBY_GAP_FILL_SCHEDULER_THREAD.is_alive():
+        return
+    try:
+        config = load_config()
+        drama_cfg = config.get("drama_calendar", {}) if isinstance(config, dict) else {}
+        if not isinstance(drama_cfg, dict):
+            drama_cfg = {}
+        emby_cfg = _normalize_emby_gap_fill_config(drama_cfg.get("emby_gap_fill"))
+        enabled = bool(emby_cfg.get("enabled", False))
+        cron_expr = _normalize_cron_expr(str(emby_cfg.get("auto_sync_cron_expr") or ""))
+        if enabled:
+            start_emby_gap_fill_scheduler()
+            _set_emby_gap_fill_scheduler_state(
+                enabled=True,
+                running=False,
+                schedule_mode=("cron" if cron_expr else "interval"),
+                next_run_at="即将启动",
+            )
+        else:
+            _set_emby_gap_fill_scheduler_state(
+                enabled=False,
+                running=False,
+                schedule_mode="interval",
+                next_run_at="未启用",
+            )
     except Exception:
         pass
 
@@ -4417,7 +4533,13 @@ def _prioritize_hdhive_candidates(
         if matched:
             scored = matched
         elif season_strict:
-            return []
+            # When resources have no season metadata at all, keep them as a
+            # soft fallback instead of hard-failing the whole request.
+            unknown = [item for item in scored if item[5] is None]
+            if unknown:
+                scored = unknown
+            else:
+                return []
     if resolution_preference:
         matched = [item for item in scored if item[6] is True]
         if matched:
@@ -4601,6 +4723,10 @@ def _resource_guess_storage_mode(item) -> str:
             hits.add("115")
         if _is_123_url(lower) or lower in {"123", "123pan", "123网盘", "123云盘"}:
             hits.add("123")
+        if "115网盘" in lower or "115云盘" in lower:
+            hits.add("115")
+        if "123pan" in lower or "123网盘" in lower or "123云盘" in lower:
+            hits.add("123")
         if key_name in {"storage", "pan", "drive", "provider", "source", "cloud", "netdisk", "storage_type"}:
             if "115" in lower:
                 hits.add("115")
@@ -4662,6 +4788,7 @@ def _build_self_service_interactive_resources(
 ) -> tuple[list, int, int]:
     built = []
     filtered_out = 0
+    # Count of resources filtered out because target storage cannot be determined.
     unknown_storage_count = 0
     seen = set()
 
@@ -4689,12 +4816,27 @@ def _build_self_service_interactive_resources(
                     if value not in (None, "", [], {}):
                         merged[key] = value
 
+        full_url = _build_hdhive_full_url(merged)
+        url_storage_guess = ""
+        if full_url:
+            if _is_115_url(full_url):
+                url_storage_guess = "115"
+            elif _is_123_url(full_url):
+                url_storage_guess = "123"
+
         storage_guess = _resource_guess_storage_mode(merged)
+        if not storage_guess and url_storage_guess:
+            storage_guess = url_storage_guess
+        if url_storage_guess and not _storage_guess_matches_mode(url_storage_guess, storage_mode):
+            filtered_out += 1
+            continue
         if storage_guess and not _storage_guess_matches_mode(storage_guess, storage_mode):
             filtered_out += 1
             continue
         if not storage_guess and storage_mode != "any":
             unknown_storage_count += 1
+            filtered_out += 1
+            continue
 
         title = _resource_title(merged) or title or f"资源 {index}"
         points = _resource_unlock_points(merged)
@@ -4720,7 +4862,6 @@ def _build_self_service_interactive_resources(
         season_match = _resource_match_seasons(merged, requested_seasons) if requested_seasons else None
         resolution_match = _resource_match_resolution(merged, resolution_preference) if resolution_preference else None
         is_dolby = _resource_is_dolby(merged)
-        full_url = _build_hdhive_full_url(merged)
 
         detail = _build_self_service_detail([
             f"状态: {'已拥有/已解锁' if unlocked else (f'{points} 积分' if points is not None else '积分未知')}",
@@ -5991,14 +6132,17 @@ def _run_self_service_request(payload: dict) -> None:
         ])
 
         if not collected_resources:
-            detail = _build_self_service_detail([
-                f"片名: {title}" if title else "",
-                f"网盘: {storage_label}" if storage_label != "不限" else "",
-                "说明: Open API 与站内关键词均未返回可用资源",
-                f"分辨率: {resolution_label}" if resolution_preference else "",
-            ])
-            _record_result(False, detail=detail, resolved=False)
             _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
+            fallback_payload = dict(payload)
+            fallback_payload["use_open_api"] = False
+            fallback_note = (request_note or "").strip()
+            if fallback_note:
+                fallback_note = f"{fallback_note}; open_api_fallback"
+            else:
+                fallback_note = "open_api_fallback"
+            fallback_payload["note"] = fallback_note
+            _append_self_service_log([f"[{ts}] [INFO] open_api fallback_to_site query={query}"])
+            _run_self_service_request(fallback_payload)
             return
 
         if advanced_mode:
@@ -6034,7 +6178,7 @@ def _run_self_service_request(payload: dict) -> None:
                 f"网盘: {storage_label}" if storage_label != "不限" else "",
                 f"候选资源: {len(interactive_resources)} 条",
                 f"已过滤已知非目标网盘: {filtered_out} 条" if filtered_out else "",
-                f"网盘待判定: {unknown_storage_count} 条（手动转存时会再次校验）" if unknown_storage_count and storage_mode != "any" else "",
+                f"待判定网盘已过滤: {unknown_storage_count} 条" if unknown_storage_count and storage_mode != "any" else "",
                 "说明: 已跳过自动优先级筛选与自动转存，请手动选择资源",
                 "说明: 当前仅支持手动转存到 115" if not manual_transfer_supported else "",
             ], max_lines=10, max_line_len=220)
@@ -6072,21 +6216,34 @@ def _run_self_service_request(payload: dict) -> None:
             return
 
         if requested_seasons:
-            season_matched = [item for item in collected_resources if _resource_match_seasons(item, requested_seasons)]
-            if season_strict and not season_matched:
-                reason, hint = _build_season_miss_reason(requested_seasons, collected_resources)
-                detail = _build_self_service_detail([
-                    f"片名: {title}" if title else "",
-                    f"网盘: {storage_label}" if storage_label != "不限" else "",
-                    reason,
-                    hint,
-                    f"分辨率: {resolution_label}" if resolution_preference else "",
-                ])
-                _record_result(False, detail=detail, resolved=False)
-                _append_self_service_log([f"[{ts}] [WARN] open_api no season match query={query} season={season_label or ''}"])
-                return
+            season_matched = []
+            season_unknown = []
+            for item in collected_resources:
+                season_res = _resource_match_seasons(item, requested_seasons)
+                if season_res is True:
+                    season_matched.append(item)
+                elif season_res is None:
+                    season_unknown.append(item)
             if season_matched:
                 collected_resources = season_matched
+            elif season_strict:
+                if season_unknown:
+                    collected_resources = season_unknown
+                    _append_self_service_log([
+                        f"[{ts}] [WARN] open_api strict season fallback_to_unknown query={query} season={season_label or ''} candidates={len(season_unknown)}"
+                    ])
+                else:
+                    reason, hint = _build_season_miss_reason(requested_seasons, collected_resources)
+                    detail = _build_self_service_detail([
+                        f"片名: {title}" if title else "",
+                        f"网盘: {storage_label}" if storage_label != "不限" else "",
+                        reason,
+                        hint,
+                        f"分辨率: {resolution_label}" if resolution_preference else "",
+                    ])
+                    _record_result(False, detail=detail, resolved=False)
+                    _append_self_service_log([f"[{ts}] [WARN] open_api no season match query={query} season={season_label or ''}"])
+                    return
         if resolution_preference:
             res_matched = [item for item in collected_resources if _resource_match_resolution(item, resolution_preference)]
             if res_matched:
@@ -6458,6 +6615,1345 @@ def _resolve_log_view_config(cfg: dict):
     return interval, auto_refresh, max_lines, max_bytes
 
 
+def _normalize_emby_gap_fill_config(raw_cfg: Optional[dict]) -> dict:
+    cfg = _default_emby_gap_fill_config()
+    if isinstance(raw_cfg, dict):
+        cfg.update(raw_cfg)
+
+    cfg["enabled"] = bool(cfg.get("enabled", False))
+    cfg["base_url"] = str(cfg.get("base_url") or "").strip().rstrip("/")
+    cfg["api_key"] = str(cfg.get("api_key") or "").strip()
+    cfg["user_id"] = str(cfg.get("user_id") or "").strip()
+    cfg["library_ids"] = str(cfg.get("library_ids") or "").strip()
+    cfg["auto_sync_cron_expr"] = _normalize_cron_expr(str(cfg.get("auto_sync_cron_expr") or ""))
+    cfg["notify_user_ids"] = str(cfg.get("notify_user_ids") or "").strip()
+
+    only_aired_raw = cfg.get("only_aired", True)
+    if isinstance(only_aired_raw, str):
+        cfg["only_aired"] = only_aired_raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        cfg["only_aired"] = bool(only_aired_raw)
+
+    max_series_raw = cfg.get("max_series", 0)
+    if isinstance(max_series_raw, str):
+        max_series_raw = max_series_raw.strip()
+    try:
+        cfg["max_series"] = int(max_series_raw) if str(max_series_raw or "").strip() else 0
+    except Exception:
+        cfg["max_series"] = 0
+    cfg["max_series"] = max(0, cfg["max_series"])
+
+    try:
+        cfg["max_missing_requests"] = int(cfg.get("max_missing_requests", 3) or 3)
+    except Exception:
+        cfg["max_missing_requests"] = 3
+    cfg["max_missing_requests"] = max(1, min(cfg["max_missing_requests"], 20))
+
+    try:
+        cfg["request_cooldown_hours"] = int(cfg.get("request_cooldown_hours", 24) or 24)
+    except Exception:
+        cfg["request_cooldown_hours"] = 24
+    cfg["request_cooldown_hours"] = max(1, min(cfg["request_cooldown_hours"], 24 * 30))
+
+    workers_raw = cfg.get("series_workers", 6)
+    if isinstance(workers_raw, str):
+        workers_raw = workers_raw.strip()
+    try:
+        cfg["series_workers"] = int(workers_raw) if str(workers_raw or "").strip() else 6
+    except Exception:
+        cfg["series_workers"] = 6
+    cfg["series_workers"] = max(1, min(cfg["series_workers"], 12))
+
+    try:
+        cfg["auto_sync_interval_minutes"] = int(cfg.get("auto_sync_interval_minutes", 360) or 360)
+    except Exception:
+        cfg["auto_sync_interval_minutes"] = 360
+    cfg["auto_sync_interval_minutes"] = max(1, min(cfg["auto_sync_interval_minutes"], 24 * 60))
+    return cfg
+
+
+def _parse_emby_library_ids(raw) -> list:
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple, set)):
+        items = [str(v or "") for v in raw]
+    else:
+        items = re.split(r"[\n,;]+", str(raw))
+    result = []
+    seen = set()
+    for item in items:
+        token = str(item or "").strip()
+        if not token or token in seen:
+            continue
+        seen.add(token)
+        result.append(token)
+    return result
+
+
+def _append_emby_gap_fill_log(lines) -> None:
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(EMBY_GAP_FILL_LOG_FILE, 'a', encoding='utf-8') as f:
+            for line in (lines or []):
+                f.write(str(line).rstrip('\n') + '\n')
+    except Exception:
+        pass
+
+
+def _cleanup_emby_gap_fill_state(data: dict) -> dict:
+    cleaned = dict(data or {}) if isinstance(data, dict) else {}
+    requested = cleaned.get("requested")
+    normalized_requested = {}
+    if isinstance(requested, dict):
+        for key, raw_ts in requested.items():
+            token = str(key or "").strip()
+            if not token:
+                continue
+            try:
+                ts = float(raw_ts)
+            except Exception:
+                continue
+            if ts <= 0:
+                continue
+            normalized_requested[token] = ts
+    if len(normalized_requested) > 4000:
+        trimmed = sorted(normalized_requested.items(), key=lambda item: item[1], reverse=True)[:4000]
+        normalized_requested = dict(trimmed)
+    cleaned["requested"] = normalized_requested
+    if not isinstance(cleaned.get("last_run"), dict):
+        cleaned["last_run"] = {}
+    return cleaned
+
+
+def _load_emby_gap_fill_state_data() -> dict:
+    if not os.path.exists(EMBY_GAP_FILL_STATE_FILE):
+        return {"requested": {}, "last_run": {}}
+    try:
+        with open(EMBY_GAP_FILL_STATE_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except Exception:
+        return {"requested": {}, "last_run": {}}
+    return _cleanup_emby_gap_fill_state(data)
+
+
+def _save_emby_gap_fill_state_data(data: dict) -> None:
+    normalized = _cleanup_emby_gap_fill_state(data)
+    with _EMBY_GAP_FILL_STATE_LOCK:
+        try:
+            _atomic_write_json(EMBY_GAP_FILL_STATE_FILE, normalized, indent=2)
+        except Exception:
+            pass
+
+
+def _parse_emby_datetime(raw) -> Optional[datetime.datetime]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        parsed = datetime.datetime.fromisoformat(text)
+    except Exception:
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d"):
+            try:
+                parsed = datetime.datetime.strptime(str(raw), fmt)
+                break
+            except Exception:
+                parsed = None
+        if parsed is None:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.timezone.utc)
+    return parsed.astimezone(datetime.timezone.utc)
+
+
+def _extract_emby_missing_seasons(items: list, *, only_aired: bool = True) -> dict:
+    season_counts = {}
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    explicit_missing_detected = False
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        is_missing = item.get("IsMissing")
+        location_type = str(item.get("LocationType") or "").strip().lower()
+        # Some Emby/Jellyfin deployments may ignore IsMissing=true filter and return all episodes.
+        # Only treat entries with explicit missing markers as real gaps.
+        has_missing_marker = (is_missing is True) or (location_type in ("virtual", "missing"))
+        if not has_missing_marker:
+            continue
+        explicit_missing_detected = True
+
+        if only_aired:
+            premiere = _parse_emby_datetime(item.get("PremiereDate"))
+            if premiere and premiere > now_utc:
+                continue
+
+        season = _coerce_season_int(item.get("ParentIndexNumber"))
+        if not season:
+            season = _coerce_season_int(_extract_season_request(str(item.get("Name") or "")))
+        if not season:
+            continue
+        season_counts[season] = int(season_counts.get(season, 0) or 0) + 1
+    if not explicit_missing_detected:
+        return {}
+    return dict(sorted(season_counts.items(), key=lambda kv: kv[0]))
+
+
+def _extract_emby_missing_seasons_by_index_gap(items: list, *, only_aired: bool = True) -> dict:
+    """
+    Fallback for deployments where IsMissing filter/marker is unavailable.
+    Infer missing episodes by checking gaps in episode numbers per season.
+    """
+    seasons = {}
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        if only_aired:
+            premiere = _parse_emby_datetime(item.get("PremiereDate"))
+            if premiere and premiere > now_utc:
+                continue
+        season = _coerce_season_int(item.get("ParentIndexNumber"))
+        if not season:
+            season = _coerce_season_int(_extract_season_request(str(item.get("Name") or "")))
+        if not season:
+            continue
+        episode = _coerce_episode_int(item.get("IndexNumber"))
+        if not episode:
+            episode = _extract_episode_index_from_name(str(item.get("Name") or ""))
+        if not episode:
+            continue
+        seasons.setdefault(season, set()).add(episode)
+
+    season_counts = {}
+    seen_seasons = sorted(seasons.keys())
+    for season, episode_nums in seasons.items():
+        if not episode_nums:
+            continue
+        start = min(episode_nums)
+        end = max(episode_nums)
+        missing = []
+        if start > 1:
+            # Detect leading gaps like "missing E01" when first available episode starts at E02+.
+            missing.extend(range(1, start))
+        if end > start:
+            missing.extend(sorted(set(range(start, end + 1)) - set(episode_nums)))
+        if missing:
+            season_counts[season] = len(missing)
+    if seen_seasons:
+        max_seen_season = max(seen_seasons)
+        # Infer fully missing seasons in range [1, max_seen_season), e.g. only S08 exists => S01-S07 missing.
+        for season in range(1, max_seen_season):
+            if season not in seasons and season not in season_counts:
+                season_counts[season] = 1
+    return dict(sorted(season_counts.items(), key=lambda kv: kv[0]))
+
+
+def _build_emby_gap_key(series_id: str, season: int) -> str:
+    sid = str(series_id or "").strip()
+    return f"{sid}:S{int(season):02d}"
+
+
+def _emby_request_json(
+    base_url: str,
+    api_key: str,
+    path: str,
+    *,
+    params: Optional[dict] = None,
+    timeout: int = 20,
+) -> Tuple[bool, Optional[dict], str]:
+    base = str(base_url or "").strip().rstrip("/")
+    token = str(api_key or "").strip()
+    normalized_path = "/" + str(path or "").strip().lstrip("/")
+    if not base:
+        return False, None, "Emby 地址为空"
+    if not token:
+        return False, None, "Emby API Key 为空"
+    if normalized_path == "/":
+        return False, None, "Emby 路径为空"
+
+    candidate_paths = [normalized_path]
+    if normalized_path.startswith("/emby/"):
+        fallback = normalized_path[len("/emby"):]
+        if fallback and fallback not in candidate_paths:
+            candidate_paths.append(fallback)
+    else:
+        fallback = "/emby" + normalized_path
+        if fallback not in candidate_paths:
+            candidate_paths.append(fallback)
+
+    base_params = dict(params or {})
+    base_params.setdefault("api_key", token)
+    headers = {
+        "Accept": "application/json",
+        "X-Emby-Token": token,
+        "User-Agent": "tg-file-monitor/emby-gap-fill",
+    }
+
+    last_error = ""
+    for idx, sub_path in enumerate(candidate_paths):
+        url = f"{base}{sub_path}"
+        try:
+            resp = _requests_get(
+                url,
+                params=base_params,
+                headers=headers,
+                timeout=timeout,
+                proxy_scope="service",
+            )
+        except Exception as e:
+            last_error = f"{type(e).__name__}: {e}"
+            continue
+
+        status = int(getattr(resp, "status_code", 0) or 0)
+        text = (resp.text or "").strip()
+        if status == 404 and idx == 0 and len(candidate_paths) > 1:
+            last_error = "HTTP 404"
+            continue
+        if status >= 400:
+            snippet = re.sub(r"\s+", " ", text)[:160]
+            if snippet:
+                return False, None, f"HTTP {status}: {snippet}"
+            return False, None, f"HTTP {status}"
+        try:
+            payload = resp.json()
+        except Exception:
+            return False, None, "Emby 响应不是 JSON"
+        if isinstance(payload, dict):
+            return True, payload, ""
+        return False, None, "Emby 响应格式异常"
+
+    return False, None, last_error or "Emby 请求失败"
+
+
+def _emby_resolve_user_id(base_url: str, api_key: str, preferred_user_id: str = "") -> Tuple[str, str]:
+    preferred = str(preferred_user_id or "").strip()
+    if preferred:
+        return preferred, ""
+
+    ok, payload, err = _emby_request_json(base_url, api_key, "/Users/Query", params={"Limit": "50"}, timeout=20)
+    if not ok or not isinstance(payload, dict):
+        return "", err or "获取 Emby 用户失败"
+    items = payload.get("Items")
+    if not isinstance(items, list) or not items:
+        return "", "Emby 用户列表为空"
+
+    admin_id = ""
+    first_id = ""
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("Id") or "").strip()
+        if not user_id:
+            continue
+        if not first_id:
+            first_id = user_id
+        policy = item.get("Policy") if isinstance(item.get("Policy"), dict) else {}
+        if bool(policy.get("IsAdministrator")):
+            admin_id = user_id
+            break
+    resolved = admin_id or first_id
+    if not resolved:
+        return "", "未找到可用 Emby 用户 ID"
+    return resolved, ""
+
+
+def _emby_fetch_series_items(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    library_ids: list,
+    max_series: int,
+    progress_cb=None,
+) -> Tuple[list, str]:
+    series_items = []
+    seen_ids = set()
+    errors = []
+    fetch_started_at = time.time()
+    max_fetch_seconds = 300
+    max_pages_per_parent = 300
+    try:
+        max_series_val = int(max_series or 0)
+    except Exception:
+        max_series_val = 0
+    unlimited = max_series_val <= 0
+    remain = max(0, max_series_val)
+    page_size = 200
+    parent_ids = [str(v or "").strip() for v in (library_ids or []) if str(v or "").strip()]
+    if not parent_ids:
+        parent_ids = [""]
+
+    user_path = f"/Users/{quote(str(user_id or '').strip(), safe='')}/Items"
+    for parent_id in parent_ids:
+        if not unlimited and remain <= 0:
+            break
+        start_index = 0
+        page_guard = 0
+        no_new_pages = 0
+        repeat_page_count = 0
+        last_page_signature = None
+        parent_label = f"库 {parent_id}" if parent_id else "全部库"
+        while True:
+            if not unlimited and remain <= 0:
+                break
+            if (time.time() - fetch_started_at) > max_fetch_seconds:
+                errors.append(f"{parent_label}: 查询超时（>{max_fetch_seconds}s），已提前停止")
+                break
+            limit = page_size if unlimited else max(1, min(page_size, remain))
+            params = {
+                "Recursive": "true",
+                "IncludeItemTypes": "Series",
+                "Fields": "ProductionYear,Status,PremiereDate",
+                "SortBy": "SortName",
+                "SortOrder": "Ascending",
+                "Limit": str(limit),
+                "StartIndex": str(start_index),
+            }
+            if parent_id:
+                params["ParentId"] = parent_id
+
+            ok, payload, err = _emby_request_json(base_url, api_key, user_path, params=params, timeout=25)
+            if not ok or not isinstance(payload, dict):
+                errors.append(f"{parent_label}: {err or '查询失败'}")
+                break
+
+            items = payload.get("Items")
+            if not isinstance(items, list):
+                errors.append("剧集列表格式异常")
+                break
+            if not items:
+                break
+
+            new_added = 0
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                sid = str(item.get("Id") or "").strip()
+                if not sid or sid in seen_ids:
+                    continue
+                seen_ids.add(sid)
+                series_items.append(item)
+                new_added += 1
+                if not unlimited:
+                    remain -= 1
+                    if remain <= 0:
+                        break
+
+            if not unlimited and remain <= 0:
+                break
+
+            page_items = len(items)
+            first_sid = str((items[0] or {}).get("Id") or "") if items else ""
+            last_sid = str((items[-1] or {}).get("Id") or "") if items else ""
+            page_signature = (page_items, first_sid, last_sid)
+            if page_signature == last_page_signature:
+                repeat_page_count += 1
+            else:
+                repeat_page_count = 0
+            last_page_signature = page_signature
+
+            if new_added <= 0:
+                no_new_pages += 1
+            else:
+                no_new_pages = 0
+
+            if progress_cb:
+                try:
+                    progress_cb({
+                        "parent_id": parent_id,
+                        "parent_label": parent_label,
+                        "pages": page_guard + 1,
+                        "collected": len(series_items),
+                        "new_added": new_added,
+                        "start_index": start_index,
+                    })
+                except Exception:
+                    pass
+
+            if repeat_page_count >= 2:
+                errors.append(f"{parent_label}: 分页结果重复，疑似接口未翻页，已提前停止")
+                break
+            if no_new_pages >= 3:
+                errors.append(f"{parent_label}: 连续分页无新增剧集，已提前停止")
+                break
+
+            start_index += page_items
+            total = payload.get("TotalRecordCount")
+            if isinstance(total, int) and total >= 0:
+                if start_index >= total:
+                    break
+            else:
+                if page_items < limit:
+                    break
+
+            page_guard += 1
+            if page_guard >= max_pages_per_parent:
+                errors.append(f"{parent_label}: 分页次数过多（>{max_pages_per_parent}），已提前停止")
+                break
+
+    if errors and not series_items:
+        return [], " | ".join(errors[:3])
+    return series_items, ""
+
+
+def _emby_fetch_episode_items(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    series_id: str,
+    *,
+    is_missing: Optional[bool] = None,
+) -> Tuple[list, str]:
+    sid = str(series_id or "").strip()
+    if not sid:
+        return [], "缺少 series_id"
+    params = {
+        "UserId": str(user_id or "").strip(),
+        "Fields": "PremiereDate,ParentIndexNumber,IndexNumber,LocationType,IsMissing,Name,SeriesName,Path",
+        "Limit": "1000",
+    }
+    if is_missing is True:
+        params["IsMissing"] = "true"
+    elif is_missing is False:
+        params["IsMissing"] = "false"
+    path = f"/Shows/{quote(sid, safe='')}/Episodes"
+    ok, payload, err = _emby_request_json(base_url, api_key, path, params=params, timeout=25)
+    if not ok or not isinstance(payload, dict):
+        return [], err or "查询缺失剧集失败"
+    items = payload.get("Items")
+    if not isinstance(items, list):
+        return [], "Emby 剧集响应格式异常"
+    return items, ""
+
+
+def _emby_fetch_missing_episode_items(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    series_id: str,
+) -> Tuple[list, str]:
+    return _emby_fetch_episode_items(
+        base_url=base_url,
+        api_key=api_key,
+        user_id=user_id,
+        series_id=series_id,
+        is_missing=True,
+    )
+
+
+def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_only: bool = False) -> dict:
+    now_ts = time.time()
+    now_str = _format_scheduler_ts(now_ts)
+    trigger_label = str(trigger or "manual").strip().lower() or "manual"
+    run_mode = "preview" if preview_only else "apply"
+    drama_cfg = config.get("drama_calendar") if isinstance(config, dict) else {}
+    if not isinstance(drama_cfg, dict):
+        drama_cfg = {}
+    emby_cfg = _normalize_emby_gap_fill_config(drama_cfg.get("emby_gap_fill"))
+    runtime = _get_self_service_runtime(config if isinstance(config, dict) else {})
+
+    result = {
+        "ok": False,
+        "status": "error",
+        "message": "",
+        "summary": {
+            "scanned": 0,
+            "missing": 0,
+            "submitted": 0,
+            "pending": 0,
+            "inferred_missing": 0,
+            "series_with_missing": 0,
+            "cooldown_skipped": 0,
+            "api_errors": 0,
+            "submit_errors": 0,
+        },
+        "missing_items": [],
+        "submitted_items": [],
+    }
+
+    def _publish_running(message: str, *, scanned: int = 0, missing: int = 0, pending: int = 0, submitted: int = 0) -> None:
+        _set_emby_gap_fill_scheduler_state(
+            running=True,
+            last_status="running",
+            last_message=str(message or "后台执行中..."),
+            last_summary={
+                "scanned": str(int(scanned or 0)),
+                "missing": str(int(missing or 0)),
+                "submitted": str(int(submitted or 0)),
+                "pending": str(int(pending or 0)),
+            },
+        )
+
+    def _return_early(status: str, message: str) -> dict:
+        result["status"] = status
+        result["message"] = message
+        level = "ERROR" if status == "error" else "WARN"
+        _append_emby_gap_fill_log([f"[{now_str}] [{level}] trigger={trigger_label} mode={run_mode} {message}"])
+        return result
+
+    if not emby_cfg.get("enabled") and not preview_only:
+        return _return_early("disabled", "Emby 自动补缺未启用")
+
+    run_lock_acquired = False
+    if preview_only:
+        run_lock_acquired = _EMBY_GAP_FILL_RUN_LOCK.acquire(blocking=False)
+        if not run_lock_acquired:
+            _append_emby_gap_fill_log([
+                f"[{now_str}] [WARN] trigger={trigger_label} mode={run_mode} 已有补缺任务在运行，预览改为只读并发执行"
+            ])
+    else:
+        run_lock_acquired = _EMBY_GAP_FILL_RUN_LOCK.acquire(blocking=False)
+        if not run_lock_acquired:
+            return _return_early("warning", "已有 Emby 补缺任务在运行，已跳过")
+
+    try:
+        _append_emby_gap_fill_log([f"[{now_str}] [INFO] trigger={trigger_label} mode={run_mode} Emby 补缺任务开始"])
+        _publish_running("后台执行中：正在读取 Emby 剧集列表...", scanned=0, missing=0, pending=0, submitted=0)
+        if not preview_only:
+            if not runtime.get("enabled"):
+                return _return_early("error", "自助观影申请未启用，无法执行 Emby 补缺")
+            if not runtime.get("effective_targets"):
+                return _return_early("error", "未配置自助观影通知用户，无法执行 Emby 补缺")
+            if runtime.get("use_open_api"):
+                if not runtime.get("hdhive_api_key"):
+                    return _return_early("error", "已开启 Open API，但未配置 HDHive Open API Key")
+            else:
+                if not runtime.get("hdhive_cookie"):
+                    return _return_early("error", "未配置 HDHive Cookie，无法执行自动补缺")
+
+        base_url = str(emby_cfg.get("base_url") or "").strip().rstrip("/")
+        api_key = str(emby_cfg.get("api_key") or "").strip()
+        if not base_url or not api_key:
+            return _return_early("error", "请先配置 Emby 地址与 API Key")
+
+        user_id, user_err = _emby_resolve_user_id(base_url, api_key, emby_cfg.get("user_id") or "")
+        if not user_id:
+            return _return_early("error", f"解析 Emby 用户失败: {user_err or '未知错误'}")
+
+        max_series = int(emby_cfg.get("max_series") or 0)
+        cooldown_hours = int(emby_cfg.get("request_cooldown_hours") or 24)
+        cooldown_seconds = max(1, cooldown_hours) * 3600
+        only_aired = bool(emby_cfg.get("only_aired", True))
+        library_ids = _parse_emby_library_ids(emby_cfg.get("library_ids"))
+
+        def _on_series_page_progress(meta: dict) -> None:
+            try:
+                pages = int((meta or {}).get("pages") or 0)
+            except Exception:
+                pages = 0
+            try:
+                collected = int((meta or {}).get("collected") or 0)
+            except Exception:
+                collected = 0
+            parent_label = str((meta or {}).get("parent_label") or "全部库").strip() or "全部库"
+            if pages <= 0:
+                _publish_running(
+                    f"后台执行中：正在读取 Emby 剧集列表（{parent_label}）...",
+                    scanned=0,
+                    missing=0,
+                    pending=0,
+                    submitted=0,
+                )
+                return
+            _publish_running(
+                f"后台执行中：正在读取 Emby 剧集列表（{parent_label} 第 {pages} 页，累计 {collected} 部）...",
+                scanned=0,
+                missing=0,
+                pending=0,
+                submitted=0,
+            )
+
+        series_items, series_err = _emby_fetch_series_items(
+            base_url,
+            api_key,
+            user_id,
+            library_ids,
+            max_series=max_series,
+            progress_cb=_on_series_page_progress,
+        )
+        valid_series = []
+        for series in series_items:
+            if not isinstance(series, dict):
+                continue
+            sid = str(series.get("Id") or "").strip()
+            title = str(series.get("Name") or "").strip()
+            if not sid or not title:
+                continue
+            production_year = str(series.get("ProductionYear") or "").strip()
+            valid_series.append((sid, title, production_year))
+
+        total_series = len(valid_series)
+        try:
+            series_workers = int(emby_cfg.get("series_workers", 6) or 6)
+        except Exception:
+            series_workers = 6
+        series_workers = max(1, min(series_workers, 12))
+        _publish_running(
+            f"后台执行中：已获取剧集 {total_series} 部，准备查漏（并发 {series_workers}）...",
+            scanned=0,
+            missing=0,
+            pending=0,
+            submitted=0,
+        )
+        if series_err:
+            _append_emby_gap_fill_log([f"[{now_str}] [WARN] {series_err}"])
+
+        state = _cleanup_emby_gap_fill_state(_load_emby_gap_fill_state_data())
+        requested_map = state.get("requested") if isinstance(state.get("requested"), dict) else {}
+
+        candidates = []
+        missing_items_out = []
+        scanned_count = 0
+        missing_count = 0
+        inferred_missing_count = 0
+        series_with_missing = 0
+        cooldown_skipped = 0
+        api_errors = 0
+        missing_filter_probe_done = False
+        missing_filter_ignored = False
+
+        fetch_results = {}
+        if valid_series:
+            if total_series <= 1 or series_workers <= 1:
+                completed_fetch = 0
+                for sid, title, _production_year in valid_series:
+                    missing_items, missing_err = _emby_fetch_missing_episode_items(base_url, api_key, user_id, sid)
+                    fetch_results[sid] = (missing_items, missing_err)
+                    completed_fetch += 1
+                    if completed_fetch == 1 or completed_fetch % 20 == 0 or completed_fetch == total_series:
+                        _publish_running(
+                            f"后台执行中：查漏请求 {completed_fetch}/{total_series}...",
+                            scanned=completed_fetch,
+                            missing=0,
+                            pending=0,
+                            submitted=0,
+                        )
+            else:
+                _publish_running(
+                    f"后台执行中：正在并发查漏 {total_series} 部剧集（并发 {series_workers}）...",
+                    scanned=0,
+                    missing=0,
+                    pending=0,
+                    submitted=0,
+                )
+                with ThreadPoolExecutor(max_workers=series_workers) as executor:
+                    future_map = {
+                        executor.submit(_emby_fetch_missing_episode_items, base_url, api_key, user_id, sid): (sid, title)
+                        for sid, title, _production_year in valid_series
+                    }
+                    completed_fetch = 0
+                    for future in as_completed(future_map):
+                        sid, title = future_map[future]
+                        try:
+                            missing_items, missing_err = future.result()
+                        except Exception as e:
+                            missing_items, missing_err = [], f"{type(e).__name__}: {e}"
+                        fetch_results[sid] = (missing_items, missing_err)
+                        completed_fetch += 1
+                        if completed_fetch == 1 or completed_fetch % 20 == 0 or completed_fetch == total_series:
+                            _publish_running(
+                                f"后台执行中：查漏请求 {completed_fetch}/{total_series}（并发 {series_workers}）...",
+                                scanned=completed_fetch,
+                                missing=0,
+                                pending=0,
+                                submitted=0,
+                            )
+
+        _publish_running(
+            f"后台执行中：查漏请求完成，正在汇总结果...",
+            scanned=total_series,
+            missing=0,
+            pending=0,
+            submitted=0,
+        )
+
+        for sid, title, production_year in valid_series:
+            scanned_count += 1
+            missing_items, missing_err = fetch_results.get(sid, ([], "未获取到缺集结果"))
+            if missing_err:
+                api_errors += 1
+                _append_emby_gap_fill_log([
+                    f"[{now_str}] [WARN] 查询缺失剧集失败 series={title}({sid}) err={missing_err}"
+                ])
+                if scanned_count == 1 or scanned_count % 20 == 0 or scanned_count == total_series:
+                    _publish_running(
+                        f"后台执行中：结果汇总 {scanned_count}/{total_series}，已发现缺季 {missing_count}。",
+                        scanned=scanned_count,
+                        missing=missing_count,
+                        pending=len(candidates),
+                        submitted=0,
+                    )
+                continue
+
+            missing_seasons = _extract_emby_missing_seasons(missing_items, only_aired=only_aired)
+            if not missing_seasons and missing_items:
+                has_missing_markers = any(
+                    isinstance(item, dict) and (
+                        item.get("IsMissing") is True or
+                        str(item.get("LocationType") or "").strip().lower() in ("virtual", "missing")
+                    )
+                    for item in missing_items
+                )
+                if not has_missing_markers:
+                    if not missing_filter_probe_done:
+                        verify_items, verify_err = _emby_fetch_episode_items(
+                            base_url=base_url,
+                            api_key=api_key,
+                            user_id=user_id,
+                            series_id=sid,
+                            is_missing=False,
+                        )
+                        if not verify_err:
+                            ids_missing = {str(i.get("Id") or "") for i in missing_items if isinstance(i, dict)}
+                            ids_all = {str(i.get("Id") or "") for i in verify_items if isinstance(i, dict)}
+                            if ids_missing and ids_all and ids_missing == ids_all:
+                                missing_filter_ignored = True
+                        missing_filter_probe_done = True
+                    if missing_filter_ignored:
+                        inferred = _extract_emby_missing_seasons_by_index_gap(missing_items, only_aired=only_aired)
+                        if inferred:
+                            missing_seasons = inferred
+                            inferred_missing_count += sum(int(v or 0) for v in inferred.values())
+            if not missing_seasons:
+                continue
+            series_with_missing += 1
+            for season, miss_episodes in sorted(missing_seasons.items(), key=lambda kv: kv[0]):
+                missing_count += 1
+                key = _build_emby_gap_key(sid, season)
+                last_submit_ts = requested_map.get(key)
+                try:
+                    last_submit_ts = float(last_submit_ts or 0)
+                except Exception:
+                    last_submit_ts = 0
+                cooldown_active = last_submit_ts > 0 and (now_ts - last_submit_ts) < cooldown_seconds
+                remaining_seconds = 0
+                if cooldown_active:
+                    remaining_seconds = max(0, int(cooldown_seconds - (now_ts - last_submit_ts)))
+                season_label = f"S{int(season):02d}"
+                missing_item = {
+                    "series_id": sid,
+                    "title": title,
+                    "season": int(season),
+                    "season_label": season_label,
+                    "missing_episodes": int(miss_episodes or 0),
+                    "year": production_year,
+                    "cooldown_active": bool(cooldown_active),
+                    "cooldown_remaining_hours": round(remaining_seconds / 3600, 1) if cooldown_active else 0,
+                    "last_submitted_at": _format_scheduler_ts(last_submit_ts) if last_submit_ts > 0 else "",
+                }
+                missing_items_out.append(missing_item)
+                if cooldown_active:
+                    cooldown_skipped += 1
+                    continue
+                candidates.append({
+                    "series_id": sid,
+                    "title": title,
+                    "season": int(season),
+                    "missing_episodes": int(miss_episodes or 0),
+                    "year": production_year,
+                })
+
+            if scanned_count == 1 or scanned_count % 20 == 0 or scanned_count == total_series:
+                _publish_running(
+                    f"后台执行中：结果汇总 {scanned_count}/{total_series}，已发现缺季 {missing_count}，待提交 {len(candidates)}。",
+                    scanned=scanned_count,
+                    missing=missing_count,
+                    pending=len(candidates),
+                    submitted=0,
+                )
+
+        candidates.sort(
+            key=lambda item: (
+                -int(item.get("missing_episodes") or 0),
+                str(item.get("title") or ""),
+                int(item.get("season") or 0),
+            )
+        )
+        missing_items_out.sort(
+            key=lambda item: (
+                -int(item.get("missing_episodes") or 0),
+                str(item.get("title") or ""),
+                int(item.get("season") or 0),
+            )
+        )
+
+        submit_errors = 0
+        submitted = []
+        if not preview_only:
+            submit_target_count = len(candidates)
+            _publish_running(
+                f"后台执行中：查漏完成，准备提交 {submit_target_count} 条补缺任务...",
+                scanned=scanned_count,
+                missing=missing_count,
+                pending=len(candidates),
+                submitted=0,
+            )
+            for item in candidates[:submit_target_count]:
+                season = int(item.get("season") or 0)
+                if season <= 0:
+                    continue
+                season_label = f"S{season:02d}"
+                title = str(item.get("title") or "").strip()
+                year = str(item.get("year") or "").strip()
+                request_id = uuid.uuid4().hex
+                payload = {
+                    "query": f"{title} {season_label}".strip(),
+                    "title": title,
+                    "targets": runtime.get("targets") or [],
+                    "notify_targets": runtime.get("effective_targets") or [],
+                    "max_results": runtime.get("max_results", 5),
+                    "hdhive_cookie": runtime.get("hdhive_cookie") or "",
+                    "base_url": runtime.get("base_url") or "https://hdhive.com",
+                    "type": "电视剧",
+                    "year": year,
+                    "note": f"Emby 自动补缺 {season_label}（缺失 {int(item.get('missing_episodes') or 0)} 集）",
+                    "hdhive_url": "",
+                    "tmdb_api_key": runtime.get("tmdb_api_key") or "",
+                    "tmdb_id": "",
+                    "use_open_api": bool(runtime.get("use_open_api")),
+                    "hdhive_open_api_key": runtime.get("hdhive_api_key") or "",
+                    "open_api_direct_unlock": bool(runtime.get("allow_open_api_direct")),
+                    "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
+                    "storage_mode": runtime.get("storage_mode") or "any",
+                    "dolby_preference": "any",
+                    "season": season_label,
+                    "resolution": "",
+                    "advanced_mode": False,
+                    "request_id": request_id,
+                }
+                payload.update(_build_115_transfer_payload(config))
+                processing_detail = _build_self_service_detail([
+                    f"片名: {title}",
+                    f"季: {season_label}",
+                    f"来源: Emby 自动补缺（{trigger_label}）",
+                    f"缺失集数: {int(item.get('missing_episodes') or 0)}",
+                ])
+                _set_self_service_result(request_id, "processing", "Emby 自动补缺已提交，正在解析资源。", processing_detail)
+                try:
+                    _run_self_service_request(payload)
+                except Exception as e:
+                    submit_errors += 1
+                    _append_emby_gap_fill_log([
+                        f"[{now_str}] [ERROR] 提交补缺失败 title={title} season={season_label} err={type(e).__name__}: {e}"
+                    ])
+                    continue
+
+                key = _build_emby_gap_key(item.get("series_id") or "", season)
+                requested_map[key] = now_ts
+                submitted.append({
+                    "title": title,
+                    "season": season_label,
+                    "missing_episodes": int(item.get("missing_episodes") or 0),
+                })
+                _publish_running(
+                    f"后台执行中：已提交补缺 {len(submitted)}/{submit_target_count}。",
+                    scanned=scanned_count,
+                    missing=missing_count,
+                    pending=len(candidates),
+                    submitted=len(submitted),
+                )
+
+        if not preview_only:
+            state["requested"] = requested_map
+            state["last_run"] = {
+                "at": now_ts,
+                "trigger": trigger_label,
+                "mode": run_mode,
+                "summary": {
+                    "scanned": scanned_count,
+                    "missing": missing_count,
+                    "submitted": len(submitted),
+                    "pending": len(candidates),
+                    "inferred_missing": inferred_missing_count,
+                    "series_with_missing": series_with_missing,
+                    "cooldown_skipped": cooldown_skipped,
+                    "api_errors": api_errors,
+                    "submit_errors": submit_errors,
+                },
+            }
+            _save_emby_gap_fill_state_data(state)
+
+        status = "success"
+        if api_errors or submit_errors:
+            status = "warning"
+        if not series_items and series_err:
+            status = "error"
+
+        if preview_only:
+            message = f"扫描 {scanned_count} 部剧，发现缺季 {missing_count}，待提交 {len(candidates)}"
+        else:
+            message = f"扫描 {scanned_count} 部剧，发现缺季 {missing_count}，已提交 {len(submitted)}"
+            remaining_count = max(0, len(candidates) - len(submitted))
+            if remaining_count > 0:
+                message += f"，剩余待提交 {remaining_count}（本次有失败或中断）"
+        if cooldown_skipped > 0:
+            message += f"，冷却跳过 {cooldown_skipped}"
+        if api_errors > 0:
+            message += f"，接口异常 {api_errors}"
+        if submit_errors > 0:
+            message += f"，提交失败 {submit_errors}"
+        if not series_items and not series_err:
+            message = "未获取到可扫描的 Emby 剧集"
+            status = "warning"
+        elif missing_filter_ignored:
+            message += "（Emby 缺集标记不可用，已按集号断档推断）"
+            if status == "success":
+                status = "warning"
+
+        if not preview_only:
+            notify_raw = emby_cfg.get("notify_user_ids") or ""
+            if not notify_raw:
+                notify_raw = (config.get("self_service_notify_user_ids") or config.get("self_service_target_user_ids") or "").strip()
+            notify_targets = _parse_target_user_ids(notify_raw)
+            if notify_targets:
+                notify_msg = f"Emby 补缺({trigger_label})：{message}"
+                for tid in notify_targets:
+                    _enqueue_message(tid, notify_msg)
+
+        log_lines = [
+            f"[{now_str}] [INFO] trigger={trigger_label} mode={run_mode} scanned={scanned_count} missing={missing_count} "
+            f"pending={len(candidates)} submitted={len(submitted)} cooldown_skipped={cooldown_skipped} "
+            f"inferred_missing={inferred_missing_count} api_errors={api_errors} submit_errors={submit_errors} "
+            f"missing_filter_ignored={str(missing_filter_ignored).lower()}"
+        ]
+        if preview_only:
+            for item in missing_items_out[:20]:
+                title = str(item.get("title") or "").strip()
+                season_label = str(item.get("season_label") or "").strip()
+                miss = int(item.get("missing_episodes") or 0)
+                cooldown_note = ""
+                if item.get("cooldown_active"):
+                    cooldown_note = f" cooldown={item.get('cooldown_remaining_hours', 0)}h"
+                log_lines.append(
+                    f"[{now_str}] [INFO] missing title={title} season={season_label} miss={miss}{cooldown_note}"
+                )
+            if len(missing_items_out) > 20:
+                log_lines.append(f"[{now_str}] [INFO] more_missing={len(missing_items_out) - 20}")
+        else:
+            for item in submitted[:10]:
+                log_lines.append(
+                    f"[{now_str}] [INFO] submitted title={item['title']} season={item['season']} miss={item['missing_episodes']}"
+                )
+            if len(submitted) > 10:
+                log_lines.append(f"[{now_str}] [INFO] more_submitted={len(submitted) - 10}")
+        _append_emby_gap_fill_log(log_lines)
+
+        result["ok"] = status in ("success", "warning")
+        result["status"] = status
+        result["message"] = message
+        result["summary"] = {
+            "scanned": scanned_count,
+            "missing": missing_count,
+            "submitted": len(submitted),
+            "pending": len(candidates),
+            "inferred_missing": inferred_missing_count,
+            "series_with_missing": series_with_missing,
+            "cooldown_skipped": cooldown_skipped,
+            "api_errors": api_errors,
+            "submit_errors": submit_errors,
+        }
+        result["missing_filter_ignored"] = bool(missing_filter_ignored)
+        result["missing_items"] = missing_items_out
+        result["submitted_items"] = submitted
+        return result
+    except Exception as e:
+        _append_emby_gap_fill_log([
+            f"[{_format_scheduler_ts(time.time())}] [ERROR] trigger={trigger_label} mode={run_mode} Emby 补缺任务异常: {type(e).__name__}: {e}"
+        ])
+        result["ok"] = False
+        result["status"] = "error"
+        result["message"] = f"补缺任务异常：{type(e).__name__}: {e}"
+        result["summary"] = {
+            "scanned": 0,
+            "missing": 0,
+            "submitted": 0,
+            "pending": 0,
+            "inferred_missing": 0,
+            "series_with_missing": 0,
+            "cooldown_skipped": 0,
+            "api_errors": 0,
+            "submit_errors": 1,
+        }
+        result["missing_items"] = []
+        result["submitted_items"] = []
+        return result
+    finally:
+        if run_lock_acquired:
+            _EMBY_GAP_FILL_RUN_LOCK.release()
+
+
+def _submit_emby_gap_item(
+    config: dict,
+    *,
+    series_id: str,
+    title: str,
+    season: int,
+    missing_episodes: int = 0,
+    year: str = "",
+    trigger: str = "manual_item",
+) -> dict:
+    now_ts = time.time()
+    now_str = _format_scheduler_ts(now_ts)
+    trigger_label = str(trigger or "manual_item").strip().lower() or "manual_item"
+
+    sid = str(series_id or "").strip()
+    show_title = str(title or "").strip()
+    show_year = str(year or "").strip()
+    season_num = _coerce_season_int(season) or 0
+    miss_count = max(0, int(missing_episodes or 0))
+    if not sid or not show_title or season_num <= 0:
+        return {
+            "ok": False,
+            "status": "error",
+            "message": "缺少提交参数（剧名/季/series_id）",
+        }
+
+    runtime = _get_self_service_runtime(config if isinstance(config, dict) else {})
+    if not runtime.get("enabled"):
+        return {"ok": False, "status": "error", "message": "自助观影申请未启用，无法提交补缺"}
+    if not runtime.get("effective_targets"):
+        return {"ok": False, "status": "error", "message": "未配置自助观影通知用户，无法提交补缺"}
+    if runtime.get("use_open_api"):
+        if not runtime.get("hdhive_api_key"):
+            return {"ok": False, "status": "error", "message": "已开启 Open API，但未配置 HDHive Open API Key"}
+    else:
+        if not runtime.get("hdhive_cookie"):
+            return {"ok": False, "status": "error", "message": "未配置 HDHive Cookie，无法提交补缺"}
+
+    drama_cfg = config.get("drama_calendar") if isinstance(config, dict) else {}
+    if not isinstance(drama_cfg, dict):
+        drama_cfg = {}
+    emby_cfg = _normalize_emby_gap_fill_config(drama_cfg.get("emby_gap_fill"))
+    cooldown_hours = int(emby_cfg.get("request_cooldown_hours") or 24)
+    cooldown_seconds = max(1, cooldown_hours) * 3600
+
+    state = _cleanup_emby_gap_fill_state(_load_emby_gap_fill_state_data())
+    requested_map = state.get("requested") if isinstance(state.get("requested"), dict) else {}
+    key = _build_emby_gap_key(sid, season_num)
+    last_submit_ts = requested_map.get(key)
+    try:
+        last_submit_ts = float(last_submit_ts or 0)
+    except Exception:
+        last_submit_ts = 0
+    if last_submit_ts > 0 and (now_ts - last_submit_ts) < cooldown_seconds:
+        remain = max(0, int(cooldown_seconds - (now_ts - last_submit_ts)))
+        remain_hours = round(remain / 3600, 1)
+        return {
+            "ok": False,
+            "status": "warning",
+            "message": f"{show_title} S{season_num:02d} 仍在冷却中（约 {remain_hours} 小时）",
+        }
+
+    season_label = f"S{season_num:02d}"
+    request_id = uuid.uuid4().hex
+    payload = {
+        "query": f"{show_title} {season_label}".strip(),
+        "title": show_title,
+        "targets": runtime.get("targets") or [],
+        "notify_targets": runtime.get("effective_targets") or [],
+        "max_results": runtime.get("max_results", 5),
+        "hdhive_cookie": runtime.get("hdhive_cookie") or "",
+        "base_url": runtime.get("base_url") or "https://hdhive.com",
+        "type": "电视剧",
+        "year": show_year,
+        "note": f"Emby 手动补缺 {season_label}（缺失 {miss_count} 集）",
+        "hdhive_url": "",
+        "tmdb_api_key": runtime.get("tmdb_api_key") or "",
+        "tmdb_id": "",
+        "use_open_api": bool(runtime.get("use_open_api")),
+        "hdhive_open_api_key": runtime.get("hdhive_api_key") or "",
+        "open_api_direct_unlock": bool(runtime.get("allow_open_api_direct")),
+        "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
+        "storage_mode": runtime.get("storage_mode") or "any",
+        "dolby_preference": "any",
+        "season": season_label,
+        "resolution": "",
+        "advanced_mode": False,
+        "request_id": request_id,
+    }
+    payload.update(_build_115_transfer_payload(config))
+    processing_detail = _build_self_service_detail([
+        f"片名: {show_title}",
+        f"季: {season_label}",
+        f"来源: Emby 手动补缺（{trigger_label}）",
+        f"缺失集数: {miss_count}",
+    ])
+    _set_self_service_result(request_id, "processing", "Emby 手动补缺已提交，正在解析资源。", processing_detail)
+
+    try:
+        _run_self_service_request(payload)
+    except Exception as e:
+        _append_emby_gap_fill_log([
+            f"[{now_str}] [ERROR] 手动提交补缺失败 title={show_title} season={season_label} err={type(e).__name__}: {e}"
+        ])
+        return {
+            "ok": False,
+            "status": "error",
+            "message": f"提交失败：{type(e).__name__}: {e}",
+        }
+
+    requested_map[key] = now_ts
+    state["requested"] = requested_map
+    _save_emby_gap_fill_state_data(state)
+    _append_emby_gap_fill_log([
+        f"[{now_str}] [INFO] trigger={trigger_label} manual_submit title={show_title} season={season_label} miss={miss_count}"
+    ])
+    return {
+        "ok": True,
+        "status": "success",
+        "message": f"已提交 {show_title} {season_label} 补缺申请",
+    }
+
+
+def _update_emby_gap_fill_state_from_result(result: dict) -> tuple[str, str]:
+    status = str((result or {}).get("status") or "error").strip().lower() or "error"
+    message = str((result or {}).get("message") or "").strip() or "执行完成"
+    summary_raw = (result or {}).get("summary") if isinstance((result or {}).get("summary"), dict) else {}
+    summary_state = {
+        "scanned": str(summary_raw.get("scanned", 0) or 0),
+        "missing": str(summary_raw.get("missing", 0) or 0),
+        "submitted": str(summary_raw.get("submitted", 0) or 0),
+        "pending": str(summary_raw.get("pending", 0) or 0),
+    }
+    missing_items_state = (result or {}).get("missing_items") if isinstance((result or {}).get("missing_items"), list) else []
+    current_state = get_emby_gap_fill_scheduler_state()
+    _set_emby_gap_fill_scheduler_state(
+        last_run_at=_format_scheduler_ts(time.time()),
+        last_status=status,
+        last_message=message,
+        last_summary=summary_state,
+        last_missing_items=missing_items_state,
+        schedule_mode=current_state.get("schedule_mode", "interval"),
+        next_run_at=current_state.get("next_run_at", "未启用"),
+        enabled=current_state.get("enabled", False),
+        running=False,
+    )
+    return status, message
+
+
+def _start_emby_gap_fill_background_task(*, trigger: str, preview_only: bool = False) -> None:
+    trigger_label = str(trigger or "manual").strip().lower() or "manual"
+    run_mode = "preview" if preview_only else "apply"
+    now_str = _format_scheduler_ts(time.time())
+    current_state = get_emby_gap_fill_scheduler_state()
+    running_message = "后台执行中：Emby 查漏预览..." if preview_only else "后台执行中：Emby 自动补缺..."
+    _set_emby_gap_fill_scheduler_state(
+        enabled=current_state.get("enabled", False),
+        running=True,
+        last_status="running",
+        last_message=running_message,
+        schedule_mode=current_state.get("schedule_mode", "interval"),
+        next_run_at=current_state.get("next_run_at", "未启用"),
+    )
+    _append_emby_gap_fill_log([
+        f"[{now_str}] [INFO] trigger={trigger_label} mode={run_mode} 后台任务已启动"
+    ])
+
+    def _worker() -> None:
+        try:
+            cfg = load_config()
+            result = _run_emby_gap_fill_once(cfg, trigger=trigger_label, preview_only=preview_only)
+        except Exception as e:
+            err_ts = _format_scheduler_ts(time.time())
+            _append_emby_gap_fill_log([
+                f"[{err_ts}] [ERROR] trigger={trigger_label} mode={run_mode} 后台任务异常: {type(e).__name__}: {e}"
+            ])
+            result = {
+                "ok": False,
+                "status": "error",
+                "message": f"后台任务异常：{type(e).__name__}: {e}",
+                "summary": {
+                    "scanned": 0,
+                    "missing": 0,
+                    "submitted": 0,
+                    "pending": 0,
+                },
+                "missing_items": [],
+            }
+        _update_emby_gap_fill_state_from_result(result)
+
+    threading.Thread(
+        target=_worker,
+        name=f"emby-gap-fill-{trigger_label}",
+        daemon=True,
+    ).start()
+
+
+def _start_emby_gap_item_background_task(
+    *,
+    series_id: str,
+    title: str,
+    season: int,
+    missing_episodes: int = 0,
+    year: str = "",
+    trigger: str = "manual_item",
+) -> None:
+    sid = str(series_id or "").strip()
+    show_title = str(title or "").strip()
+    season_num = _coerce_season_int(season) or 0
+    miss_count = max(0, int(missing_episodes or 0))
+    show_year = str(year or "").strip()
+    trigger_label = str(trigger or "manual_item").strip().lower() or "manual_item"
+    season_label = f"S{season_num:02d}" if season_num > 0 else ""
+    now_str = _format_scheduler_ts(time.time())
+
+    current_state = get_emby_gap_fill_scheduler_state()
+    running_message = f"后台执行中：提交 {show_title} {season_label} 补缺..." if show_title and season_label else "后台执行中：提交补缺..."
+    _set_emby_gap_fill_scheduler_state(
+        enabled=current_state.get("enabled", False),
+        running=True,
+        last_status="running",
+        last_message=running_message,
+        schedule_mode=current_state.get("schedule_mode", "interval"),
+        next_run_at=current_state.get("next_run_at", "未启用"),
+    )
+    _append_emby_gap_fill_log([
+        f"[{now_str}] [INFO] trigger={trigger_label} mode=item 后台单项补缺任务已启动 title={show_title} season={season_label} miss={miss_count}"
+    ])
+
+    def _worker() -> None:
+        try:
+            cfg = load_config()
+            result = _submit_emby_gap_item(
+                cfg,
+                series_id=sid,
+                title=show_title,
+                season=season_num,
+                missing_episodes=miss_count,
+                year=show_year,
+                trigger=trigger_label,
+            )
+        except Exception as e:
+            err_ts = _format_scheduler_ts(time.time())
+            _append_emby_gap_fill_log([
+                f"[{err_ts}] [ERROR] trigger={trigger_label} mode=item 后台单项补缺任务异常: {type(e).__name__}: {e}"
+            ])
+            result = {
+                "ok": False,
+                "status": "error",
+                "message": f"后台单项补缺异常：{type(e).__name__}: {e}",
+            }
+
+        status = str((result or {}).get("status") or "error").strip().lower() or "error"
+        message = str((result or {}).get("message") or "").strip() or "单项补缺执行完成"
+        state_now = get_emby_gap_fill_scheduler_state()
+        _set_emby_gap_fill_scheduler_state(
+            last_run_at=_format_scheduler_ts(time.time()),
+            last_status=status,
+            last_message=message,
+            schedule_mode=state_now.get("schedule_mode", "interval"),
+            next_run_at=state_now.get("next_run_at", "未启用"),
+            enabled=state_now.get("enabled", False),
+            running=False,
+        )
+
+    threading.Thread(
+        target=_worker,
+        name=f"emby-gap-item-{trigger_label}",
+        daemon=True,
+    ).start()
+
+
 def _tail_lines_by_bytes(lines: list, max_bytes: int) -> list:
     if not lines:
         return []
@@ -6649,6 +8145,143 @@ def start_drama_scheduler():
         daemon=True,
     )
     _DRAMA_SCHEDULER_THREAD.start()
+
+
+def _emby_gap_fill_scheduler_loop():
+    next_run_ts = 0.0
+    last_signature = None
+
+    while not _EMBY_GAP_FILL_SCHEDULER_STOP_EVENT.is_set():
+        config = load_config()
+        drama_cfg = config.get("drama_calendar", {}) if isinstance(config, dict) else {}
+        if not isinstance(drama_cfg, dict):
+            drama_cfg = {}
+        emby_cfg = _normalize_emby_gap_fill_config(drama_cfg.get("emby_gap_fill"))
+        enabled = bool(emby_cfg.get("enabled", False))
+        interval_minutes = int(emby_cfg.get("auto_sync_interval_minutes") or 360)
+        interval_minutes = max(1, interval_minutes)
+        cron_expr = _normalize_cron_expr(str(emby_cfg.get("auto_sync_cron_expr") or ""))
+        use_cron = bool(cron_expr)
+
+        signature = (
+            enabled,
+            interval_minutes,
+            cron_expr,
+            str(emby_cfg.get("base_url") or ""),
+            bool(emby_cfg.get("api_key")),
+            str(emby_cfg.get("user_id") or ""),
+            str(emby_cfg.get("library_ids") or ""),
+            int(emby_cfg.get("max_series") or 0),
+            int(emby_cfg.get("max_missing_requests") or 3),
+            int(emby_cfg.get("request_cooldown_hours") or 24),
+            bool(emby_cfg.get("only_aired", True)),
+        )
+        if signature != last_signature:
+            last_signature = signature
+            if enabled:
+                next_run_ts = time.time() + 5
+
+        if not enabled:
+            _set_emby_gap_fill_scheduler_state(
+                enabled=False,
+                running=False,
+                next_run_at="未启用",
+                schedule_mode="interval",
+            )
+            _EMBY_GAP_FILL_SCHEDULER_STOP_EVENT.wait(2)
+            continue
+
+        if use_cron and not _cron_expr_valid(cron_expr):
+            _set_emby_gap_fill_scheduler_state(
+                enabled=True,
+                running=False,
+                schedule_mode="cron",
+                last_status="error",
+                last_message=f"Cron 表达式无效: {cron_expr}",
+                next_run_at="Cron 表达式无效",
+            )
+            _EMBY_GAP_FILL_SCHEDULER_STOP_EVENT.wait(5)
+            continue
+
+        now = time.time()
+        if next_run_ts <= 0:
+            if use_cron:
+                next_run_ts = _next_run_by_cron(cron_expr, now)
+            else:
+                next_run_ts = now + 5
+
+        if now < next_run_ts:
+            _set_emby_gap_fill_scheduler_state(
+                enabled=True,
+                running=False,
+                schedule_mode=("cron" if use_cron else "interval"),
+                next_run_at=_format_scheduler_ts(next_run_ts),
+            )
+            _EMBY_GAP_FILL_SCHEDULER_STOP_EVENT.wait(min(5, max(1, int(next_run_ts - now))))
+            continue
+
+        _set_emby_gap_fill_scheduler_state(enabled=True, running=True)
+        try:
+            result = _run_emby_gap_fill_once(config, trigger="scheduler")
+        except Exception as e:
+            err_ts = _format_scheduler_ts(time.time())
+            _append_emby_gap_fill_log([
+                f"[{err_ts}] [ERROR] trigger=scheduler mode=apply 调度任务异常: {type(e).__name__}: {e}"
+            ])
+            result = {
+                "ok": False,
+                "status": "error",
+                "message": f"调度任务异常：{type(e).__name__}: {e}",
+                "summary": {
+                    "scanned": 0,
+                    "missing": 0,
+                    "submitted": 0,
+                    "pending": 0,
+                },
+                "missing_items": [],
+            }
+        status = str(result.get("status") or "error").strip().lower()
+        message = str(result.get("message") or "").strip() or "执行完成"
+        summary = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+        summary_state = {
+            "scanned": str(summary.get("scanned", 0) or 0),
+            "missing": str(summary.get("missing", 0) or 0),
+            "submitted": str(summary.get("submitted", 0) or 0),
+            "pending": str(summary.get("pending", 0) or 0),
+        }
+        missing_items_state = result.get("missing_items") if isinstance(result.get("missing_items"), list) else []
+
+        if use_cron:
+            next_run_ts = _next_run_by_cron(cron_expr, time.time())
+        else:
+            next_run_ts = time.time() + interval_minutes * 60
+
+        _set_emby_gap_fill_scheduler_state(
+            enabled=True,
+            running=False,
+            last_run_at=_format_scheduler_ts(time.time()),
+            last_status=status,
+            last_message=message,
+            last_summary=summary_state,
+            last_missing_items=missing_items_state,
+            schedule_mode=("cron" if use_cron else "interval"),
+            next_run_at=_format_scheduler_ts(next_run_ts),
+        )
+
+    _set_emby_gap_fill_scheduler_state(running=False, next_run_at="已停止")
+
+
+def start_emby_gap_fill_scheduler():
+    global _EMBY_GAP_FILL_SCHEDULER_THREAD
+    if _EMBY_GAP_FILL_SCHEDULER_THREAD and _EMBY_GAP_FILL_SCHEDULER_THREAD.is_alive():
+        return
+    _EMBY_GAP_FILL_SCHEDULER_STOP_EVENT.clear()
+    _EMBY_GAP_FILL_SCHEDULER_THREAD = threading.Thread(
+        target=_emby_gap_fill_scheduler_loop,
+        name="emby-gap-fill-scheduler",
+        daemon=True,
+    )
+    _EMBY_GAP_FILL_SCHEDULER_THREAD.start()
 
 
 def load_download_risk_stats():
@@ -7347,6 +8980,7 @@ async def index():
 
     tg_log_insights = _build_log_insights(tg_monitor_mgr.log_buffer, window_seconds=log_window_seconds)
     bot_log_insights = _build_log_insights(bot_monitor_mgr.log_buffer, window_seconds=log_window_seconds)
+    _ensure_emby_gap_fill_scheduler_started()
     return render_template('index.html', 
                                   config=config, 
                                   auth_status=auth_status,
@@ -8027,7 +9661,10 @@ def proxy_config():
 @login_required
 def drama_calendar_settings():
     config = load_config()
+    show_emby_missing_modal = (request.args.get('show_emby_missing_modal') == '1')
     if request.method == 'POST':
+        redirect_anchor = ""
+        redirect_query = {}
         action_values = request.form.getlist('action')
         action = (action_values[-1] if action_values else request.form.get('action') or '').strip()
 
@@ -8136,6 +9773,54 @@ def drama_calendar_settings():
                 flash('Cron 表达式无效，已自动改为按分钟间隔执行。', 'warning')
                 cron_expr = ''
             drama['auto_sync_cron_expr'] = cron_expr
+
+            emby_gap_fill = _normalize_emby_gap_fill_config(drama.get("emby_gap_fill"))
+            emby_gap_fill["enabled"] = request.form.get("drama_emby_gap_fill_enabled") == "on"
+            emby_gap_fill["base_url"] = (request.form.get("drama_emby_base_url") or "").strip().rstrip("/")
+            emby_gap_fill["api_key"] = (request.form.get("drama_emby_api_key") or "").strip()
+            emby_gap_fill["user_id"] = (request.form.get("drama_emby_user_id") or "").strip()
+            emby_gap_fill["library_ids"] = (request.form.get("drama_emby_library_ids") or "").strip()
+            emby_gap_fill["notify_user_ids"] = (request.form.get("drama_emby_notify_user_ids") or "").strip()
+            emby_gap_fill["only_aired"] = request.form.get("drama_emby_only_aired") == "on"
+            try:
+                max_series_raw = (request.form.get("drama_emby_max_series") or "").strip()
+                emby_gap_fill["max_series"] = max(0, int(max_series_raw)) if max_series_raw else 0
+            except Exception:
+                emby_gap_fill["max_series"] = 0
+            try:
+                emby_gap_fill["max_missing_requests"] = max(
+                    1,
+                    min(20, int((request.form.get("drama_emby_max_missing_requests") or "3").strip() or 3)),
+                )
+            except Exception:
+                emby_gap_fill["max_missing_requests"] = 3
+            try:
+                emby_gap_fill["request_cooldown_hours"] = max(
+                    1,
+                    min(24 * 30, int((request.form.get("drama_emby_request_cooldown_hours") or "24").strip() or 24)),
+                )
+            except Exception:
+                emby_gap_fill["request_cooldown_hours"] = 24
+            try:
+                emby_gap_fill["series_workers"] = max(
+                    1,
+                    min(12, int((request.form.get("drama_emby_series_workers") or "6").strip() or 6)),
+                )
+            except Exception:
+                emby_gap_fill["series_workers"] = 6
+            try:
+                emby_gap_fill["auto_sync_interval_minutes"] = max(
+                    1,
+                    min(24 * 60, int((request.form.get("drama_emby_auto_sync_interval_minutes") or "360").strip() or 360)),
+                )
+            except Exception:
+                emby_gap_fill["auto_sync_interval_minutes"] = 360
+            emby_cron_expr = (request.form.get("drama_emby_auto_sync_cron_expr") or "").strip()
+            if emby_cron_expr and not _cron_expr_valid(emby_cron_expr):
+                flash("Emby 补缺 Cron 表达式无效，已自动改为按分钟间隔执行。", "warning")
+                emby_cron_expr = ""
+            emby_gap_fill["auto_sync_cron_expr"] = emby_cron_expr
+            drama["emby_gap_fill"] = emby_gap_fill
             return drama
 
         if action == 'update_drama_calendar_settings':
@@ -8143,6 +9828,7 @@ def drama_calendar_settings():
             config['drama_calendar'] = drama
             save_config(config)
             _ensure_drama_scheduler_started()
+            _ensure_emby_gap_fill_scheduler_started()
             auto_tip = '已开启' if bool(drama.get('auto_sync_enabled')) else '未开启'
             if drama.get('auto_sync_cron_expr'):
                 plan_tip = f"Cron: {drama.get('auto_sync_cron_expr')}"
@@ -8668,20 +10354,83 @@ def drama_calendar_settings():
                     last_prune_at='',
                 )
 
+        elif action == 'run_emby_gap_fill':
+            drama_cfg = config.get('drama_calendar', {})
+            if request.form.get('drama_source') is not None:
+                drama_cfg = _drama_cfg_from_form(drama_cfg)
+                config['drama_calendar'] = drama_cfg
+                save_config(config)
+            _ensure_emby_gap_fill_scheduler_started()
+            _start_emby_gap_fill_background_task(trigger='manual', preview_only=False)
+            flash("Emby 自动补缺任务已提交后台执行，请稍后查看状态区与日志。", "info")
+
+        elif action == 'list_emby_gap_fill':
+            drama_cfg = config.get('drama_calendar', {})
+            if request.form.get('drama_source') is not None:
+                drama_cfg = _drama_cfg_from_form(drama_cfg)
+                config['drama_calendar'] = drama_cfg
+                save_config(config)
+            _ensure_emby_gap_fill_scheduler_started()
+            _start_emby_gap_fill_background_task(trigger='manual_preview', preview_only=True)
+            flash("Emby 查漏任务已提交后台执行，请稍后刷新页面查看缺失列表。", "info")
+            redirect_query['show_emby_missing_modal'] = '1'
+
+        elif action == 'submit_emby_gap_item':
+            series_id = (request.form.get('emby_series_id') or '').strip()
+            title = (request.form.get('emby_title') or '').strip()
+            year = (request.form.get('emby_year') or '').strip()
+            season_raw = (request.form.get('emby_season') or '').strip()
+            season_label_raw = (request.form.get('emby_season_label') or '').strip()
+            missing_raw = (request.form.get('emby_missing_episodes') or '').strip()
+
+            season_num = _coerce_season_int(season_raw)
+            if not season_num and season_label_raw:
+                m = re.search(r'(\d{1,2})', season_label_raw)
+                if m:
+                    season_num = _coerce_season_int(m.group(1))
+            if not season_num:
+                season_num = 0
+
+            try:
+                missing_episodes = max(0, int(missing_raw or 0))
+            except Exception:
+                missing_episodes = 0
+
+            if not series_id or not title or season_num <= 0:
+                flash("缺少提交参数（剧名/季/series_id）。", "error")
+            else:
+                _start_emby_gap_item_background_task(
+                    series_id=series_id,
+                    title=title,
+                    season=season_num,
+                    missing_episodes=missing_episodes,
+                    year=year,
+                    trigger='manual_popup',
+                )
+                flash(f"已提交后台补缺任务：{title} S{season_num:02d}，请稍后查看状态与日志。", "info")
+            redirect_query['show_emby_missing_modal'] = '1'
+
         elif action == 'clear_drama_calendar_env':
             ok, success_paths, errors = _clear_drama_calendar_tv_filters()
             if ok:
                 flash('已清空 tvchannel_filters.json 的追剧白名单。', 'success')
             else:
                 flash(f'清空失败：{" | ".join(errors[:3])}', 'error')
+        else:
+            flash('未识别的提交操作，请刷新页面后重试（如刚升级代码请重启 Web 服务）。', 'warning')
 
-        return redirect(url_for('drama_calendar_settings'))
+        dest = url_for('drama_calendar_settings', **redirect_query)
+        if redirect_anchor:
+            dest = f"{dest}{redirect_anchor}"
+        return redirect(dest)
 
     env_edit_sources, env_edit_errors = _build_tv_filters_edit_view()
     return render_template(
         'drama_calendar.html',
         config=config,
         scheduler_state=get_drama_scheduler_state(),
+        emby_gap_fill_state=get_emby_gap_fill_scheduler_state(),
+        show_emby_missing_modal=show_emby_missing_modal,
         env_edit_sources=env_edit_sources,
         env_edit_errors=env_edit_errors,
     )
@@ -9815,6 +11564,7 @@ if __name__ == "__main__":
         start_file_monitor_process()
         start_bot_monitor_process()
         start_drama_scheduler()
+        start_emby_gap_fill_scheduler()
         start_hdhive_cookie_monitor()
         start_hdhive_checkin_scheduler()
 
