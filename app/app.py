@@ -57,7 +57,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.57"
+VERSION = "0.5.62"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -129,6 +129,35 @@ def _normalize_self_service_storage_mode(mode) -> str:
     return normalized
 
 
+_DRAMA_SHORT_DRAMA_KEYWORDS = (
+    "短剧",
+    "微短剧",
+    "短剧场",
+    "小程序剧",
+    "竖屏剧",
+    "微剧",
+)
+
+
+def _compose_calendar_blacklist_keywords(raw_keywords, *, exclude_short_drama: bool = True) -> str:
+    merged: List[str] = []
+    seen = set()
+    for part in re.split(r"[\n,]+", str(raw_keywords or "")):
+        keyword = str(part or "").strip()
+        if not keyword or keyword in seen:
+            continue
+        merged.append(keyword)
+        seen.add(keyword)
+
+    if exclude_short_drama:
+        for keyword in _DRAMA_SHORT_DRAMA_KEYWORDS:
+            if keyword in seen:
+                continue
+            merged.append(keyword)
+            seen.add(keyword)
+    return ",".join(merged)
+
+
 def _default_emby_gap_fill_config() -> dict:
     return {
         "enabled": False,
@@ -144,6 +173,7 @@ def _default_emby_gap_fill_config() -> dict:
         "auto_sync_interval_minutes": 360,
         "auto_sync_cron_expr": "",
         "notify_user_ids": "",
+        "ignore_list": "",
     }
 
 
@@ -247,6 +277,7 @@ def load_config():
             "post_url": "",
             "calendar_whitelist_keywords": "",
             "calendar_blacklist_keywords": "",
+            "exclude_short_drama": True,
             "maoyan_url": "https://piaofang.maoyan.com/box-office?ver=normal",
             "maoyan_top_n": 0,
             "include_maoyan_web_heat": True,
@@ -825,8 +856,25 @@ _SEASON_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 _SEASON_RANGE_RE = re.compile(
-    r'(?:\bS(?:eason)?\s*0*(\d{1,2})\s*[-~–—〜～至到]\s*0*(\d{1,2})\b)'
+    r'(?:\bS(?:eason)?\s*0*(\d{1,2})\s*[-~–—〜～至到]\s*(?:S(?:eason)?\s*)?0*(\d{1,2})\b)'
     r'|(?:第\s*([一二三四五六七八九十百零两0-9]{1,3})\s*[-~–—〜～至到]\s*([一二三四五六七八九十百零两0-9]{1,3})\s*季)',
+    re.IGNORECASE,
+)
+_SEASON_PLAIN_RANGE_WITH_SUFFIX_RE = re.compile(
+    r'(?<![0-9Ee])(\d{1,2})\s*[-~–—〜～至到]\s*(\d{1,2})\s*季',
+    re.IGNORECASE,
+)
+_SEASON_ZH_RANGE_WITH_SUFFIX_RE = re.compile(
+    r'([一二三四五六七八九十百零两0-9]{1,3})\s*[-~–—〜～至到]\s*([一二三四五六七八九十百零两0-9]{1,3})\s*季',
+    re.IGNORECASE,
+)
+_SEASON_TOTAL_RE = re.compile(
+    r'(?:全\s*([一二三四五六七八九十百零两0-9]{1,3})\s*季)'
+    r'|(?:([一二三四五六七八九十百零两0-9]{1,3})\s*季\s*全)',
+    re.IGNORECASE,
+)
+_SEASON_OPEN_RANGE_RE = re.compile(
+    r'\bS(?:eason)?\s*0*(\d{1,2})\s*[-~–—〜～至到]\s*S(?:eason)?\s*(?:完结(?:季)?|全(?:季|集|部)?|END|FINAL)',
     re.IGNORECASE,
 )
 _SEASON_PLAIN_RANGE_RE = re.compile(r'(?<![0-9Ee])(\d{1,2})\s*[-~–—〜～至到]\s*(\d{1,2})(?!\d)')
@@ -940,6 +988,24 @@ def _extract_season_candidates(text: str) -> list:
         for val in range(low, high + 1):
             _add(val)
 
+    for match in _SEASON_PLAIN_RANGE_WITH_SUFFIX_RE.finditer(raw):
+        start = _coerce_season_int(match.group(1))
+        end = _coerce_season_int(match.group(2))
+        if not start or not end:
+            continue
+        low, high = (start, end) if start <= end else (end, start)
+        for val in range(low, high + 1):
+            _add(val)
+
+    for match in _SEASON_ZH_RANGE_WITH_SUFFIX_RE.finditer(raw):
+        start = _coerce_season_int(_chinese_numeral_to_int(match.group(1)))
+        end = _coerce_season_int(_chinese_numeral_to_int(match.group(2)))
+        if not start or not end:
+            continue
+        low, high = (start, end) if start <= end else (end, start)
+        for val in range(low, high + 1):
+            _add(val)
+
     for match in _SEASON_TOKEN_RE.finditer(raw):
         s_token = match.group(1)
         zh_token = match.group(2)
@@ -948,6 +1014,16 @@ def _extract_season_candidates(text: str) -> list:
             continue
         if zh_token:
             _add(_coerce_season_int(_chinese_numeral_to_int(zh_token)))
+
+    for match in _SEASON_TOTAL_RE.finditer(raw):
+        token = match.group(1) or match.group(2)
+        total = _coerce_season_int(token)
+        if not total and token:
+            total = _coerce_season_int(_chinese_numeral_to_int(token))
+        if not total:
+            continue
+        for val in range(1, total + 1):
+            _add(val)
 
     if not found:
         for match in _SEASON_EP_RE.finditer(raw):
@@ -1111,11 +1187,26 @@ def _resource_match_season(item: dict, season: int) -> Optional[bool]:
             text_bits.extend(extra_text_bits)
 
     if text_bits:
-        season_values.update(_extract_season_candidates(" ".join(text_bits)))
+        joined_text = " ".join(text_bits)
+        season_values.update(_extract_season_candidates(joined_text))
+    else:
+        joined_text = ""
+
+    if season in season_values:
+        return True
+
+    if season_values:
+        for match in _SEASON_OPEN_RANGE_RE.finditer(joined_text):
+            start = _coerce_season_int(match.group(1))
+            if start and season >= start:
+                # Open-ended pack marker (for example: S01-S完结季): treat as
+                # unknown coverage instead of a hard mismatch.
+                return None
+        return False
 
     if not season_values:
         return None
-    return season in season_values
+    return False
 
 
 def _resource_match_seasons(item: dict, seasons: list) -> Optional[bool]:
@@ -2514,6 +2605,10 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         return False, '', DRAMA_RUN_BUSY_MESSAGE
 
     _reset_drama_calendar_log()
+    calendar_blacklist_keywords = _compose_calendar_blacklist_keywords(
+        drama_cfg.get('calendar_blacklist_keywords') or '',
+        exclude_short_drama=bool(drama_cfg.get('exclude_short_drama', True)),
+    )
 
     cmd = [
         sys.executable,
@@ -2521,7 +2616,7 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         '--source', _drama_sources_csv(drama_cfg.get('source')),
         '--home-url', (drama_cfg.get('home_url') or 'https://blog.922928.de/').strip(),
         '--calendar-whitelist-keywords', (drama_cfg.get('calendar_whitelist_keywords') or '').strip(),
-        '--calendar-blacklist-keywords', (drama_cfg.get('calendar_blacklist_keywords') or '').strip(),
+        '--calendar-blacklist-keywords', calendar_blacklist_keywords,
         '--maoyan-url', (drama_cfg.get('maoyan_url') or 'https://piaofang.maoyan.com/box-office?ver=normal').strip(),
         '--maoyan-top-n', str(int(drama_cfg.get('maoyan_top_n', 0) or 0)),
         '--maoyan-web-heat-url', (drama_cfg.get('maoyan_web_heat_url') or 'https://piaofang.maoyan.com/web-heat').strip(),
@@ -2649,13 +2744,17 @@ def _run_drama_calendar_source_map(drama_cfg: dict) -> tuple:
 
     env_files_list = _parse_env_files(drama_cfg.get('env_files', ''))
     dump_path = os.path.join('/tmp', f"drama_source_map_{uuid.uuid4().hex}.json")
+    calendar_blacklist_keywords = _compose_calendar_blacklist_keywords(
+        drama_cfg.get('calendar_blacklist_keywords') or '',
+        exclude_short_drama=bool(drama_cfg.get('exclude_short_drama', True)),
+    )
     cmd = [
         sys.executable,
         DRAMA_CALENDAR_SCRIPT,
         '--source', _drama_sources_csv(drama_cfg.get('source')),
         '--home-url', (drama_cfg.get('home_url') or 'https://blog.922928.de/').strip(),
         '--calendar-whitelist-keywords', (drama_cfg.get('calendar_whitelist_keywords') or '').strip(),
-        '--calendar-blacklist-keywords', (drama_cfg.get('calendar_blacklist_keywords') or '').strip(),
+        '--calendar-blacklist-keywords', calendar_blacklist_keywords,
         '--maoyan-url', (drama_cfg.get('maoyan_url') or 'https://piaofang.maoyan.com/box-office?ver=normal').strip(),
         '--maoyan-top-n', str(int(drama_cfg.get('maoyan_top_n', 0) or 0)),
         '--maoyan-web-heat-url', (drama_cfg.get('maoyan_web_heat_url') or 'https://piaofang.maoyan.com/web-heat').strip(),
@@ -6627,6 +6726,7 @@ def _normalize_emby_gap_fill_config(raw_cfg: Optional[dict]) -> dict:
     cfg["library_ids"] = str(cfg.get("library_ids") or "").strip()
     cfg["auto_sync_cron_expr"] = _normalize_cron_expr(str(cfg.get("auto_sync_cron_expr") or ""))
     cfg["notify_user_ids"] = str(cfg.get("notify_user_ids") or "").strip()
+    cfg["ignore_list"] = str(cfg.get("ignore_list") or "").strip()
 
     only_aired_raw = cfg.get("only_aired", True)
     if isinstance(only_aired_raw, str):
@@ -6649,19 +6749,28 @@ def _normalize_emby_gap_fill_config(raw_cfg: Optional[dict]) -> dict:
         cfg["max_missing_requests"] = 3
     cfg["max_missing_requests"] = max(1, min(cfg["max_missing_requests"], 20))
 
-    try:
-        cfg["request_cooldown_hours"] = int(cfg.get("request_cooldown_hours", 24) or 24)
-    except Exception:
+    cooldown_raw = cfg.get("request_cooldown_hours", 24)
+    if isinstance(cooldown_raw, str):
+        cooldown_raw = cooldown_raw.strip()
+    if cooldown_raw in (None, ""):
         cfg["request_cooldown_hours"] = 24
-    cfg["request_cooldown_hours"] = max(1, min(cfg["request_cooldown_hours"], 24 * 30))
+    else:
+        try:
+            cfg["request_cooldown_hours"] = int(cooldown_raw)
+        except Exception:
+            cfg["request_cooldown_hours"] = 24
+    cfg["request_cooldown_hours"] = max(0, min(cfg["request_cooldown_hours"], 24 * 30))
 
     workers_raw = cfg.get("series_workers", 6)
     if isinstance(workers_raw, str):
         workers_raw = workers_raw.strip()
-    try:
-        cfg["series_workers"] = int(workers_raw) if str(workers_raw or "").strip() else 6
-    except Exception:
+    if workers_raw in (None, ""):
         cfg["series_workers"] = 6
+    else:
+        try:
+            cfg["series_workers"] = int(workers_raw)
+        except Exception:
+            cfg["series_workers"] = 6
     cfg["series_workers"] = max(1, min(cfg["series_workers"], 12))
 
     try:
@@ -6688,6 +6797,104 @@ def _parse_emby_library_ids(raw) -> list:
         seen.add(token)
         result.append(token)
     return result
+
+
+def _parse_emby_gap_ignore_list(raw) -> dict:
+    tokens = re.split(r"[\n,;]+", str(raw or ""))
+    ignore_series_ids = set()
+    ignore_series_titles = set()
+    ignore_season_by_id = set()
+    ignore_season_by_title = set()
+
+    def _add_series_entry(entry: str) -> None:
+        token = str(entry or "").strip()
+        if not token:
+            return
+        ignore_series_ids.add(token.lower())
+        norm_title = _normalize_title_for_match(token)
+        if norm_title:
+            ignore_series_titles.add(norm_title)
+
+    def _add_season_entry(entry: str, seasons: list) -> None:
+        token = str(entry or "").strip()
+        if not token or not seasons:
+            return
+        sid_token = token.lower()
+        norm_title = _normalize_title_for_match(token)
+        for season in seasons:
+            season_num = _coerce_season_int(season)
+            if not season_num:
+                continue
+            season_label = f"S{season_num:02d}"
+            ignore_season_by_id.add(f"{sid_token}:{season_label}")
+            if norm_title:
+                ignore_season_by_title.add(f"{norm_title}:{season_label}")
+
+    for raw_token in tokens:
+        token = str(raw_token or "").strip()
+        if not token:
+            continue
+
+        token_base = token
+        token_seasons = []
+
+        for sep in (":", "：", "#", "|"):
+            if sep not in token:
+                continue
+            left, right = token.split(sep, 1)
+            parsed = _parse_season_input(right)
+            if parsed:
+                token_base = left.strip()
+                token_seasons = parsed
+                break
+
+        if not token_seasons:
+            match = re.match(
+                r"^(.*?)\s+(S(?:eason)?\s*0*\d{1,2}|\d{1,2}|第\s*[一二三四五六七八九十百零两0-9]{1,3}\s*季)$",
+                token,
+                re.IGNORECASE,
+            )
+            if match:
+                parsed = _parse_season_input(match.group(2))
+                if parsed:
+                    token_base = str(match.group(1) or "").strip()
+                    token_seasons = parsed
+
+        if token_seasons:
+            _add_season_entry(token_base, token_seasons)
+        else:
+            _add_series_entry(token)
+
+    return {
+        "series_ids": ignore_series_ids,
+        "series_titles": ignore_series_titles,
+        "season_by_id": ignore_season_by_id,
+        "season_by_title": ignore_season_by_title,
+    }
+
+
+def _emby_gap_ignore_match(ignore_rules: dict, series_id: str, title: str, season: int) -> bool:
+    rules = ignore_rules if isinstance(ignore_rules, dict) else {}
+    sid_token = str(series_id or "").strip().lower()
+    title_token = _normalize_title_for_match(str(title or ""))
+    season_num = _coerce_season_int(season) or 0
+    season_label = f"S{season_num:02d}" if season_num > 0 else ""
+
+    series_ids = rules.get("series_ids") if isinstance(rules.get("series_ids"), set) else set()
+    series_titles = rules.get("series_titles") if isinstance(rules.get("series_titles"), set) else set()
+    season_by_id = rules.get("season_by_id") if isinstance(rules.get("season_by_id"), set) else set()
+    season_by_title = rules.get("season_by_title") if isinstance(rules.get("season_by_title"), set) else set()
+
+    if sid_token and sid_token in series_ids:
+        return True
+    if title_token and title_token in series_titles:
+        return True
+    if season_label:
+        if sid_token and f"{sid_token}:{season_label}" in season_by_id:
+            return True
+        if title_token and f"{title_token}:{season_label}" in season_by_title:
+            return True
+    return False
 
 
 def _append_emby_gap_fill_log(lines) -> None:
@@ -6852,6 +7059,65 @@ def _extract_emby_missing_seasons_by_index_gap(items: list, *, only_aired: bool 
 def _build_emby_gap_key(series_id: str, season: int) -> str:
     sid = str(series_id or "").strip()
     return f"{sid}:S{int(season):02d}"
+
+
+def _extract_emby_gap_item_key(item: dict) -> str:
+    if not isinstance(item, dict):
+        return ""
+    sid = str(item.get("series_id") or "").strip()
+    if not sid:
+        return ""
+    season_num = _coerce_season_int(item.get("season"))
+    if not season_num:
+        season_label = str(item.get("season_label") or "").strip()
+        if season_label:
+            m = re.search(r"(\d{1,2})", season_label)
+            if m:
+                season_num = _coerce_season_int(m.group(1))
+    if not season_num:
+        return ""
+    return _build_emby_gap_key(sid, season_num)
+
+
+def _prune_emby_gap_missing_items(missing_items: list, submitted_items: list) -> tuple[list, int]:
+    missing_list = list(missing_items) if isinstance(missing_items, list) else []
+    submitted_list = list(submitted_items) if isinstance(submitted_items, list) else []
+    if not missing_list or not submitted_list:
+        return missing_list, 0
+
+    submitted_keys = set()
+    for entry in submitted_list:
+        key = _extract_emby_gap_item_key(entry)
+        if key:
+            submitted_keys.add(key)
+    if not submitted_keys:
+        return missing_list, 0
+
+    pruned = []
+    removed = 0
+    for entry in missing_list:
+        key = _extract_emby_gap_item_key(entry)
+        if key and key in submitted_keys:
+            removed += 1
+            continue
+        pruned.append(entry)
+    return pruned, removed
+
+
+def _remove_emby_gap_item_from_scheduler_state(series_id: str, season: int) -> int:
+    sid = str(series_id or "").strip()
+    season_num = _coerce_season_int(season) or 0
+    if not sid or season_num <= 0:
+        return 0
+    current_state = get_emby_gap_fill_scheduler_state()
+    missing_items_state = current_state.get("last_missing_items") if isinstance(current_state.get("last_missing_items"), list) else []
+    next_missing_items, removed = _prune_emby_gap_missing_items(
+        missing_items_state,
+        [{"series_id": sid, "season": season_num}],
+    )
+    if removed > 0:
+        _set_emby_gap_fill_scheduler_state(last_missing_items=next_missing_items)
+    return removed
 
 
 def _emby_request_json(
@@ -7161,6 +7427,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             "missing": 0,
             "submitted": 0,
             "pending": 0,
+            "ignored": 0,
             "inferred_missing": 0,
             "series_with_missing": 0,
             "cooldown_skipped": 0,
@@ -7231,10 +7498,15 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             return _return_early("error", f"解析 Emby 用户失败: {user_err or '未知错误'}")
 
         max_series = int(emby_cfg.get("max_series") or 0)
-        cooldown_hours = int(emby_cfg.get("request_cooldown_hours") or 24)
-        cooldown_seconds = max(1, cooldown_hours) * 3600
+        try:
+            cooldown_hours = int(emby_cfg.get("request_cooldown_hours", 24))
+        except Exception:
+            cooldown_hours = 24
+        cooldown_hours = max(0, cooldown_hours)
+        cooldown_seconds = cooldown_hours * 3600
         only_aired = bool(emby_cfg.get("only_aired", True))
         library_ids = _parse_emby_library_ids(emby_cfg.get("library_ids"))
+        ignore_rules = _parse_emby_gap_ignore_list(emby_cfg.get("ignore_list"))
 
         def _on_series_page_progress(meta: dict) -> None:
             try:
@@ -7282,6 +7554,20 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             production_year = str(series.get("ProductionYear") or "").strip()
             valid_series.append((sid, title, production_year))
 
+        if valid_series:
+            filtered_series = []
+            ignored_series_count = 0
+            for sid, title, production_year in valid_series:
+                if _emby_gap_ignore_match(ignore_rules, sid, title, 0):
+                    ignored_series_count += 1
+                    continue
+                filtered_series.append((sid, title, production_year))
+            if ignored_series_count > 0:
+                _append_emby_gap_fill_log([
+                    f"[{now_str}] [INFO] 忽略名单已过滤剧集 {ignored_series_count} 部（按 series_id/剧名）"
+                ])
+            valid_series = filtered_series
+
         total_series = len(valid_series)
         try:
             series_workers = int(emby_cfg.get("series_workers", 6) or 6)
@@ -7308,6 +7594,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
         inferred_missing_count = 0
         series_with_missing = 0
         cooldown_skipped = 0
+        ignored_skipped = 0
         api_errors = 0
         missing_filter_probe_done = False
         missing_filter_ignored = False
@@ -7418,22 +7705,28 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 continue
             series_with_missing += 1
             for season, miss_episodes in sorted(missing_seasons.items(), key=lambda kv: kv[0]):
+                season_num = int(season or 0)
+                if season_num <= 0:
+                    continue
+                if _emby_gap_ignore_match(ignore_rules, sid, title, season_num):
+                    ignored_skipped += 1
+                    continue
                 missing_count += 1
-                key = _build_emby_gap_key(sid, season)
+                key = _build_emby_gap_key(sid, season_num)
                 last_submit_ts = requested_map.get(key)
                 try:
                     last_submit_ts = float(last_submit_ts or 0)
                 except Exception:
                     last_submit_ts = 0
-                cooldown_active = last_submit_ts > 0 and (now_ts - last_submit_ts) < cooldown_seconds
+                cooldown_active = cooldown_seconds > 0 and last_submit_ts > 0 and (now_ts - last_submit_ts) < cooldown_seconds
                 remaining_seconds = 0
                 if cooldown_active:
                     remaining_seconds = max(0, int(cooldown_seconds - (now_ts - last_submit_ts)))
-                season_label = f"S{int(season):02d}"
+                season_label = f"S{season_num:02d}"
                 missing_item = {
                     "series_id": sid,
                     "title": title,
-                    "season": int(season),
+                    "season": season_num,
                     "season_label": season_label,
                     "missing_episodes": int(miss_episodes or 0),
                     "year": production_year,
@@ -7448,7 +7741,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 candidates.append({
                     "series_id": sid,
                     "title": title,
-                    "season": int(season),
+                    "season": season_num,
                     "missing_episodes": int(miss_episodes or 0),
                     "year": production_year,
                 })
@@ -7541,8 +7834,10 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 key = _build_emby_gap_key(item.get("series_id") or "", season)
                 requested_map[key] = now_ts
                 submitted.append({
+                    "series_id": str(item.get("series_id") or "").strip(),
                     "title": title,
-                    "season": season_label,
+                    "season": int(season),
+                    "season_label": season_label,
                     "missing_episodes": int(item.get("missing_episodes") or 0),
                 })
                 _publish_running(
@@ -7564,6 +7859,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                     "missing": missing_count,
                     "submitted": len(submitted),
                     "pending": len(candidates),
+                    "ignored": ignored_skipped,
                     "inferred_missing": inferred_missing_count,
                     "series_with_missing": series_with_missing,
                     "cooldown_skipped": cooldown_skipped,
@@ -7588,6 +7884,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 message += f"，剩余待提交 {remaining_count}（本次有失败或中断）"
         if cooldown_skipped > 0:
             message += f"，冷却跳过 {cooldown_skipped}"
+        if ignored_skipped > 0:
+            message += f"，忽略名单跳过 {ignored_skipped}"
         if api_errors > 0:
             message += f"，接口异常 {api_errors}"
         if submit_errors > 0:
@@ -7612,7 +7910,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
 
         log_lines = [
             f"[{now_str}] [INFO] trigger={trigger_label} mode={run_mode} scanned={scanned_count} missing={missing_count} "
-            f"pending={len(candidates)} submitted={len(submitted)} cooldown_skipped={cooldown_skipped} "
+            f"pending={len(candidates)} submitted={len(submitted)} cooldown_skipped={cooldown_skipped} ignored={ignored_skipped} "
             f"inferred_missing={inferred_missing_count} api_errors={api_errors} submit_errors={submit_errors} "
             f"missing_filter_ignored={str(missing_filter_ignored).lower()}"
         ]
@@ -7631,8 +7929,12 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 log_lines.append(f"[{now_str}] [INFO] more_missing={len(missing_items_out) - 20}")
         else:
             for item in submitted[:10]:
+                season_text = str(item.get("season_label") or "").strip()
+                if not season_text:
+                    season_num = _coerce_season_int(item.get("season")) or 0
+                    season_text = f"S{season_num:02d}" if season_num > 0 else ""
                 log_lines.append(
-                    f"[{now_str}] [INFO] submitted title={item['title']} season={item['season']} miss={item['missing_episodes']}"
+                    f"[{now_str}] [INFO] submitted title={item['title']} season={season_text} miss={item['missing_episodes']}"
                 )
             if len(submitted) > 10:
                 log_lines.append(f"[{now_str}] [INFO] more_submitted={len(submitted) - 10}")
@@ -7646,6 +7948,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             "missing": missing_count,
             "submitted": len(submitted),
             "pending": len(candidates),
+            "ignored": ignored_skipped,
             "inferred_missing": inferred_missing_count,
             "series_with_missing": series_with_missing,
             "cooldown_skipped": cooldown_skipped,
@@ -7668,6 +7971,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             "missing": 0,
             "submitted": 0,
             "pending": 0,
+            "ignored": 0,
             "inferred_missing": 0,
             "series_with_missing": 0,
             "cooldown_skipped": 0,
@@ -7724,8 +8028,19 @@ def _submit_emby_gap_item(
     if not isinstance(drama_cfg, dict):
         drama_cfg = {}
     emby_cfg = _normalize_emby_gap_fill_config(drama_cfg.get("emby_gap_fill"))
-    cooldown_hours = int(emby_cfg.get("request_cooldown_hours") or 24)
-    cooldown_seconds = max(1, cooldown_hours) * 3600
+    ignore_rules = _parse_emby_gap_ignore_list(emby_cfg.get("ignore_list"))
+    if _emby_gap_ignore_match(ignore_rules, sid, show_title, season_num):
+        return {
+            "ok": False,
+            "status": "warning",
+            "message": f"{show_title} S{season_num:02d} 已在忽略名单中，已跳过",
+        }
+    try:
+        cooldown_hours = int(emby_cfg.get("request_cooldown_hours", 24))
+    except Exception:
+        cooldown_hours = 24
+    cooldown_hours = max(0, cooldown_hours)
+    cooldown_seconds = cooldown_hours * 3600
 
     state = _cleanup_emby_gap_fill_state(_load_emby_gap_fill_state_data())
     requested_map = state.get("requested") if isinstance(state.get("requested"), dict) else {}
@@ -7735,7 +8050,7 @@ def _submit_emby_gap_item(
         last_submit_ts = float(last_submit_ts or 0)
     except Exception:
         last_submit_ts = 0
-    if last_submit_ts > 0 and (now_ts - last_submit_ts) < cooldown_seconds:
+    if cooldown_seconds > 0 and last_submit_ts > 0 and (now_ts - last_submit_ts) < cooldown_seconds:
         remain = max(0, int(cooldown_seconds - (now_ts - last_submit_ts)))
         remain_hours = round(remain / 3600, 1)
         return {
@@ -7802,6 +8117,12 @@ def _submit_emby_gap_item(
         "ok": True,
         "status": "success",
         "message": f"已提交 {show_title} {season_label} 补缺申请",
+        "submitted_item": {
+            "series_id": sid,
+            "season": season_num,
+            "season_label": season_label,
+            "title": show_title,
+        },
     }
 
 
@@ -7814,8 +8135,12 @@ def _update_emby_gap_fill_state_from_result(result: dict) -> tuple[str, str]:
         "missing": str(summary_raw.get("missing", 0) or 0),
         "submitted": str(summary_raw.get("submitted", 0) or 0),
         "pending": str(summary_raw.get("pending", 0) or 0),
+        "ignored": str(summary_raw.get("ignored", 0) or 0),
     }
     missing_items_state = (result or {}).get("missing_items") if isinstance((result or {}).get("missing_items"), list) else []
+    submitted_items_state = (result or {}).get("submitted_items") if isinstance((result or {}).get("submitted_items"), list) else []
+    if missing_items_state and submitted_items_state:
+        missing_items_state, _ = _prune_emby_gap_missing_items(missing_items_state, submitted_items_state)
     current_state = get_emby_gap_fill_scheduler_state()
     _set_emby_gap_fill_scheduler_state(
         last_run_at=_format_scheduler_ts(time.time()),
@@ -7867,6 +8192,7 @@ def _start_emby_gap_fill_background_task(*, trigger: str, preview_only: bool = F
                     "missing": 0,
                     "submitted": 0,
                     "pending": 0,
+                    "ignored": 0,
                 },
                 "missing_items": [],
             }
@@ -7936,6 +8262,13 @@ def _start_emby_gap_item_background_task(
 
         status = str((result or {}).get("status") or "error").strip().lower() or "error"
         message = str((result or {}).get("message") or "").strip() or "单项补缺执行完成"
+        if status == "success":
+            submitted_item = (result or {}).get("submitted_item") if isinstance((result or {}).get("submitted_item"), dict) else {}
+            submit_sid = str(submitted_item.get("series_id") or sid).strip()
+            submit_season = _coerce_season_int(submitted_item.get("season") or season_num) or 0
+            removed_count = _remove_emby_gap_item_from_scheduler_state(submit_sid, submit_season)
+            if removed_count > 0:
+                message = f"{message}（已从缺失列表移除）"
         state_now = get_emby_gap_fill_scheduler_state()
         _set_emby_gap_fill_scheduler_state(
             last_run_at=_format_scheduler_ts(time.time()),
@@ -8173,7 +8506,7 @@ def _emby_gap_fill_scheduler_loop():
             str(emby_cfg.get("library_ids") or ""),
             int(emby_cfg.get("max_series") or 0),
             int(emby_cfg.get("max_missing_requests") or 3),
-            int(emby_cfg.get("request_cooldown_hours") or 24),
+            int(emby_cfg.get("request_cooldown_hours", 24)),
             bool(emby_cfg.get("only_aired", True)),
         )
         if signature != last_signature:
@@ -8248,8 +8581,12 @@ def _emby_gap_fill_scheduler_loop():
             "missing": str(summary.get("missing", 0) or 0),
             "submitted": str(summary.get("submitted", 0) or 0),
             "pending": str(summary.get("pending", 0) or 0),
+            "ignored": str(summary.get("ignored", 0) or 0),
         }
         missing_items_state = result.get("missing_items") if isinstance(result.get("missing_items"), list) else []
+        submitted_items_state = result.get("submitted_items") if isinstance(result.get("submitted_items"), list) else []
+        if missing_items_state and submitted_items_state:
+            missing_items_state, _ = _prune_emby_gap_missing_items(missing_items_state, submitted_items_state)
 
         if use_cron:
             next_run_ts = _next_run_by_cron(cron_expr, time.time())
@@ -9675,6 +10012,11 @@ def drama_calendar_settings():
             drama['post_url'] = (request.form.get('drama_post_url') or '').strip()
             drama['calendar_whitelist_keywords'] = (request.form.get('drama_calendar_whitelist_keywords') or '').strip()
             drama['calendar_blacklist_keywords'] = (request.form.get('drama_calendar_blacklist_keywords') or '').strip()
+            exclude_short_drama_raw = request.form.get('drama_exclude_short_drama')
+            if exclude_short_drama_raw is None:
+                drama['exclude_short_drama'] = bool(drama.get('exclude_short_drama', True))
+            else:
+                drama['exclude_short_drama'] = exclude_short_drama_raw == 'on'
             drama['maoyan_url'] = (request.form.get('drama_maoyan_url') or '').strip() or 'https://piaofang.maoyan.com/box-office?ver=normal'
             try:
                 drama['maoyan_top_n'] = max(0, int((request.form.get('drama_maoyan_top_n') or '0').strip() or 0))
@@ -9780,6 +10122,7 @@ def drama_calendar_settings():
             emby_gap_fill["api_key"] = (request.form.get("drama_emby_api_key") or "").strip()
             emby_gap_fill["user_id"] = (request.form.get("drama_emby_user_id") or "").strip()
             emby_gap_fill["library_ids"] = (request.form.get("drama_emby_library_ids") or "").strip()
+            emby_gap_fill["ignore_list"] = (request.form.get("drama_emby_ignore_list") or "").strip()
             emby_gap_fill["notify_user_ids"] = (request.form.get("drama_emby_notify_user_ids") or "").strip()
             emby_gap_fill["only_aired"] = request.form.get("drama_emby_only_aired") == "on"
             try:
@@ -9796,7 +10139,7 @@ def drama_calendar_settings():
                 emby_gap_fill["max_missing_requests"] = 3
             try:
                 emby_gap_fill["request_cooldown_hours"] = max(
-                    1,
+                    0,
                     min(24 * 30, int((request.form.get("drama_emby_request_cooldown_hours") or "24").strip() or 24)),
                 )
             except Exception:

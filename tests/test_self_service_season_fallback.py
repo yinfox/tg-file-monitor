@@ -5,6 +5,33 @@ import app.app as app_module
 
 
 class SelfServiceSeasonFallbackTestCase(unittest.TestCase):
+    def test_extract_season_candidates_supports_s_prefixed_range(self):
+        result = app_module._extract_season_candidates("Slow Horses S01-S04 完结季")
+        self.assertEqual(result, [1, 2, 3, 4])
+
+    def test_extract_season_candidates_supports_full_total_seasons(self):
+        result = app_module._extract_season_candidates("Slow Horses 全4季 4K")
+        self.assertEqual(result, [1, 2, 3, 4])
+
+    def test_extract_season_candidates_supports_plain_range_with_season_suffix(self):
+        result = app_module._extract_season_candidates("Slow Horses 1-4季全")
+        self.assertEqual(result, [1, 2, 3, 4])
+
+    def test_resource_match_season_open_ended_pack_returns_unknown(self):
+        item = {
+            "title": "Slow Horses S01-S完结季",
+            "season": 1,
+        }
+        result = app_module._resource_match_season(item, 3)
+        self.assertIsNone(result)
+
+    def test_resource_match_season_full_total_seasons_matches_requested(self):
+        item = {
+            "title": "Slow Horses 全4季 4K",
+        }
+        result = app_module._resource_match_season(item, 3)
+        self.assertTrue(result)
+
     def test_prioritize_candidates_keeps_unknown_when_season_strict(self):
         candidates = [
             "ABCDEFGHIJKLMNOP",
@@ -125,6 +152,61 @@ class SelfServiceSeasonFallbackTestCase(unittest.TestCase):
         self.assertIn("未找到所选季", detail)
         open_api_unlock.assert_not_called()
         transfer.assert_not_called()
+
+    def test_run_self_service_strict_season_open_ended_pack_continues(self):
+        payload = {
+            "request_id": "rid-season-open-ended",
+            "query": "Slow Horses",
+            "title": "Slow Horses",
+            "notify_targets": ["@tester"],
+            "max_results": 5,
+            "hdhive_cookie": "",
+            "base_url": "https://hdhive.com",
+            "type": "电视剧",
+            "year": "",
+            "note": "",
+            "hdhive_url": "",
+            "use_open_api": True,
+            "hdhive_open_api_key": "api-key",
+            "tmdb_id": "84773",
+            "unlock_threshold": 0,
+            "open_api_direct_unlock": False,
+            "storage_mode": "115",
+            "dolby_preference": "any",
+            "season": "S03",
+            "resolution": "",
+            "advanced_mode": False,
+        }
+
+        with patch("app.app._append_self_service_log"), \
+             patch("app.app._hdhive_open_api_resources", return_value={
+                 "success": True,
+                 "data": [
+                     {
+                         "slug": "ABCDEFGHIJKLMNOP",
+                         "title": "Slow Horses S01-S完结季",
+                         "season": 1,
+                         "unlock_points": 0,
+                     }
+                 ],
+             }), \
+             patch("app.app._hdhive_open_api_unlock", return_value={
+                 "success": True,
+                 "data": {
+                     "full_url": "https://115.com/s/demo?password=abcd",
+                 },
+             }), \
+             patch("app.app._try_115_share_transfer", return_value=(True, "transfer_ok")), \
+             patch("app.app._set_self_service_result") as set_result, \
+             patch("app.app._self_service_notify_result"):
+            app_module._run_self_service_request(payload)
+
+        set_result.assert_called()
+        rid, status, message, detail = set_result.call_args[0][:4]
+        self.assertEqual(rid, "rid-season-open-ended")
+        self.assertEqual(status, "success")
+        self.assertIn("资源已入库", message)
+        self.assertIn("来源: Open API 搜索", detail)
 
 
 if __name__ == "__main__":

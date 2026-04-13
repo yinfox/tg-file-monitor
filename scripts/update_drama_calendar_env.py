@@ -52,6 +52,14 @@ SOURCE_CHOICES = (
     "douban_animation",
     "all",
 )
+SHORT_DRAMA_SECTION_KEYWORDS = (
+    "短剧",
+    "微短剧",
+    "短剧场",
+    "小程序剧",
+    "竖屏剧",
+    "微剧",
+)
 _TMDB_CACHE_LOCK = threading.Lock()
 _TMDB_PROXY_URL = (os.environ.get("DRAMA_TMDB_PROXY_URL") or os.environ.get("TMDB_PROXY_URL") or "").strip()
 _RETRYABLE_HTTP_STATUS_CODES = {408, 429, 500, 502, 503, 504, 520, 521, 522, 523, 524}
@@ -833,6 +841,9 @@ def extract_calendar_title_states(
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     target_lines: List[str] = []
     title_states: Dict[str, Dict[str, object]] = {}
+    active_section = ""
+    short_drama_skipped_lines = 0
+    short_drama_skipped_titles: Set[str] = set()
 
     fallback_year = (post_date.year if post_date else datetime.date.today().year)
     fallback_finish_date = post_date
@@ -847,8 +858,37 @@ def extract_calendar_title_states(
             return False
         return True
 
+    def _looks_like_section_header(line_text: str) -> bool:
+        text_line = str(line_text or "").strip()
+        if not text_line:
+            return False
+        if re.search(r"《[^》]+》", text_line):
+            return False
+        if len(text_line) > 80:
+            return False
+        # Common section markers in the article body, for example:
+        # "【网络短剧追更日历】..." / "【近期待播或待定档的新剧】"
+        if re.match(r"^【[^】]{2,80}】", text_line):
+            return True
+        if ("日历" in text_line) or ("追更" in text_line):
+            return True
+        return False
+
+    def _is_short_drama_section(line_text: str) -> bool:
+        text_line = str(line_text or "")
+        if not text_line:
+            return False
+        if ("追更" not in text_line) and ("日历" not in text_line):
+            return False
+        return any(keyword in text_line for keyword in SHORT_DRAMA_SECTION_KEYWORDS)
+
     for line in lines:
-        has_include_kw = any(kw in line for kw in include_keywords)
+        if _looks_like_section_header(line):
+            active_section = line
+
+        has_explicit_include_kw = any(kw in line for kw in include_keywords)
+        has_update_line = ("更新" in line) and bool(re.search(r"《[^》]+》", line))
+        has_include_kw = has_explicit_include_kw or has_update_line
         has_finish_kw = _line_marks_finished(line)
         if not has_include_kw and not has_finish_kw:
             continue
@@ -856,6 +896,17 @@ def extract_calendar_title_states(
         line_titles = [_clean_extracted_title(t) for t in re.findall(r"《([^》]+)》", line)]
         line_titles = [t for t in line_titles if t]
         if not line_titles:
+            continue
+
+        line_is_short_drama_content = any(keyword in line for keyword in SHORT_DRAMA_SECTION_KEYWORDS)
+        line_in_short_drama_section = (
+            _is_short_drama_section(active_section)
+            or _is_short_drama_section(line)
+            or line_is_short_drama_content
+        )
+        if line_in_short_drama_section:
+            short_drama_skipped_lines += 1
+            short_drama_skipped_titles.update(line_titles)
             continue
 
         if has_include_kw:
@@ -907,6 +958,12 @@ def extract_calendar_title_states(
             if st and bool(st.get("seen_in_include_line")):
                 ordered_titles.append(cleaned)
                 seen.add(cleaned)
+
+    if short_drama_skipped_lines > 0:
+        print(
+            f"[INFO] 追剧日历短剧分区过滤: skipped_lines={short_drama_skipped_lines} "
+            f"skipped_titles={len(short_drama_skipped_titles)}"
+        )
 
     return ordered_titles, target_lines, title_states
 
