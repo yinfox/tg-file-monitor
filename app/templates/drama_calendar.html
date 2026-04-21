@@ -1358,6 +1358,7 @@
         {% set emby_gap_state = emby_gap_fill_state or {} %}
         {% set emby_gap_enabled = emby_gap_cfg.get('enabled', False) %}
         {% set emby_gap_only_aired = emby_gap_cfg.get('only_aired', True) %}
+        {% set emby_gap_strict_missing_markers_only = emby_gap_cfg.get('strict_missing_markers_only', False) %}
         {% set emby_gap_status = emby_gap_state.get('last_status', '') %}
         {% set emby_gap_running = emby_gap_state.get('running', False) %}
         {% set emby_gap_status_text = emby_gap_state.get('last_message', '') or '暂无执行记录' %}
@@ -1407,6 +1408,9 @@
                         </a>
                         <a href="#section-write-settings" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
                             <i class="bi bi-download me-1"></i>写入设置
+                        </a>
+                        <a href="#section-moviepilot" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
+                            <i class="bi bi-link-45deg me-1"></i>MoviePilot 联动
                         </a>
                         <a href="#section-finish-settings" class="btn btn-outline-light btn-sm drama-hero-action-btn" data-drama-jump>
                             <i class="bi bi-stars me-1"></i>TMDB 判定
@@ -1609,6 +1613,9 @@
                     </a>
                     <a href="#section-write-settings" class="drama-quick-nav-link" data-drama-nav>
                         <span>写入设置</span><i class="bi bi-save2"></i>
+                    </a>
+                    <a href="#section-moviepilot" class="drama-quick-nav-link" data-drama-nav>
+                        <span>MoviePilot 联动</span><i class="bi bi-link-45deg"></i>
                     </a>
                     <a href="#section-finish-settings" class="drama-quick-nav-link" data-drama-nav>
                         <span>TMDB 判定</span><i class="bi bi-stars"></i>
@@ -2342,6 +2349,63 @@
                             </div>
                         </div>
 
+                        {% set moviepilot_cfg = config.get('drama_calendar', {}).get('moviepilot_sync', {}) %}
+                        {% set moviepilot_enabled = moviepilot_cfg.get('enabled', False) %}
+                        {% set moviepilot_panel_open = moviepilot_enabled or moviepilot_cfg.get('base_url') or moviepilot_cfg.get('api_token') %}
+                        <div class="source-panel drama-section-anchor" id="section-moviepilot" data-drama-modal-block="moviepilot">
+                            <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_moviepilot_panel"
+                                aria-expanded="{{ 'true' if moviepilot_panel_open else 'false' }}" aria-controls="drama_moviepilot_panel">
+                                <span class="panel-toggle-copy">
+                                    <span class="panel-toggle-heading">MoviePilot 联动</span>
+                                    <span class="panel-toggle-meta">
+                                        {% if moviepilot_enabled %}
+                                            已启用 · 追剧白名单写入后自动同步订阅
+                                        {% else %}
+                                            未启用 · 可选
+                                        {% endif %}
+                                    </span>
+                                </span>
+                                <i class="bi bi-chevron-down panel-toggle-icon"></i>
+                            </button>
+
+                            <div id="drama_moviepilot_panel" class="collapse{% if moviepilot_panel_open %} show{% endif %}">
+                                <div class="panel-collapse-body">
+                                    <div class="mb-3">
+                                        <div class="form-check">
+                                            <input class="form-check-input" type="checkbox" id="drama_moviepilot_sync_enabled" name="drama_moviepilot_sync_enabled"
+                                                {% if moviepilot_enabled %}checked{% endif %}>
+                                            <label class="form-check-label small" for="drama_moviepilot_sync_enabled">
+                                                开启白名单到 MoviePilot 订阅同步
+                                            </label>
+                                        </div>
+                                    </div>
+
+                                    <div class="dense-grid">
+                                        <div>
+                                            <label class="form-label small" for="drama_moviepilot_base_url">MoviePilot 地址</label>
+                                            <input type="text" class="form-control form-control-sm" id="drama_moviepilot_base_url" name="drama_moviepilot_base_url"
+                                                value="{{ moviepilot_cfg.get('base_url', '') }}"
+                                                placeholder="http://127.0.0.1:3000">
+                                        </div>
+
+                                        <div>
+                                            <label class="form-label small" for="drama_moviepilot_api_token">MoviePilot API Token</label>
+                                            <input type="text" class="form-control form-control-sm" id="drama_moviepilot_api_token" name="drama_moviepilot_api_token"
+                                                value="{{ moviepilot_cfg.get('api_token', '') }}"
+                                                placeholder="对应 MoviePilot 的 API_TOKEN">
+                                        </div>
+
+                                        <div>
+                                            <label class="form-label small" for="drama_moviepilot_timeout_seconds">请求超时（秒）</label>
+                                            <input type="number" min="3" max="120" step="1" class="form-control form-control-sm"
+                                                id="drama_moviepilot_timeout_seconds" name="drama_moviepilot_timeout_seconds"
+                                                value="{{ moviepilot_cfg.get('timeout_seconds', 15) }}" placeholder="15">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="source-panel drama-section-anchor" id="section-finish-settings" data-drama-modal-block="finish">
                             <button class="panel-toggle" type="button" data-bs-toggle="collapse" data-bs-target="#drama_finish_panel"
                                 aria-expanded="{{ 'true' if finish_panel_open else 'false' }}" aria-controls="drama_finish_panel">
@@ -2576,6 +2640,13 @@
                                         {% if emby_gap_only_aired %}checked{% endif %}>
                                     <label class="form-check-label small" for="drama_emby_only_aired">仅处理已播出的缺失剧集（忽略未来首播）</label>
                                 </div>
+                                <div class="form-check mt-2">
+                                    <input class="form-check-input" type="checkbox" id="drama_emby_strict_missing_markers_only" name="drama_emby_strict_missing_markers_only"
+                                        {% if emby_gap_strict_missing_markers_only %}checked{% endif %}>
+                                    <label class="form-check-label small" for="drama_emby_strict_missing_markers_only">
+                                        严格模式：仅认 Emby 明确缺失标记（禁用整季/断档推断，TMDB 不新增缺失季）
+                                    </label>
+                                </div>
 
                                 <div class="form-text mt-2">
                                     状态：
@@ -2762,6 +2833,7 @@
             '#section-whitelist',
             '#section-config-main',
             '#section-write-settings',
+            '#section-moviepilot',
             '#section-finish-settings',
             '#section-schedule',
             '#section-emby-gap-fill'
@@ -2770,6 +2842,7 @@
             '#section-whitelist': '#section-whitelist',
             '#section-config-main': '#section-config-main',
             '#section-write-settings': '#section-config-main',
+            '#section-moviepilot': '#section-config-main',
             '#section-finish-settings': '#section-config-main',
             '#section-schedule': '#section-config-main',
             '#section-emby-gap-fill': '#section-config-main'
@@ -2778,6 +2851,7 @@
             '#section-whitelist': '白名单编辑',
             '#section-config-main': '来源配置',
             '#section-write-settings': '写入设置',
+            '#section-moviepilot': 'MoviePilot 联动',
             '#section-finish-settings': 'TMDB 判定',
             '#section-schedule': '自动调度',
             '#section-emby-gap-fill': 'Emby 补缺'
@@ -2817,6 +2891,7 @@
             const visibleMap = {
                 '#section-config-main': new Set(['source-select', 'source-params', 'actions', 'secondary']),
                 '#section-write-settings': new Set(['write', 'actions', 'secondary']),
+                '#section-moviepilot': new Set(['moviepilot', 'actions']),
                 '#section-finish-settings': new Set(['finish', 'actions']),
                 '#section-schedule': new Set(['schedule', 'actions']),
                 '#section-emby-gap-fill': new Set(['emby', 'actions'])
@@ -2835,6 +2910,7 @@
 
             const visibleActionsMap = {
                 '#section-write-settings': new Set(['save', 'preview', 'apply', 'clear']),
+                '#section-moviepilot': new Set(['save']),
                 '#section-finish-settings': new Set(['save']),
                 '#section-schedule': new Set(['save']),
                 '#section-emby-gap-fill': new Set(['save', 'emby-list', 'emby-run'])
@@ -3190,6 +3266,7 @@
         const revealPanels = new Map([
             ['#section-whitelist', 'env_edit_panel'],
             ['#section-write-settings', 'drama_write_panel'],
+            ['#section-moviepilot', 'drama_moviepilot_panel'],
             ['#section-finish-settings', 'drama_finish_panel'],
             ['#section-schedule', 'drama_auto_sync_panel'],
             ['#section-emby-gap-fill', 'drama_emby_gap_fill_panel']

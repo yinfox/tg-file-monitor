@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.49-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.71-orange.svg)](.)
 
 </div>
 
@@ -39,6 +39,8 @@
 - 🤖 **自动调度** - 支持间隔执行与 Cron 表达式定时同步
 - ✅ **完结剔除策略** - 关键词 / TMDB / hybrid 判定，支持年份容差与置信分
 - 🎬 **电影超期剔除** - 猫眼来源可按 TMDB 首映日期自动移除超期电影（天数可配）
+- 🔗 **MoviePilot 联动** - 追剧白名单写入后可同步新增/删除订阅，并保护订阅状态
+- 🧪 **Emby 补缺严格模式** - 可仅认 Emby 缺失标记，禁用整季/断档与 TMDB 推断补齐
 - 📝 **追剧独立日志** - 支持查看、下载、清空，手动/自动执行均可追踪
 
 ## 🚀 快速开始
@@ -75,7 +77,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.57`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.71`
 
 升级示例：
 
@@ -87,7 +89,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.57
+y1nf0x/tg-file-monitor:0.5.71
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -267,6 +269,11 @@ python scripts/update_drama_calendar_env.py \
 - `--backup`：写入前先备份原 `.env`（生成 `.bak_时间戳`）
 - `--append`：将结果追加到目标变量（适合关键词白名单变量）
 - `--managed-scope`：追加替换范围，`source`(默认，仅替换同数据源自动值) 或 `key`(同变量名下全部自动值)
+- `--tv-filters-file`：写入内部配置 `tvchannel_filters.json`（可替代 `--env-files`）
+- `--moviepilot-sync`：写入后同步到 MoviePilot 订阅（新增 + 删除 + 状态保护）
+- `--moviepilot-url`：MoviePilot 地址（如 `http://127.0.0.1:3000`）
+- `--moviepilot-token`：MoviePilot API Token（即 MP 的 `API_TOKEN`）
+- `--moviepilot-timeout`：MoviePilot 请求超时秒数（默认 15）
 
 写入关键词白名单示例：
 
@@ -298,6 +305,18 @@ python scripts/update_drama_calendar_env.py \
   --env-files /external-env/user.env \
   --env-key KEYWORD_WHITELIST \
   --append --backup
+```
+
+写入 TV 白名单并联动 MoviePilot 订阅示例：
+
+```bash
+python scripts/update_drama_calendar_env.py \
+  --source calendar \
+  --tv-filters-file /app/config/tvchannel_filters.json \
+  --append \
+  --moviepilot-sync \
+  --moviepilot-url "http://127.0.0.1:3000" \
+  --moviepilot-token "your_moviepilot_api_token"
 ```
 
 ### 代理设置
@@ -395,6 +414,13 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
+### v0.5.71 (2026-04-21) - 当前版本
+- ✅ 追剧页新增 MoviePilot 联动配置，支持白名单写入后自动同步新增/删除订阅并做状态保护
+- ✅ `update_drama_calendar_env.py` 新增 `--moviepilot-*` 参数，支持 TMDB enrich 后写入订阅（TV 未命中时自动回退电影匹配）
+- ✅ Emby 自动补缺新增“严格模式”，可仅依赖 Emby 缺失标记，禁用整季/断档与 TMDB 推断补季
+- ✅ HDHive Open API 调用新增分钟级限流与 429 重试，Cloudflare 拦截错误提示更明确
+- ✅ 补充 MoviePilot/Emby/HDHive 回归测试，覆盖同步、季匹配回退与长文案分片逻辑
+
 ### v0.5.57 (2026-04-12)
 - ✅ Emby 自动补缺调度改为全量提交，不再受“单次提交上限”限制；保留同季冷却控制，减少重复申请
 - ✅ 115 秒传/上传链路继续加固：`upload_key` 异常可回退 `upload_info`，秒传命中后目标目录补全失败会自动回退本地同步

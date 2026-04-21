@@ -1,10 +1,16 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import app.app as app_module
 
 
 class SelfServiceSeasonFallbackTestCase(unittest.TestCase):
+    def setUp(self):
+        try:
+            app_module._HDHIVE_OPEN_API_RATE_LIMIT_CACHE.clear()
+        except Exception:
+            pass
+
     def test_extract_season_candidates_supports_s_prefixed_range(self):
         result = app_module._extract_season_candidates("Slow Horses S01-S04 完结季")
         self.assertEqual(result, [1, 2, 3, 4])
@@ -31,6 +37,48 @@ class SelfServiceSeasonFallbackTestCase(unittest.TestCase):
         }
         result = app_module._resource_match_season(item, 3)
         self.assertTrue(result)
+
+    def test_open_api_rate_limit_allows_three_requests_per_minute(self):
+        url = "https://hdhive.com/api/open/ping"
+        api_key = "api-key"
+
+        wait1 = app_module._reserve_hdhive_open_api_slot(url, api_key, now_ts=100.0)
+        wait2 = app_module._reserve_hdhive_open_api_slot(url, api_key, now_ts=110.0)
+        wait3 = app_module._reserve_hdhive_open_api_slot(url, api_key, now_ts=120.0)
+        wait4 = app_module._reserve_hdhive_open_api_slot(url, api_key, now_ts=130.0)
+        wait5 = app_module._reserve_hdhive_open_api_slot(url, api_key, now_ts=161.0)
+
+        self.assertEqual(wait1, 0.0)
+        self.assertEqual(wait2, 0.0)
+        self.assertEqual(wait3, 0.0)
+        self.assertGreater(wait4, 0.0)
+        self.assertEqual(wait5, 0.0)
+
+    def test_open_api_request_retries_once_when_429(self):
+        too_many = Mock()
+        too_many.status_code = 429
+        too_many.headers = {"Retry-After": "2"}
+        too_many.text = '{"success": false, "message": "too many requests"}'
+        too_many.json.return_value = {"success": False, "code": "429", "message": "too many requests"}
+
+        success = Mock()
+        success.status_code = 200
+        success.headers = {"Content-Type": "application/json"}
+        success.text = '{"success": true}'
+        success.json.return_value = {"success": True, "data": {"ok": True}}
+
+        with patch("app.app._wait_for_hdhive_open_api_slot"), \
+             patch("app.app.time.sleep") as sleep_mock, \
+             patch("app.app._requests_request", side_effect=[too_many, success]) as req_mock:
+            result = app_module._hdhive_open_api_request(
+                "GET",
+                "https://hdhive.com/api/open/ping",
+                "api-key",
+            )
+
+        self.assertTrue(bool(result.get("success")))
+        self.assertEqual(req_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(2)
 
     def test_prioritize_candidates_keeps_unknown_when_season_strict(self):
         candidates = [

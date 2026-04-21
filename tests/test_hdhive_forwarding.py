@@ -61,6 +61,12 @@ from telegram_monitor import _should_send_copy_instead_of_forward
 
 
 class HDHiveForwardingDecisionTestCase(unittest.TestCase):
+    def setUp(self):
+        try:
+            telegram_monitor._HDHIVE_OPEN_API_RATE_LIMIT_CACHE.clear()
+        except Exception:
+            pass
+
     def test_hdhive_hit_always_uses_rewritten_copy(self):
         self.assertTrue(
             _should_send_copy_instead_of_forward(
@@ -136,6 +142,42 @@ class HDHiveForwardingDecisionTestCase(unittest.TestCase):
         self.assertIn(real_url, new_text)
         self.assertNotIn(source_url, new_text)
 
+    def test_split_media_caption_and_followups_keeps_short_text_intact(self):
+        caption, followups = telegram_monitor._split_media_caption_and_followups(
+            "短说明",
+            caption_limit=20,
+            message_limit=50,
+        )
+        self.assertEqual(caption, "短说明")
+        self.assertEqual(followups, [])
+
+    def test_split_media_caption_and_followups_preserves_all_ed2k_links(self):
+        links = [
+            f"ed2k://|file|Example.S01E{i:02d}.mkv|123456|ABCDEF1234567890ABCDEF12345678{i:02d}|/"
+            for i in range(1, 9)
+        ]
+        text = "资源合集\n" + "\n".join(links)
+        caption, followups = telegram_monitor._split_media_caption_and_followups(
+            text,
+            caption_limit=120,
+            message_limit=160,
+        )
+
+        self.assertLessEqual(len(caption), 120)
+        self.assertTrue(followups)
+        self.assertTrue(all(len(chunk) <= 160 for chunk in followups))
+
+        merged = "\n".join([caption] + followups)
+        for link in links:
+            self.assertIn(link, merged)
+
+    def test_split_text_for_telegram_messages_hard_splits_long_token(self):
+        long_token = "ed2k://|file|" + ("A" * 300) + "|123456|HASHVALUE|/"
+        chunks = telegram_monitor._split_text_for_telegram_messages(long_token, max_length=80)
+        self.assertTrue(chunks)
+        self.assertTrue(all(len(chunk) <= 80 for chunk in chunks))
+        self.assertEqual("".join(chunks), long_token)
+
     def test_resolve_with_note_returns_free_resource_url_without_unlock(self):
         source_url = "https://hdhive.com/resource/115/ABCDEFGHIJKLMNOP"
         real_url = "https://115cdn.com/s/example?password=abcd"
@@ -202,6 +244,87 @@ class HDHiveForwardingDecisionTestCase(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["code"], "403")
         self.assertEqual(result["message"], "Cloudflare challenge blocked request")
+
+    def test_build_hdhive_full_url_supports_ed2k(self):
+        ed2k_url = "ed2k://|file|Example.S01E01.mkv|123456|ABCDEF1234567890ABCDEF1234567890|/"
+        self.assertEqual(
+            telegram_monitor._build_hdhive_full_url({"full_url": ed2k_url}),
+            ed2k_url,
+        )
+        self.assertEqual(
+            telegram_monitor._build_hdhive_full_url({"url": ed2k_url, "access_code": "ignored"}),
+            ed2k_url,
+        )
+
+    def test_resolve_with_note_prefers_open_api_ed2k_free_resource(self):
+        source_url = "https://hdhive.com/resource/115/ABCDEFGHIJKLMNOP"
+        ed2k_url = "ed2k://|file|Example.S01E01.mkv|123456|ABCDEF1234567890ABCDEF1234567890|/"
+        detail_resp = {
+            "data": {
+                "url": ed2k_url,
+                "unlock_points": 0,
+            }
+        }
+
+        with patch.object(
+            telegram_monitor,
+            "current_config",
+            {"hdhive_open_api_direct_unlock": False, "hdhive_auto_unlock_points_threshold": 0},
+            create=True,
+        ), \
+             patch("telegram_monitor._get_hdhive_open_api_key", return_value="api-key"), \
+             patch("telegram_monitor._hdhive_open_api_resource_detail", return_value=detail_resp), \
+             patch("telegram_monitor._get_hdhive_cookie_header", return_value=""), \
+             patch("telegram_monitor._hdhive_open_api_unlock") as open_api_unlock, \
+             patch("telegram_monitor._hdhive_go_api_get_url_info_sync") as cookie_resolver:
+            resolved, note = telegram_monitor._resolve_hdhive_115_url_with_note_sync(source_url)
+
+        self.assertEqual(resolved, ed2k_url)
+        self.assertEqual(note, "Open API：免积分资源，解析成功")
+        open_api_unlock.assert_not_called()
+        cookie_resolver.assert_not_called()
+
+    def test_open_api_rate_limit_allows_three_requests_per_minute(self):
+        url = "https://hdhive.com/api/open/ping"
+        api_key = "api-key"
+
+        wait1 = telegram_monitor._reserve_hdhive_open_api_slot(url, api_key, now_ts=100.0)
+        wait2 = telegram_monitor._reserve_hdhive_open_api_slot(url, api_key, now_ts=110.0)
+        wait3 = telegram_monitor._reserve_hdhive_open_api_slot(url, api_key, now_ts=120.0)
+        wait4 = telegram_monitor._reserve_hdhive_open_api_slot(url, api_key, now_ts=130.0)
+        wait5 = telegram_monitor._reserve_hdhive_open_api_slot(url, api_key, now_ts=161.0)
+
+        self.assertEqual(wait1, 0.0)
+        self.assertEqual(wait2, 0.0)
+        self.assertEqual(wait3, 0.0)
+        self.assertGreater(wait4, 0.0)
+        self.assertEqual(wait5, 0.0)
+
+    def test_open_api_request_retries_once_when_429(self):
+        too_many = Mock()
+        too_many.status_code = 429
+        too_many.headers = {"Retry-After": "2"}
+        too_many.text = '{"success": false, "message": "too many requests"}'
+        too_many.json.return_value = {"success": False, "code": "429", "message": "too many requests"}
+
+        success = Mock()
+        success.status_code = 200
+        success.headers = {"Content-Type": "application/json"}
+        success.text = '{"success": true}'
+        success.json.return_value = {"success": True, "data": {"ok": True}}
+
+        with patch("telegram_monitor._wait_for_hdhive_open_api_slot"), \
+             patch("telegram_monitor.time.sleep") as sleep_mock, \
+             patch("telegram_monitor._requests_request", side_effect=[too_many, success]) as req_mock:
+            result = telegram_monitor._hdhive_open_api_request(
+                "GET",
+                "https://hdhive.com/api/open/ping",
+                "api-key",
+            )
+
+        self.assertTrue(bool(result.get("success")))
+        self.assertEqual(req_mock.call_count, 2)
+        sleep_mock.assert_called_once_with(2)
 
     def test_open_api_resource_detail_returns_more_informative_fallback_error(self):
         with patch(

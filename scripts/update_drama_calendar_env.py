@@ -74,6 +74,701 @@ def _tmdb_request_get(url: str, **kwargs):
     return requests.get(url, **kwargs)
 
 
+def _normalize_moviepilot_base_url(base_url: str) -> str:
+    text = str(base_url or "").strip()
+    if not text:
+        return ""
+    if not re.match(r"^https?://", text, flags=re.IGNORECASE):
+        text = f"http://{text}"
+    return text.rstrip("/")
+
+
+def _resolve_tmdb_tv_identity_for_sync(
+    title: str,
+    *,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    year_tolerance: int,
+    min_confidence_score: int,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    token = str(api_key or "").strip()
+    raw_title = str(title or "").strip()
+    if not token or not raw_title:
+        return None, "tmdb_disabled"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
+        "Accept": "application/json",
+    }
+
+    try:
+        timeout_seconds = max(3, int(timeout or 8))
+    except Exception:
+        timeout_seconds = 8
+
+    try:
+        search_resp = _tmdb_request_get(
+            "https://api.themoviedb.org/3/search/tv",
+            params={
+                "api_key": token,
+                "query": raw_title,
+                "language": (language or "zh-CN").strip() or "zh-CN",
+                "region": (region or "CN").strip() or "CN",
+                "include_adult": "false",
+            },
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+        search_resp.raise_for_status()
+    except Exception as e:
+        return None, f"tmdb_search_error:{e}"
+
+    payload = search_resp.json() if search_resp.content else {}
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or not results:
+        return None, "tmdb_no_match"
+
+    picked, score, score_reason = _tmdb_pick_best_result(
+        raw_title,
+        results,
+        preferred_region=(region or "CN"),
+        reference_year=None,
+        year_tolerance=year_tolerance,
+    )
+    if not picked:
+        return None, "tmdb_no_match"
+
+    try:
+        min_score = max(1, int(min_confidence_score or TMDB_MIN_CONFIDENCE_SCORE))
+    except Exception:
+        min_score = TMDB_MIN_CONFIDENCE_SCORE
+    if score < min_score:
+        return None, f"tmdb_low_confidence(score={score},reason={score_reason})"
+
+    try:
+        tmdb_id = int(picked.get("id"))
+    except Exception:
+        return None, "tmdb_invalid_id"
+
+    tmdb_name = _clean_extracted_title(str(picked.get("name") or picked.get("original_name") or raw_title)) or raw_title
+    first_air_date = _parse_iso_date(str(picked.get("first_air_date") or ""))
+    year = str(first_air_date.year) if isinstance(first_air_date, datetime.date) else ""
+    resolved = {
+        "tmdbid": tmdb_id,
+        "name": tmdb_name,
+        "year": year,
+    }
+    return resolved, f"tmdbid={tmdb_id},score={score},reason={score_reason}"
+
+
+def _resolve_tmdb_movie_identity_for_sync(
+    title: str,
+    *,
+    api_key: str,
+    language: str,
+    region: str,
+    timeout: int,
+    year_tolerance: int,
+    min_confidence_score: int,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    token = str(api_key or "").strip()
+    raw_title = str(title or "").strip()
+    if not token or not raw_title:
+        return None, "tmdb_disabled"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (compatible; drama-calendar-bot/1.0)",
+        "Accept": "application/json",
+    }
+
+    try:
+        timeout_seconds = max(3, int(timeout or 8))
+    except Exception:
+        timeout_seconds = 8
+
+    try:
+        search_resp = _tmdb_request_get(
+            "https://api.themoviedb.org/3/search/movie",
+            params={
+                "api_key": token,
+                "query": raw_title,
+                "language": (language or "zh-CN").strip() or "zh-CN",
+                "region": (region or "CN").strip() or "CN",
+                "include_adult": "false",
+            },
+            headers=headers,
+            timeout=timeout_seconds,
+        )
+        search_resp.raise_for_status()
+    except Exception as e:
+        return None, f"tmdb_movie_search_error:{e}"
+
+    payload = search_resp.json() if search_resp.content else {}
+    results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(results, list) or not results:
+        return None, "tmdb_movie_no_match"
+
+    picked, score, score_reason = _tmdb_pick_best_result(
+        raw_title,
+        results,
+        preferred_region=(region or "CN"),
+        reference_year=None,
+        year_tolerance=year_tolerance,
+    )
+    if not picked:
+        return None, "tmdb_movie_no_match"
+
+    try:
+        min_score = max(1, int(min_confidence_score or TMDB_MIN_CONFIDENCE_SCORE))
+    except Exception:
+        min_score = TMDB_MIN_CONFIDENCE_SCORE
+    if score < min_score:
+        return None, f"tmdb_movie_low_confidence(score={score},reason={score_reason})"
+
+    try:
+        tmdb_id = int(picked.get("id"))
+    except Exception:
+        return None, "tmdb_movie_invalid_id"
+
+    tmdb_name = _clean_extracted_title(str(picked.get("title") or picked.get("original_title") or raw_title)) or raw_title
+    release_date = _parse_iso_date(str(picked.get("release_date") or ""))
+    year = str(release_date.year) if isinstance(release_date, datetime.date) else ""
+    resolved = {
+        "tmdbid": tmdb_id,
+        "name": tmdb_name,
+        "year": year,
+        "type": "电影",
+    }
+    return resolved, f"tmdb_movie_id={tmdb_id},score={score},reason={score_reason}"
+
+
+def _sync_moviepilot_subscriptions(
+    titles: Sequence[str],
+    *,
+    enabled: bool,
+    base_url: str,
+    api_token: str,
+    timeout: int = 15,
+    tmdb_api_key: str = "",
+    tmdb_language: str = "zh-CN",
+    tmdb_region: str = "CN",
+    tmdb_timeout: int = 8,
+    tmdb_year_tolerance: int = 2,
+    tmdb_min_score: int = TMDB_MIN_CONFIDENCE_SCORE,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "enabled": bool(enabled),
+        "skipped": False,
+        "message": "",
+        "attempted": 0,
+        "added": 0,
+        "existing": 0,
+        "failed": 0,
+        "tmdb_enriched": 0,
+        "tmdb_miss": 0,
+        "failures": [],
+    }
+    if not enabled:
+        result["skipped"] = True
+        result["message"] = "未启用 moviepilot-sync"
+        return result
+
+    normalized_titles = dedupe_titles_normalized(titles or [])
+    if not normalized_titles:
+        result["skipped"] = True
+        result["message"] = "无可同步剧名"
+        return result
+
+    normalized_base_url = _normalize_moviepilot_base_url(base_url)
+    token = str(api_token or "").strip()
+    if not normalized_base_url:
+        result["skipped"] = True
+        result["message"] = "moviepilot-url 为空"
+        return result
+    if not token:
+        result["skipped"] = True
+        result["message"] = "moviepilot-token 为空"
+        return result
+
+    try:
+        timeout_seconds = max(3, int(timeout or 15))
+    except Exception:
+        timeout_seconds = 15
+
+    subscribe_url = f"{normalized_base_url}/api/v1/subscribe/"
+    params = {"token": token}
+
+    for title in normalized_titles:
+        result["attempted"] += 1
+        tmdb_note = ""
+        payload = {
+            "name": title,
+            "type": "电视剧",
+        }
+        tmdb_payload, tmdb_note = _resolve_tmdb_tv_identity_for_sync(
+            title,
+            api_key=(tmdb_api_key or "").strip(),
+            language=(tmdb_language or "zh-CN"),
+            region=(tmdb_region or "CN"),
+            timeout=tmdb_timeout,
+            year_tolerance=tmdb_year_tolerance,
+            min_confidence_score=tmdb_min_score,
+        )
+        if isinstance(tmdb_payload, dict) and tmdb_payload.get("tmdbid"):
+            payload["tmdbid"] = int(tmdb_payload.get("tmdbid"))
+            resolved_name = str(tmdb_payload.get("name") or "").strip()
+            if resolved_name:
+                payload["name"] = resolved_name
+            resolved_year = str(tmdb_payload.get("year") or "").strip()
+            if resolved_year:
+                payload["year"] = resolved_year
+            result["tmdb_enriched"] += 1
+        else:
+            movie_payload, movie_note = _resolve_tmdb_movie_identity_for_sync(
+                title,
+                api_key=(tmdb_api_key or "").strip(),
+                language=(tmdb_language or "zh-CN"),
+                region=(tmdb_region or "CN"),
+                timeout=tmdb_timeout,
+                year_tolerance=tmdb_year_tolerance,
+                min_confidence_score=tmdb_min_score,
+            )
+            if isinstance(movie_payload, dict) and movie_payload.get("tmdbid"):
+                payload["type"] = "电影"
+                payload["tmdbid"] = int(movie_payload.get("tmdbid"))
+                resolved_name = str(movie_payload.get("name") or "").strip()
+                if resolved_name:
+                    payload["name"] = resolved_name
+                resolved_year = str(movie_payload.get("year") or "").strip()
+                if resolved_year:
+                    payload["year"] = resolved_year
+                tmdb_note = movie_note
+                result["tmdb_enriched"] += 1
+            else:
+                result["tmdb_miss"] += 1
+
+        try:
+            resp = requests.post(
+                subscribe_url,
+                params=params,
+                json=payload,
+                timeout=timeout_seconds,
+            )
+        except Exception as e:
+            result["failed"] += 1
+            result["failures"].append(f"{title}: 请求异常 {e}")
+            continue
+
+        resp_json = None
+        resp_text = ""
+        try:
+            resp_json = resp.json()
+        except Exception:
+            resp_text = str(resp.text or "").strip()
+
+        if resp.status_code >= 400:
+            detail = ""
+            if isinstance(resp_json, dict):
+                detail = str(resp_json.get("detail") or resp_json.get("message") or "").strip()
+            if not detail and resp_text:
+                detail = resp_text[:240]
+            msg = f"HTTP {resp.status_code}"
+            if detail:
+                msg = f"{msg} {detail}"
+            if tmdb_note and tmdb_note != "tmdb_disabled":
+                msg = f"{msg} [{tmdb_note}]"
+            result["failed"] += 1
+            result["failures"].append(f"{title}: {msg}")
+            continue
+
+        success = True
+        message = ""
+        if isinstance(resp_json, dict):
+            success = bool(resp_json.get("success", True))
+            message = str(resp_json.get("message") or "").strip()
+        elif resp_text:
+            message = resp_text[:240]
+
+        if not success:
+            result["failed"] += 1
+            detail = message or "MoviePilot 返回失败"
+            if tmdb_note and tmdb_note != "tmdb_disabled":
+                detail = f"{detail} [{tmdb_note}]"
+            result["failures"].append(f"{title}: {detail}")
+            continue
+
+        if "已存在" in message:
+            result["existing"] += 1
+        else:
+            result["added"] += 1
+
+    return result
+
+
+def _collect_removed_titles(before_titles: Sequence[str], after_titles: Sequence[str]) -> List[str]:
+    removed: List[str] = []
+    seen_norm: Set[str] = set()
+    after_norms: Set[str] = set()
+    for title in after_titles or []:
+        norm = _normalize_title_for_match(title)
+        if norm:
+            after_norms.add(norm)
+    for title in before_titles or []:
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        if norm in after_norms:
+            continue
+        removed.append(str(title or "").strip())
+    return removed
+
+
+def _collect_added_titles(before_titles: Sequence[str], after_titles: Sequence[str]) -> List[str]:
+    added: List[str] = []
+    seen_norm: Set[str] = set()
+    before_norms: Set[str] = set()
+    for title in before_titles or []:
+        norm = _normalize_title_for_match(title)
+        if norm:
+            before_norms.add(norm)
+    for title in after_titles or []:
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        if norm in before_norms:
+            continue
+        added.append(str(title or "").strip())
+    return added
+
+
+def _is_moviepilot_tv_type(raw_type: str) -> bool:
+    value = str(raw_type or "").strip().lower()
+    if not value:
+        return False
+    if value in ("tv", "tvshow", "tv_show", "series", "电视剧"):
+        return True
+    if ("剧" in value) and ("电影" not in value):
+        return True
+    return False
+
+
+def _remove_moviepilot_subscriptions_by_titles(
+    titles: Sequence[str],
+    *,
+    enabled: bool,
+    base_url: str,
+    api_token: str,
+    timeout: int = 15,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "enabled": bool(enabled),
+        "skipped": False,
+        "message": "",
+        "attempted": 0,
+        "deleted": 0,
+        "missing": 0,
+        "failed": 0,
+        "failures": [],
+    }
+    if not enabled:
+        result["skipped"] = True
+        result["message"] = "未启用 moviepilot-sync"
+        return result
+
+    target_titles = dedupe_titles_normalized(titles or [])
+    if not target_titles:
+        result["skipped"] = True
+        result["message"] = "无可删除剧名"
+        return result
+
+    normalized_base_url = _normalize_moviepilot_base_url(base_url)
+    token = str(api_token or "").strip()
+    if not normalized_base_url:
+        result["skipped"] = True
+        result["message"] = "moviepilot-url 为空"
+        return result
+    if not token:
+        result["skipped"] = True
+        result["message"] = "moviepilot-token 为空"
+        return result
+
+    try:
+        timeout_seconds = max(3, int(timeout or 15))
+    except Exception:
+        timeout_seconds = 15
+
+    params = {"token": token}
+    list_url = f"{normalized_base_url}/api/v1/subscribe/list"
+    try:
+        list_resp = requests.get(list_url, params=params, timeout=timeout_seconds)
+    except Exception as e:
+        result["skipped"] = True
+        result["message"] = f"获取订阅列表失败: {e}"
+        return result
+
+    list_payload = None
+    try:
+        list_payload = list_resp.json()
+    except Exception:
+        list_payload = None
+
+    if list_resp.status_code >= 400:
+        detail = ""
+        if isinstance(list_payload, dict):
+            detail = str(list_payload.get("detail") or list_payload.get("message") or "").strip()
+        if not detail:
+            detail = (list_resp.text or "").strip()[:200]
+        result["skipped"] = True
+        result["message"] = f"获取订阅列表失败: HTTP {list_resp.status_code} {detail}"
+        return result
+
+    if isinstance(list_payload, list):
+        subscribe_list = list_payload
+    elif isinstance(list_payload, dict) and isinstance(list_payload.get("data"), list):
+        subscribe_list = list_payload.get("data") or []
+    else:
+        subscribe_list = []
+
+    subscribe_ids_by_norm: Dict[str, List[int]] = {}
+    for item in subscribe_list:
+        if not isinstance(item, dict):
+            continue
+        if not _is_moviepilot_tv_type(item.get("type")):
+            continue
+        name = str(item.get("name") or "").strip()
+        norm = _normalize_title_for_match(name)
+        if not norm:
+            continue
+        try:
+            sid = int(item.get("id"))
+        except Exception:
+            continue
+        subscribe_ids_by_norm.setdefault(norm, []).append(sid)
+
+    deleted_ids: Set[int] = set()
+    for title in target_titles:
+        result["attempted"] += 1
+        norm = _normalize_title_for_match(title)
+        target_ids = subscribe_ids_by_norm.get(norm) or []
+        if not target_ids:
+            result["missing"] += 1
+            continue
+        for sid in target_ids:
+            if sid in deleted_ids:
+                continue
+            deleted_ids.add(sid)
+            delete_url = f"{normalized_base_url}/api/v1/subscribe/{sid}"
+            try:
+                del_resp = requests.delete(delete_url, params=params, timeout=timeout_seconds)
+            except Exception as e:
+                result["failed"] += 1
+                result["failures"].append(f"{title}: 删除 id={sid} 请求异常 {e}")
+                continue
+
+            del_payload = None
+            try:
+                del_payload = del_resp.json()
+            except Exception:
+                del_payload = None
+
+            if del_resp.status_code >= 400:
+                detail = ""
+                if isinstance(del_payload, dict):
+                    detail = str(del_payload.get("detail") or del_payload.get("message") or "").strip()
+                if not detail:
+                    detail = (del_resp.text or "").strip()[:200]
+                result["failed"] += 1
+                result["failures"].append(f"{title}: 删除 id={sid} HTTP {del_resp.status_code} {detail}")
+                continue
+
+            if isinstance(del_payload, dict) and ('success' in del_payload) and (not bool(del_payload.get('success'))):
+                result["failed"] += 1
+                detail = str(del_payload.get("message") or "").strip()
+                result["failures"].append(f"{title}: 删除 id={sid} {detail or 'success=false'}")
+                continue
+
+            result["deleted"] += 1
+
+    return result
+
+
+def _guard_moviepilot_tv_subscription_states(
+    titles: Sequence[str],
+    *,
+    enabled: bool,
+    base_url: str,
+    api_token: str,
+    timeout: int = 15,
+    pending_total_episode_le: int = 1,
+    resume_total_episode_gt: int = 1,
+) -> Dict[str, Any]:
+    result: Dict[str, Any] = {
+        "enabled": bool(enabled),
+        "skipped": False,
+        "message": "",
+        "attempted": 0,
+        "set_pending": 0,
+        "set_running": 0,
+        "failed": 0,
+        "failures": [],
+    }
+    if not enabled:
+        result["skipped"] = True
+        result["message"] = "未启用 moviepilot-sync"
+        return result
+
+    target_titles = dedupe_titles_normalized(titles or [])
+    if not target_titles:
+        result["skipped"] = True
+        result["message"] = "无可保护剧名"
+        return result
+
+    normalized_base_url = _normalize_moviepilot_base_url(base_url)
+    token = str(api_token or "").strip()
+    if not normalized_base_url:
+        result["skipped"] = True
+        result["message"] = "moviepilot-url 为空"
+        return result
+    if not token:
+        result["skipped"] = True
+        result["message"] = "moviepilot-token 为空"
+        return result
+
+    try:
+        timeout_seconds = max(3, int(timeout or 15))
+    except Exception:
+        timeout_seconds = 15
+
+    try:
+        pending_threshold = max(0, int(pending_total_episode_le))
+    except Exception:
+        pending_threshold = 1
+    try:
+        resume_threshold = max(0, int(resume_total_episode_gt))
+    except Exception:
+        resume_threshold = 1
+
+    params = {"token": token}
+    list_url = f"{normalized_base_url}/api/v1/subscribe/list"
+    try:
+        list_resp = requests.get(list_url, params=params, timeout=timeout_seconds)
+    except Exception as e:
+        result["skipped"] = True
+        result["message"] = f"获取订阅列表失败: {e}"
+        return result
+
+    list_payload = None
+    try:
+        list_payload = list_resp.json()
+    except Exception:
+        list_payload = None
+
+    if list_resp.status_code >= 400:
+        detail = ""
+        if isinstance(list_payload, dict):
+            detail = str(list_payload.get("detail") or list_payload.get("message") or "").strip()
+        if not detail:
+            detail = (list_resp.text or "").strip()[:200]
+        result["skipped"] = True
+        result["message"] = f"获取订阅列表失败: HTTP {list_resp.status_code} {detail}"
+        return result
+
+    if isinstance(list_payload, list):
+        subscribe_list = list_payload
+    elif isinstance(list_payload, dict) and isinstance(list_payload.get("data"), list):
+        subscribe_list = list_payload.get("data") or []
+    else:
+        subscribe_list = []
+
+    # 只处理电视剧订阅，避免影响电影逻辑。
+    subscribe_items_by_norm: Dict[str, List[Dict[str, Any]]] = {}
+    for item in subscribe_list:
+        if not isinstance(item, dict):
+            continue
+        if not _is_moviepilot_tv_type(item.get("type")):
+            continue
+        name = str(item.get("name") or "").strip()
+        norm = _normalize_title_for_match(name)
+        if not norm:
+            continue
+        subscribe_items_by_norm.setdefault(norm, []).append(item)
+
+    touched_ids: Set[int] = set()
+    for title in target_titles:
+        norm = _normalize_title_for_match(title)
+        if not norm:
+            continue
+        items = subscribe_items_by_norm.get(norm) or []
+        if not items:
+            continue
+
+        for item in items:
+            try:
+                sid = int(item.get("id"))
+            except Exception:
+                continue
+            if sid in touched_ids:
+                continue
+            touched_ids.add(sid)
+            result["attempted"] += 1
+
+            state = str(item.get("state") or "").strip().upper()
+            try:
+                total_episode = int(item.get("total_episode") or 0)
+            except Exception:
+                total_episode = 0
+
+            target_state = ""
+            if total_episode <= pending_threshold and state != "P":
+                target_state = "P"
+            elif total_episode > resume_threshold and state == "P":
+                target_state = "R"
+            if not target_state:
+                continue
+
+            status_url = f"{normalized_base_url}/api/v1/subscribe/status/{sid}"
+            status_params = {"token": token, "state": target_state}
+            try:
+                status_resp = requests.put(status_url, params=status_params, timeout=timeout_seconds)
+            except Exception as e:
+                result["failed"] += 1
+                result["failures"].append(f"{title}: 更新状态 id={sid} 失败 {e}")
+                continue
+
+            status_payload = None
+            try:
+                status_payload = status_resp.json()
+            except Exception:
+                status_payload = None
+
+            if status_resp.status_code >= 400:
+                detail = ""
+                if isinstance(status_payload, dict):
+                    detail = str(status_payload.get("detail") or status_payload.get("message") or "").strip()
+                if not detail:
+                    detail = (status_resp.text or "").strip()[:200]
+                result["failed"] += 1
+                result["failures"].append(f"{title}: 更新状态 id={sid} HTTP {status_resp.status_code} {detail}")
+                continue
+
+            if isinstance(status_payload, dict) and ("success" in status_payload) and (not bool(status_payload.get("success"))):
+                result["failed"] += 1
+                detail = str(status_payload.get("message") or "").strip()
+                result["failures"].append(f"{title}: 更新状态 id={sid} {detail or 'success=false'}")
+                continue
+
+            if target_state == "P":
+                result["set_pending"] += 1
+            elif target_state == "R":
+                result["set_running"] += 1
+
+    return result
+
+
 def _normalize_sources(raw_sources: Sequence[str]) -> List[str]:
     normalized: List[str] = []
     seen: Set[str] = set()
@@ -297,7 +992,13 @@ def _tmdb_pick_best_result(
     year_tol = max(0, int(year_tolerance or 0))
 
     def _score(item: Dict[str, Any]) -> Tuple[int, str]:
-        name = str(item.get("name") or item.get("original_name") or "")
+        name = str(
+            item.get("name")
+            or item.get("original_name")
+            or item.get("title")
+            or item.get("original_title")
+            or ""
+        )
         norm_name = _normalize_title_for_match(name)
         if not norm_name:
             return 0, "empty_name"
@@ -1768,6 +2469,29 @@ def _collect_existing_tv_filter_titles(path: str) -> Set[str]:
     return norms
 
 
+def _collect_existing_tv_filter_titles_list(path: str) -> List[str]:
+    data = _load_tv_filters(path)
+    drama = data.get("drama") if isinstance(data, dict) else {}
+    whitelist = drama.get("whitelist") if isinstance(drama, dict) else []
+    if not isinstance(whitelist, list):
+        whitelist = []
+    titles: List[str] = []
+    seen_norm: Set[str] = set()
+    for entry in whitelist:
+        if not isinstance(entry, str):
+            continue
+        extracted = _extract_titles_from_regex_value(entry)
+        if not extracted:
+            continue
+        for title in extracted:
+            norm = _normalize_title_for_match(title)
+            if not norm or norm in seen_norm:
+                continue
+            seen_norm.add(norm)
+            titles.append(title)
+    return titles
+
+
 def _update_tv_filters_drama_whitelist(
     path: str,
     titles: Sequence[str],
@@ -2104,6 +2828,10 @@ def main() -> int:
     parser.add_argument("--allow-create-env", action="store_true", help="允许自动创建不存在的 .env 文件（默认禁止）")
     parser.add_argument("--dry-run", action="store_true", help="仅打印结果，不落盘")
     parser.add_argument("--tv-filters-file", default="", help="将结果写入 tvchannel_filters.json（内部配置文件）")
+    parser.add_argument("--moviepilot-sync", action="store_true", help="写入后同步到 MoviePilot 订阅")
+    parser.add_argument("--moviepilot-url", default="", help="MoviePilot 地址（如 http://127.0.0.1:3000）")
+    parser.add_argument("--moviepilot-token", default="", help="MoviePilot API Token（等同 MP 的 API_TOKEN）")
+    parser.add_argument("--moviepilot-timeout", type=int, default=15, help="MoviePilot 请求超时秒数")
     parser.add_argument("--dump-source-titles", default="", help="输出按来源拆分的剧名 JSON（用于回填分类）")
     args = parser.parse_args()
     try:
@@ -2858,6 +3586,9 @@ def main() -> int:
             print(f"  - {t}")
 
         print(f"[INFO] 生成正则: {regex}")
+        before_tv_titles_for_mp: List[str] = []
+        if tv_filters_file and bool(args.moviepilot_sync) and (not args.dry_run):
+            before_tv_titles_for_mp = _collect_existing_tv_filter_titles_list(tv_filters_file)
 
         if tv_filters_file:
             _update_tv_filters_drama_whitelist(
@@ -2885,6 +3616,92 @@ def main() -> int:
                         managed_scope=(args.managed_scope or "source"),
                         require_existing=(not bool(args.allow_create_env)),
                     )
+
+        added_titles_for_mp: List[str] = []
+        removed_titles_for_mp: List[str] = []
+        guard_titles_for_mp: List[str] = list(titles)
+        if tv_filters_file and bool(args.moviepilot_sync) and (not args.dry_run):
+            after_tv_titles_for_mp = _collect_existing_tv_filter_titles_list(tv_filters_file)
+            added_titles_for_mp = _collect_added_titles(before_tv_titles_for_mp, after_tv_titles_for_mp)
+            removed_titles_for_mp = _collect_removed_titles(before_tv_titles_for_mp, after_tv_titles_for_mp)
+            guard_titles_for_mp = list(after_tv_titles_for_mp)
+
+        if bool(args.moviepilot_sync):
+            if args.dry_run:
+                preview_add_count = len(titles)
+                if tv_filters_file:
+                    preview_add_count = len(added_titles_for_mp) if added_titles_for_mp else len(titles)
+                print(f"[DRY-RUN] 将同步 MoviePilot 新增订阅: {preview_add_count}")
+            else:
+                add_targets = added_titles_for_mp if tv_filters_file else list(titles)
+                moviepilot_result = _sync_moviepilot_subscriptions(
+                    add_targets,
+                    enabled=True,
+                    base_url=(args.moviepilot_url or "").strip(),
+                    api_token=(args.moviepilot_token or "").strip(),
+                    timeout=int(args.moviepilot_timeout or 15),
+                    tmdb_api_key=(args.tmdb_api_key or "").strip(),
+                    tmdb_language=(args.tmdb_language or "zh-CN").strip() or "zh-CN",
+                    tmdb_region=(args.tmdb_region or "CN").strip() or "CN",
+                    tmdb_timeout=8,
+                    tmdb_year_tolerance=int(args.tmdb_year_tolerance or 2),
+                    tmdb_min_score=int(args.tmdb_min_score or TMDB_MIN_CONFIDENCE_SCORE),
+                )
+                if moviepilot_result.get("skipped"):
+                    print(f"[WARN] MoviePilot 同步已跳过: {moviepilot_result.get('message')}")
+                else:
+                    print(
+                        f"[INFO] MoviePilot 同步完成: attempted={int(moviepilot_result.get('attempted') or 0)} "
+                        f"added={int(moviepilot_result.get('added') or 0)} "
+                        f"existing={int(moviepilot_result.get('existing') or 0)} "
+                        f"tmdb_enriched={int(moviepilot_result.get('tmdb_enriched') or 0)} "
+                        f"failed={int(moviepilot_result.get('failed') or 0)}"
+                    )
+                    failures = moviepilot_result.get("failures") or []
+                    for item in failures[:20]:
+                        print(f"[WARN] MoviePilot 同步失败: {item}")
+
+                moviepilot_remove_result = _remove_moviepilot_subscriptions_by_titles(
+                    removed_titles_for_mp,
+                    enabled=True,
+                    base_url=(args.moviepilot_url or "").strip(),
+                    api_token=(args.moviepilot_token or "").strip(),
+                    timeout=int(args.moviepilot_timeout or 15),
+                )
+                if moviepilot_remove_result.get("skipped"):
+                    print(f"[INFO] MoviePilot 删除同步已跳过: {moviepilot_remove_result.get('message')}")
+                else:
+                    print(
+                        f"[INFO] MoviePilot 删除同步完成: attempted={int(moviepilot_remove_result.get('attempted') or 0)} "
+                        f"deleted={int(moviepilot_remove_result.get('deleted') or 0)} "
+                        f"missing={int(moviepilot_remove_result.get('missing') or 0)} "
+                        f"failed={int(moviepilot_remove_result.get('failed') or 0)}"
+                    )
+                    failures = moviepilot_remove_result.get("failures") or []
+                    for item in failures[:20]:
+                        print(f"[WARN] MoviePilot 删除同步失败: {item}")
+
+                moviepilot_guard_result = _guard_moviepilot_tv_subscription_states(
+                    guard_titles_for_mp,
+                    enabled=True,
+                    base_url=(args.moviepilot_url or "").strip(),
+                    api_token=(args.moviepilot_token or "").strip(),
+                    timeout=int(args.moviepilot_timeout or 15),
+                    pending_total_episode_le=1,
+                    resume_total_episode_gt=1,
+                )
+                if moviepilot_guard_result.get("skipped"):
+                    print(f"[INFO] MoviePilot 状态保护已跳过: {moviepilot_guard_result.get('message')}")
+                else:
+                    print(
+                        f"[INFO] MoviePilot 状态保护完成: attempted={int(moviepilot_guard_result.get('attempted') or 0)} "
+                        f"set_pending={int(moviepilot_guard_result.get('set_pending') or 0)} "
+                        f"set_running={int(moviepilot_guard_result.get('set_running') or 0)} "
+                        f"failed={int(moviepilot_guard_result.get('failed') or 0)}"
+                    )
+                    failures = moviepilot_guard_result.get("failures") or []
+                    for item in failures[:20]:
+                        print(f"[WARN] MoviePilot 状态保护失败: {item}")
 
         return 0
     except requests.RequestException as e:

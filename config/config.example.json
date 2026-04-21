@@ -96,6 +96,12 @@
   "hdhive_auto_unlock_points_threshold": 0,
   "drama_calendar": {
     "exclude_short_drama": true,
+    "moviepilot_sync": {
+      "enabled": false,
+      "base_url": "",
+      "api_token": "",
+      "timeout_seconds": 15
+    },
     "emby_gap_fill": {
       "enabled": false,
       "base_url": "",

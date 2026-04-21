@@ -2,6 +2,7 @@ import os
 import json
 import asyncio
 import time
+import threading
 import traceback
 import sys
 import sqlite3
@@ -62,6 +63,13 @@ _CHANNEL_FILTERS_CHECK_INTERVAL = 2.0
 _LAST_GOOD_CONFIG = None
 _HANDLER_CLIENT = None
 STARTUP_TV_WHITELIST_SCAN_LIMIT = 20
+_HDHIVE_OPEN_API_RATE_LIMIT_LOCK = threading.Lock()
+_HDHIVE_OPEN_API_RATE_LIMIT_CACHE = {}
+_HDHIVE_OPEN_API_RATE_LIMIT_WINDOW_SECONDS = 60
+_HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS = 3
+_HDHIVE_OPEN_API_DETAIL_ROUTE_LOCK = threading.Lock()
+_HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE = {}
+_HDHIVE_OPEN_API_DETAIL_ROUTE_TTL_SECONDS = 6 * 60 * 60
 
 
 def log_message(message: str, level: str = "INFO"):
@@ -472,11 +480,16 @@ def load_channel_filters():
 
 # --- Regex & Types ---
 REAL_URL_RE = re.compile(r"https?://[^\s\"<>']+", re.IGNORECASE)
+ED2K_URL_RE = re.compile(r"ed2k://\|file\|[^\s\"<>']+\|/", re.IGNORECASE)
+MAGNET_URL_RE = re.compile(r"magnet:\?[^\s\"<>']+", re.IGNORECASE)
 HDHIVE_115_URL_RE = re.compile(
     # Support both legacy /resource/115/<slug> and current /resource/<slug> links.
     r"(?:https?://)?(?:www\.)?[^/\s]*hdhive\.[a-z]{2,}/resource/(?:115/)?[0-9A-Za-z]{16,64}",
     re.IGNORECASE,
 )
+
+TELEGRAM_MEDIA_CAPTION_MAX_LENGTH = 1024
+TELEGRAM_TEXT_MESSAGE_MAX_LENGTH = 4096
 
 
 @dataclass(frozen=True)
@@ -1297,6 +1310,88 @@ def _get_hdhive_open_api_key() -> str:
         return ''
 
 
+def _reserve_hdhive_open_api_slot(
+    url: str,
+    api_key: str,
+    *,
+    now_ts: Optional[float] = None,
+    window_seconds: int = _HDHIVE_OPEN_API_RATE_LIMIT_WINDOW_SECONDS,
+    max_requests: int = _HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS,
+) -> float:
+    token = str(api_key or "").strip()
+    if not token:
+        return 0.0
+    base = str(url or "").strip().lower()
+    if "/api/open" in base:
+        base = base.split("/api/open", 1)[0]
+    key = (base, token)
+    now = float(now_ts) if now_ts is not None else time.monotonic()
+    window = max(1, int(window_seconds or 60))
+    cap = max(1, int(max_requests or 3))
+    cutoff = now - window
+
+    with _HDHIVE_OPEN_API_RATE_LIMIT_LOCK:
+        history = _HDHIVE_OPEN_API_RATE_LIMIT_CACHE.get(key, [])
+        history = [ts for ts in history if ts >= cutoff]
+        if len(history) < cap:
+            history.append(now)
+            _HDHIVE_OPEN_API_RATE_LIMIT_CACHE[key] = history
+            return 0.0
+        oldest = min(history) if history else now
+        _HDHIVE_OPEN_API_RATE_LIMIT_CACHE[key] = history
+        return max(0.0, window - (now - oldest))
+
+
+def _wait_for_hdhive_open_api_slot(url: str, api_key: str) -> None:
+    while True:
+        wait_seconds = _reserve_hdhive_open_api_slot(url, api_key)
+        if wait_seconds <= 0:
+            return
+        time.sleep(min(60.0, wait_seconds + 0.05))
+
+
+def _parse_retry_after_seconds(value, default_seconds: int = 20) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return int(default_seconds)
+    try:
+        retry_after = int(float(text))
+    except Exception:
+        retry_after = int(default_seconds)
+    return max(1, min(retry_after, 300))
+
+
+def _get_open_api_detail_route_pref(base_url: str) -> str:
+    key = str(base_url or "").strip().rstrip("/").lower()
+    if not key:
+        return ""
+    now = time.time()
+    with _HDHIVE_OPEN_API_DETAIL_ROUTE_LOCK:
+        entry = _HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE.get(key)
+        if not isinstance(entry, dict):
+            return ""
+        ts = float(entry.get("ts") or 0)
+        if (now - ts) > _HDHIVE_OPEN_API_DETAIL_ROUTE_TTL_SECONDS:
+            _HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE.pop(key, None)
+            return ""
+        route = str(entry.get("route") or "").strip().lower()
+        if route in ("legacy", "detail"):
+            return route
+        return ""
+
+
+def _set_open_api_detail_route_pref(base_url: str, route: str) -> None:
+    key = str(base_url or "").strip().rstrip("/").lower()
+    route_token = str(route or "").strip().lower()
+    if not key or route_token not in ("legacy", "detail"):
+        return
+    with _HDHIVE_OPEN_API_DETAIL_ROUTE_LOCK:
+        _HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE[key] = {
+            "route": route_token,
+            "ts": time.time(),
+        }
+
+
 def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dict = None, timeout: int = 20) -> dict:
     headers = {
         "X-API-Key": api_key,
@@ -1304,27 +1399,44 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
     }
     if method.upper() in ("POST", "PATCH"):
         headers["Content-Type"] = "application/json"
-    try:
-        resp = _requests_request(method, url, headers=headers, json=json_body, timeout=timeout, proxy_scope="service")
-    except Exception as e:
-        return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
-    try:
-        data = resp.json()
-    except Exception:
-        data = None
-    if isinstance(data, dict):
-        return data
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        _wait_for_hdhive_open_api_slot(url, api_key)
+        try:
+            resp = _requests_request(method, url, headers=headers, json=json_body, timeout=timeout, proxy_scope="service")
+        except Exception as e:
+            return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
 
-    try:
-        raw_text = (resp.text or "").strip()
-    except Exception:
-        raw_text = ""
-    compact_text = re.sub(r"\s+", " ", raw_text)[:240]
-    if "Attention Required!" in compact_text and "Cloudflare" in compact_text:
-        compact_text = "Cloudflare challenge blocked request"
-    if not compact_text:
-        compact_text = "Invalid JSON response"
-    return {"success": False, "code": str(resp.status_code), "message": compact_text}
+        status_code = int(getattr(resp, "status_code", 0) or 0)
+        if status_code == 429:
+            retry_after = _parse_retry_after_seconds(
+                (getattr(resp, "headers", {}) or {}).get("Retry-After"),
+                default_seconds=20,
+            )
+            if attempt < (max_attempts - 1):
+                time.sleep(retry_after)
+                continue
+            return {"success": False, "code": "429", "message": f"Open API 请求过于频繁，请 {retry_after} 秒后重试"}
+
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            return data
+
+        try:
+            raw_text = (resp.text or "").strip()
+        except Exception:
+            raw_text = ""
+        compact_text = re.sub(r"\s+", " ", raw_text)[:240]
+        if "Attention Required!" in compact_text and "Cloudflare" in compact_text:
+            compact_text = "Cloudflare challenge blocked request"
+        if not compact_text:
+            compact_text = "Invalid JSON response"
+        return {"success": False, "code": str(status_code), "message": compact_text}
+
+    return {"success": False, "code": "429", "message": "Open API 请求过于频繁，请稍后重试"}
 
 
 def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
@@ -1336,19 +1448,58 @@ def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
 def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> dict:
     api_base = base_url.rstrip("/") + "/api/open"
     legacy_url = f"{api_base}/resources/{slug}"
-    legacy_resp = _hdhive_open_api_request("GET", legacy_url, api_key)
-    if isinstance(legacy_resp, dict) and legacy_resp.get("success") is True:
-        return legacy_resp
-
     detail_url = f"{api_base}/resources/detail/{slug}"
-    detail_resp = _hdhive_open_api_request("GET", detail_url, api_key)
-    if isinstance(detail_resp, dict) and detail_resp.get("success") is True:
-        return detail_resp
+    detail_resp = None
+    legacy_resp = None
 
-    legacy_msg = str((legacy_resp or {}).get("message") or "").strip()
+    pref = _get_open_api_detail_route_pref(base_url)
+    prefer_detail = pref != "legacy"
+    first_route = "detail" if prefer_detail else "legacy"
+    second_route = "legacy" if prefer_detail else "detail"
+
+    def _call_route(route: str) -> dict:
+        if route == "legacy":
+            return _hdhive_open_api_request("GET", legacy_url, api_key)
+        return _hdhive_open_api_request("GET", detail_url, api_key)
+
+    first_resp = _call_route(first_route)
+    if first_route == "detail":
+        detail_resp = first_resp
+    else:
+        legacy_resp = first_resp
+    if isinstance(first_resp, dict) and first_resp.get("success") is True:
+        _set_open_api_detail_route_pref(base_url, first_route)
+        return first_resp
+
+    second_resp = _call_route(second_route)
+    if second_route == "detail":
+        detail_resp = second_resp
+    else:
+        legacy_resp = second_resp
+    if isinstance(second_resp, dict) and second_resp.get("success") is True:
+        _set_open_api_detail_route_pref(base_url, second_route)
+        return second_resp
+
+    # Prefer richer error payload (description / non-404) to improve diagnostics.
+    for resp in (detail_resp, legacy_resp):
+        if not isinstance(resp, dict):
+            continue
+        desc = str(resp.get("description") or "").strip()
+        if desc and desc != "Invalid JSON response":
+            return resp
+
+    for resp in (detail_resp, legacy_resp):
+        if not isinstance(resp, dict):
+            continue
+        code = str(resp.get("code") or "").strip()
+        msg = str(resp.get("message") or "").strip()
+        if msg and msg != "Invalid JSON response" and code not in ("404", "NOT_FOUND", "not_found"):
+            return resp
+
     detail_msg = str((detail_resp or {}).get("message") or (detail_resp or {}).get("description") or "").strip()
     if detail_msg and detail_msg != "Invalid JSON response":
         return detail_resp
+    legacy_msg = str((legacy_resp or {}).get("message") or "").strip()
     if legacy_msg:
         return legacy_resp
     return detail_resp if isinstance(detail_resp, dict) else legacy_resp
@@ -1377,17 +1528,12 @@ def _hdhive_open_api_extract_unlock_points(data: dict) -> Optional[int]:
 def _build_hdhive_full_url(data: dict) -> Optional[str]:
     if not isinstance(data, dict):
         return None
-    full_url = data.get("full_url") or ""
-    if isinstance(full_url, str) and full_url.startswith("http"):
-        return _normalize_115_url(full_url)
-    url = data.get("url") or ""
     access_code = data.get("access_code")
-    if isinstance(url, str) and url.startswith("http"):
-        if isinstance(access_code, str) and access_code and access_code not in url:
-            sep = '&' if '?' in url else '?'
-            url = f"{url}{sep}password={access_code}"
-        return _normalize_115_url(url)
-    return None
+    return _build_hdhive_direct_url(
+        data.get("full_url") or "",
+        data.get("url") or "",
+        access_code,
+    )
 
 def _parse_next_action_rsc_result(text: str):
     """Parse Next.js Server Action (text/x-component) response.
@@ -1648,6 +1794,51 @@ def _normalize_115_url(u: str) -> str:
     return u
 
 
+def _normalize_hdhive_direct_share_url(u: str) -> Optional[str]:
+    if not u:
+        return None
+    text = html.unescape(str(u)).strip().strip('"').strip("'")
+    if not text:
+        return None
+    text = text.replace('\\/', '/').replace('\\', '')
+    while text.endswith('&#') or text.endswith('&'):
+        text = text[:-1]
+    text = text.strip().strip('"').strip("'")
+    if not text:
+        return None
+
+    lower = text.lower()
+    if lower.startswith(('http://', 'https://')):
+        return _normalize_115_url(text)
+    if lower.startswith('ed2k://'):
+        return text
+    if lower.startswith('magnet:?'):
+        return text
+    return None
+
+
+def _build_hdhive_direct_url(full_url, url, access_code=None) -> Optional[str]:
+    resolved = _normalize_hdhive_direct_share_url(full_url)
+    if resolved:
+        return resolved
+
+    resolved = _normalize_hdhive_direct_share_url(url)
+    if not resolved:
+        return None
+
+    lower = resolved.lower()
+    if (
+        isinstance(access_code, str)
+        and access_code
+        and lower.startswith(('http://', 'https://'))
+        and ('115.com' in lower or '115cdn' in lower)
+        and access_code not in resolved
+    ):
+        sep = '&' if '?' in resolved else '?'
+        resolved = _normalize_115_url(f"{resolved}{sep}password={access_code}")
+    return resolved
+
+
 def _extract_hdhive_urls_from_text(text: str) -> List[str]:
     if not text:
         return []
@@ -1754,6 +1945,12 @@ def _pick_real_url_from_response(resp: requests.Response) -> Optional[str]:
                 elif isinstance(item, list):
                     stack.extend(item)
                 elif isinstance(item, str):
+                    ed2k_match = ED2K_URL_RE.search(item)
+                    if ed2k_match:
+                        return _normalize_hdhive_direct_share_url(ed2k_match.group(0))
+                    magnet_match = MAGNET_URL_RE.search(item)
+                    if magnet_match:
+                        return _normalize_hdhive_direct_share_url(magnet_match.group(0))
                     for m in REAL_URL_RE.finditer(item):
                         u = m.group(0)
                         if '115.com' in u or '115cdn' in u:
@@ -1770,6 +1967,14 @@ def _pick_real_url_from_response(resp: requests.Response) -> Optional[str]:
         # Next.js unauthenticated pages return an inlined redirect payload.
         if 'NEXT_REDIRECT' in text and '/login?redirect=' in text:
             return None
+
+        ed2k_match = ED2K_URL_RE.search(text)
+        if ed2k_match:
+            return _normalize_hdhive_direct_share_url(ed2k_match.group(0))
+
+        magnet_match = MAGNET_URL_RE.search(text)
+        if magnet_match:
+            return _normalize_hdhive_direct_share_url(magnet_match.group(0))
 
         candidates = []
         for m in REAL_URL_RE.finditer(text):
@@ -1849,15 +2054,9 @@ def _resolve_hdhive_115_url_sync(hdhive_url: str) -> Optional[str]:
                 if unlock_points is not None and unlock_points > 0 and not already_owned:
                     locked_required = True
 
-                if isinstance(full_url, str) and full_url.startswith('http'):
-                    real_url = _normalize_115_url(full_url)
-                elif isinstance(url, str) and url.startswith('http'):
-                    # Some payloads require access_code/password to be appended.
-                    if isinstance(access_code, str) and access_code and access_code not in url:
-                        sep = '&' if '?' in url else '?'
-                        real_url = _normalize_115_url(f"{url}{sep}password={access_code}")
-                    else:
-                        real_url = _normalize_115_url(url)
+                real_candidate = _build_hdhive_direct_url(full_url, url, access_code)
+                if real_candidate:
+                    real_url = real_candidate
 
                 # Auto-unlock when unlock_points is known and <= threshold (threshold=0 means only free)
                 should_try_unlock = False
@@ -1882,14 +2081,9 @@ def _resolve_hdhive_115_url_sync(hdhive_url: str) -> Optional[str]:
                         full_url2 = unlocked.get('full_url')
                         url2 = unlocked.get('url')
                         access_code2 = unlocked.get('access_code')
-                        if isinstance(full_url2, str) and full_url2.startswith('http'):
-                            real_url = _normalize_115_url(full_url2)
-                        elif isinstance(url2, str) and url2.startswith('http'):
-                            if isinstance(access_code2, str) and access_code2 and access_code2 not in url2:
-                                sep = '&' if '?' in url2 else '?'
-                                real_url = _normalize_115_url(f"{url2}{sep}password={access_code2}")
-                            else:
-                                real_url = _normalize_115_url(url2)
+                        real_candidate = _build_hdhive_direct_url(full_url2, url2, access_code2)
+                        if real_candidate:
+                            real_url = real_candidate
 
                         if real_url:
                             log_message(f"成功: HDHive 解锁成功，真实链接: {real_url}")
@@ -2077,20 +2271,8 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
             full_url = url_info.get('full_url')
             url = url_info.get('url')
             access_code = url_info.get('access_code')
-
-            if isinstance(full_url, str) and full_url.startswith('http'):
-                real = _normalize_115_url(full_url)
-                note = "已解锁，解析成功"
-                if open_api_note:
-                    note = f"{open_api_note}；{note}"
-                return real, note
-
-            if isinstance(url, str) and url.startswith('http'):
-                if isinstance(access_code, str) and access_code and access_code not in url:
-                    sep = '&' if '?' in url else '?'
-                    real = _normalize_115_url(f"{url}{sep}password={access_code}")
-                else:
-                    real = _normalize_115_url(url)
+            real = _build_hdhive_direct_url(full_url, url, access_code)
+            if real:
                 if already_owned:
                     note = "已解锁，解析成功"
                     if open_api_note:
@@ -2140,17 +2322,8 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
             full_url2 = unlocked.get('full_url')
             url2 = unlocked.get('url')
             access_code2 = unlocked.get('access_code')
-            if isinstance(full_url2, str) and full_url2.startswith('http'):
-                real = _normalize_115_url(full_url2)
-                if unlock_points == 0:
-                    return real, "自动解锁成功(0积分)"
-                return real, f"自动解锁成功(消耗 {unlock_points} 积分)"
-            if isinstance(url2, str) and url2.startswith('http'):
-                if isinstance(access_code2, str) and access_code2 and access_code2 not in url2:
-                    sep = '&' if '?' in url2 else '?'
-                    real = _normalize_115_url(f"{url2}{sep}password={access_code2}")
-                else:
-                    real = _normalize_115_url(url2)
+            real = _build_hdhive_direct_url(full_url2, url2, access_code2)
+            if real:
                 if unlock_points == 0:
                     return real, "自动解锁成功(0积分)"
                 return real, f"自动解锁成功(消耗 {unlock_points} 积分)"
@@ -2159,7 +2332,7 @@ def _resolve_hdhive_115_url_with_note_sync(hdhive_url: str) -> Tuple[Optional[st
     # 3) Fallback: use existing resolver (may succeed via redirects for some cases)
     real = _resolve_hdhive_115_url_sync(hdhive_url)
     if real:
-        return _normalize_115_url(real), "解析成功"
+        return _normalize_hdhive_direct_share_url(real) or real, "解析成功"
 
     if unlock_points is not None and unlock_points > 0:
         return None, f"需要 {unlock_points} 积分，未解锁"
@@ -2247,6 +2420,84 @@ async def convert_message_hdhive_links(msg) -> Tuple[bool, str]:
         new_text = (new_text + "\n\n【HDHive解析】\n" + "\n".join(summary_lines)).strip()
 
     return True, new_text
+
+
+def _find_telegram_split_index(text: str, hard_limit: int) -> int:
+    if hard_limit <= 0:
+        return 0
+    if len(text) <= hard_limit:
+        return len(text)
+    for sep in ("\n", " "):
+        idx = text.rfind(sep, 0, hard_limit + 1)
+        if idx > 0:
+            return idx
+    return hard_limit
+
+
+def _split_text_for_telegram_messages(
+    text: str,
+    max_length: int = TELEGRAM_TEXT_MESSAGE_MAX_LENGTH,
+) -> List[str]:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return []
+    if max_length <= 0:
+        return [normalized]
+
+    chunks: List[str] = []
+    remaining = normalized
+    while remaining:
+        if len(remaining) <= max_length:
+            chunks.append(remaining)
+            break
+
+        split_idx = _find_telegram_split_index(remaining, max_length)
+        if split_idx <= 0:
+            split_idx = max_length
+        chunk = remaining[:split_idx].strip()
+        if not chunk:
+            chunk = remaining[:max_length]
+            split_idx = len(chunk)
+        chunks.append(chunk)
+
+        remaining = remaining[split_idx:]
+        if remaining and remaining[0] in ("\n", " "):
+            remaining = remaining[1:]
+        remaining = remaining.strip()
+
+    return [item for item in chunks if item]
+
+
+def _split_media_caption_and_followups(
+    text: str,
+    caption_limit: int = TELEGRAM_MEDIA_CAPTION_MAX_LENGTH,
+    message_limit: int = TELEGRAM_TEXT_MESSAGE_MAX_LENGTH,
+) -> Tuple[str, List[str]]:
+    normalized = str(text or "").strip()
+    if not normalized:
+        return "", []
+    if len(normalized) <= caption_limit:
+        return normalized, []
+
+    split_idx = _find_telegram_split_index(normalized, caption_limit)
+    if split_idx <= 0:
+        split_idx = caption_limit
+    caption = normalized[:split_idx].strip()
+    if not caption:
+        caption = normalized[:caption_limit]
+        split_idx = len(caption)
+
+    remaining = normalized[split_idx:]
+    if remaining and remaining[0] in ("\n", " "):
+        remaining = remaining[1:]
+    remaining = remaining.strip()
+    overflow_chunks = _split_text_for_telegram_messages(remaining, max_length=message_limit)
+
+    continuation_hint = "…\n\n[其余内容见后续消息]"
+    if overflow_chunks and len(caption) + len(continuation_hint) <= caption_limit:
+        caption = f"{caption}{continuation_hint}"
+
+    return caption, overflow_chunks
 
 
 def _should_send_copy_instead_of_forward(
@@ -3769,21 +4020,50 @@ async def new_message_handler(event, *, backfill: bool = False):
                             # Use send_message for text, forward or send_file for media
                             if should_send_copy:
                                 if media_type_detected == 'text':
-                                    await reliable_action(
-                                        f"发送文字消息到 {user_id}",
-                                        client.send_message,
-                                        target_entity,
-                                        final_msg_text
+                                    text_chunks = _split_text_for_telegram_messages(
+                                        final_msg_text,
+                                        max_length=TELEGRAM_TEXT_MESSAGE_MAX_LENGTH,
                                     )
+                                    if not text_chunks:
+                                        text_chunks = [""]
+                                    for idx, text_chunk in enumerate(text_chunks, start=1):
+                                        action_name = f"发送文字消息到 {user_id}"
+                                        if len(text_chunks) > 1:
+                                            action_name = f"{action_name} ({idx}/{len(text_chunks)})"
+                                        await reliable_action(
+                                            action_name,
+                                            client.send_message,
+                                            target_entity,
+                                            text_chunk
+                                        )
                                 else:
+                                    safe_caption, overflow_chunks = _split_media_caption_and_followups(
+                                        final_msg_text,
+                                        caption_limit=TELEGRAM_MEDIA_CAPTION_MAX_LENGTH,
+                                        message_limit=TELEGRAM_TEXT_MESSAGE_MAX_LENGTH,
+                                    )
+                                    media_kwargs = {}
+                                    if safe_caption:
+                                        media_kwargs["caption"] = safe_caption
                                     # Media message with potentially modified caption
                                     await reliable_action(
                                         f"发送媒体消息到 {user_id}",
                                         client.send_file,
                                         target_entity,
                                         msg.media,
-                                        caption=final_msg_text
+                                        **media_kwargs
                                     )
+                                    if overflow_chunks:
+                                        log_message(
+                                            f"媒体 caption 超长，已为 {user_id} 拆分补发 {len(overflow_chunks)} 条文本消息。"
+                                        )
+                                    for idx, overflow_text in enumerate(overflow_chunks, start=1):
+                                        await reliable_action(
+                                            f"发送媒体补充文本到 {user_id} ({idx}/{len(overflow_chunks)})",
+                                            client.send_message,
+                                            target_entity,
+                                            overflow_text
+                                        )
                             else:
                                 # Normal forward preserves the original forward tag and non-HDHive links/buttons.
                                 await reliable_action(

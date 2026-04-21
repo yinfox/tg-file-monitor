@@ -57,7 +57,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.62"
+VERSION = "0.5.71"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -92,22 +92,33 @@ SELF_SERVICE_RESULT_TTL_SECONDS = None
 SELF_SERVICE_RESULT_MAX_ITEMS = 200
 SELF_SERVICE_RECENT_DISPLAY_LIMIT = 8
 TMDB_SEARCH_CACHE_TTL_SECONDS = 1800
+TMDB_TV_DETAIL_CACHE_TTL_SECONDS = 6 * 60 * 60
 OPEN_API_RESOURCES_CACHE_TTL_SECONDS = 600
 OPEN_API_RESOURCE_DETAIL_CACHE_TTL_SECONDS = 600
 _TMDB_SEARCH_CACHE_MAX_ITEMS = 1024
+_TMDB_TV_DETAIL_CACHE_MAX_ITEMS = 2048
 _OPEN_API_RESOURCES_CACHE_MAX_ITEMS = 2048
 _OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS = 2048
 
 _MESSAGE_QUEUE_LOCK = threading.Lock()
 _SELF_SERVICE_RESULT_LOCK = threading.Lock()
 _TMDB_SEARCH_CACHE_LOCK = threading.Lock()
+_TMDB_TV_DETAIL_CACHE_LOCK = threading.Lock()
 _OPEN_API_RESOURCES_CACHE_LOCK = threading.Lock()
 _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_CACHE = {}
 _TMDB_SEARCH_CACHE = {}
+_TMDB_TV_DETAIL_CACHE = {}
 _OPEN_API_RESOURCES_CACHE = {}
 _OPEN_API_RESOURCE_DETAIL_CACHE = {}
+_HDHIVE_OPEN_API_RATE_LIMIT_LOCK = threading.Lock()
+_HDHIVE_OPEN_API_RATE_LIMIT_CACHE = {}
+_HDHIVE_OPEN_API_RATE_LIMIT_WINDOW_SECONDS = 60
+_HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS = 3
+_HDHIVE_OPEN_API_DETAIL_ROUTE_LOCK = threading.Lock()
+_HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE = {}
+_HDHIVE_OPEN_API_DETAIL_ROUTE_TTL_SECONDS = 6 * 60 * 60
 
 # Load environment variables from config/.env
 try:
@@ -174,6 +185,17 @@ def _default_emby_gap_fill_config() -> dict:
         "auto_sync_cron_expr": "",
         "notify_user_ids": "",
         "ignore_list": "",
+        "tmdb_validate": True,
+        "strict_missing_markers_only": False,
+    }
+
+
+def _default_moviepilot_sync_config() -> dict:
+    return {
+        "enabled": False,
+        "base_url": "",
+        "api_token": "",
+        "timeout_seconds": 15,
     }
 
 
@@ -322,6 +344,7 @@ def load_config():
             "tmdb_api_key": "",
             "tmdb_language": "zh-CN",
             "tmdb_region": "CN",
+            "moviepilot_sync": _default_moviepilot_sync_config(),
             "emby_gap_fill": _default_emby_gap_fill_config(),
         }
     }
@@ -493,6 +516,14 @@ def load_config():
                         merged_drama["emby_gap_fill"] = merged_emby_gap_cfg
                     else:
                         merged_drama["emby_gap_fill"] = default_emby_gap_cfg
+                    default_moviepilot_sync_cfg = _default_moviepilot_sync_config()
+                    raw_moviepilot_sync_cfg = raw_drama.get("moviepilot_sync")
+                    if isinstance(raw_moviepilot_sync_cfg, dict):
+                        merged_moviepilot_sync_cfg = default_moviepilot_sync_cfg.copy()
+                        merged_moviepilot_sync_cfg.update(raw_moviepilot_sync_cfg)
+                        merged_drama["moviepilot_sync"] = merged_moviepilot_sync_cfg
+                    else:
+                        merged_drama["moviepilot_sync"] = default_moviepilot_sync_cfg
                     for key in (
                         "douban_asia_top_n",
                         "douban_domestic_top_n",
@@ -2033,6 +2064,202 @@ def _extract_tv_filters_titles(data: dict) -> tuple:
     return titles, raw_entries, whitelist
 
 
+def _collect_removed_titles(before_titles: list, after_titles: list) -> list:
+    removed = []
+    seen_norm = set()
+    after_norms = set()
+    for title in after_titles or []:
+        norm = _normalize_title_for_match(title)
+        if norm:
+            after_norms.add(norm)
+    for title in before_titles or []:
+        norm = _normalize_title_for_match(title)
+        if not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        if norm in after_norms:
+            continue
+        removed.append(title)
+    return removed
+
+
+def _normalize_moviepilot_base_url(base_url: str) -> str:
+    text = str(base_url or "").strip()
+    if not text:
+        return ""
+    if not re.match(r"^https?://", text, flags=re.IGNORECASE):
+        text = f"http://{text}"
+    return text.rstrip("/")
+
+
+def _resolve_moviepilot_sync_runtime(drama_cfg: dict) -> dict:
+    moviepilot_cfg = drama_cfg.get('moviepilot_sync') if isinstance(drama_cfg, dict) else {}
+    if not isinstance(moviepilot_cfg, dict):
+        moviepilot_cfg = {}
+    enabled = bool(moviepilot_cfg.get('enabled', False))
+    base_url = _normalize_moviepilot_base_url(
+        moviepilot_cfg.get('base_url') or os.environ.get('MOVIEPILOT_BASE_URL') or ''
+    )
+    api_token = (moviepilot_cfg.get('api_token') or os.environ.get('MOVIEPILOT_API_TOKEN') or '').strip()
+    try:
+        timeout = max(3, min(120, int(moviepilot_cfg.get('timeout_seconds', 15) or 15)))
+    except Exception:
+        timeout = 15
+    return {
+        "enabled": enabled,
+        "base_url": base_url,
+        "api_token": api_token,
+        "timeout": timeout,
+    }
+
+
+def _is_moviepilot_tv_type(raw_type: str) -> bool:
+    value = str(raw_type or "").strip().lower()
+    if not value:
+        return False
+    if value in ("tv", "tvshow", "tv_show", "series", "电视剧"):
+        return True
+    if ("剧" in value) and ("电影" not in value):
+        return True
+    return False
+
+
+def _sync_removed_titles_to_moviepilot(removed_titles: list, drama_cfg: dict, trigger: str) -> None:
+    if not removed_titles:
+        return
+
+    runtime = _resolve_moviepilot_sync_runtime(drama_cfg or {})
+    if not runtime.get("enabled"):
+        return
+
+    base_url = runtime.get("base_url") or ""
+    api_token = runtime.get("api_token") or ""
+    timeout = int(runtime.get("timeout") or 15)
+    if not base_url or not api_token:
+        return
+
+    dedup_titles = []
+    seen_norm = set()
+    for title in removed_titles:
+        cleaned = str(title or "").strip()
+        norm = _normalize_title_for_match(cleaned)
+        if not cleaned or not norm or norm in seen_norm:
+            continue
+        seen_norm.add(norm)
+        dedup_titles.append(cleaned)
+    if not dedup_titles:
+        return
+
+    ts = time.strftime('%Y-%m-%d %H:%M:%S')
+    list_url = f"{base_url}/api/v1/subscribe/list"
+    params = {"token": api_token}
+    log_lines = []
+
+    try:
+        resp = requests.get(list_url, params=params, timeout=timeout)
+    except Exception as e:
+        _append_drama_calendar_log([
+            f'[{ts}] [ERROR] [DRAMA][MP-REMOVE] trigger={trigger} 获取订阅列表失败: {e}',
+        ])
+        return
+
+    subs_payload = None
+    try:
+        subs_payload = resp.json()
+    except Exception:
+        subs_payload = None
+    if resp.status_code >= 400:
+        detail = ""
+        if isinstance(subs_payload, dict):
+            detail = str(subs_payload.get("detail") or subs_payload.get("message") or "").strip()
+        if not detail:
+            detail = (resp.text or "").strip()[:200]
+        _append_drama_calendar_log([
+            f'[{ts}] [ERROR] [DRAMA][MP-REMOVE] trigger={trigger} 获取订阅列表失败: HTTP {resp.status_code} {detail}',
+        ])
+        return
+
+    if isinstance(subs_payload, list):
+        subscribe_list = subs_payload
+    elif isinstance(subs_payload, dict) and isinstance(subs_payload.get("data"), list):
+        subscribe_list = subs_payload.get("data") or []
+    else:
+        subscribe_list = []
+
+    subscribe_ids_by_norm = {}
+    for item in subscribe_list:
+        if not isinstance(item, dict):
+            continue
+        if not _is_moviepilot_tv_type(item.get("type")):
+            continue
+        sid = item.get("id")
+        name = str(item.get("name") or "").strip()
+        try:
+            sid = int(sid)
+        except Exception:
+            sid = None
+        norm = _normalize_title_for_match(name)
+        if not sid or not norm:
+            continue
+        subscribe_ids_by_norm.setdefault(norm, []).append(sid)
+
+    deleted = 0
+    missing = 0
+    failed = 0
+    deleted_ids = set()
+    for title in dedup_titles:
+        norm = _normalize_title_for_match(title)
+        target_ids = subscribe_ids_by_norm.get(norm) or []
+        if not target_ids:
+            missing += 1
+            continue
+        for sub_id in target_ids:
+            if sub_id in deleted_ids:
+                continue
+            deleted_ids.add(sub_id)
+            delete_url = f"{base_url}/api/v1/subscribe/{sub_id}"
+            try:
+                del_resp = requests.delete(delete_url, params=params, timeout=timeout)
+            except Exception as e:
+                failed += 1
+                log_lines.append(f'[{ts}] [WARN] [DRAMA][MP-REMOVE] 删除失败 id={sub_id} title={title} err={e}')
+                continue
+
+            del_payload = None
+            try:
+                del_payload = del_resp.json()
+            except Exception:
+                del_payload = None
+
+            if del_resp.status_code >= 400:
+                failed += 1
+                detail = ""
+                if isinstance(del_payload, dict):
+                    detail = str(del_payload.get("detail") or del_payload.get("message") or "").strip()
+                if not detail:
+                    detail = (del_resp.text or "").strip()[:200]
+                log_lines.append(
+                    f'[{ts}] [WARN] [DRAMA][MP-REMOVE] 删除失败 id={sub_id} title={title} HTTP {del_resp.status_code} {detail}'
+                )
+                continue
+
+            if isinstance(del_payload, dict) and ('success' in del_payload) and (not bool(del_payload.get('success'))):
+                failed += 1
+                detail = str(del_payload.get("message") or "").strip()
+                log_lines.append(
+                    f'[{ts}] [WARN] [DRAMA][MP-REMOVE] 删除失败 id={sub_id} title={title} {detail or "success=false"}'
+                )
+                continue
+
+            deleted += 1
+
+    summary = (
+        f'[{ts}] [INFO] [DRAMA][MP-REMOVE] trigger={trigger} removed_input={len(dedup_titles)} '
+        f'deleted={deleted} missing={missing} failed={failed}'
+    )
+    _append_drama_calendar_log([summary] + log_lines[:40])
+
+
 def _ensure_custom_tv_titles_kept() -> None:
     state = _load_drama_calendar_state()
     source_map = _load_tv_filters_source_map_from_state(state)
@@ -2170,6 +2397,7 @@ def _clear_drama_calendar_tv_filters():
     drama = data.get('drama') if isinstance(data.get('drama'), dict) else {}
     if not isinstance(drama, dict):
         drama = {}
+    existing_titles, _raw_entries, _whitelist = _extract_tv_filters_titles(data)
     drama['whitelist'] = []
     data['drama'] = drama
 
@@ -2183,6 +2411,15 @@ def _clear_drama_calendar_tv_filters():
     _append_drama_calendar_log([
         f'[{ts}] [INFO] [DRAMA] 已清空 tvchannel_filters.json 的 drama 白名单',
     ])
+    try:
+        config = load_config()
+        _sync_removed_titles_to_moviepilot(
+            existing_titles,
+            config.get('drama_calendar', {}) if isinstance(config, dict) else {},
+            trigger='clear',
+        )
+    except Exception:
+        pass
     return True, [tv_path], []
 
 
@@ -2568,6 +2805,11 @@ def _prune_tv_filters_finished_titles(drama_cfg: dict, trigger: str = 'scheduler
     for title, days in removed[:20]:
         log_lines.append(f'[{ts}] [INFO] [DRAMA][AUTO-PRUNE] - {title} (完结已 {days} 天)')
     _append_drama_calendar_log(log_lines)
+    try:
+        removed_titles = [title for title, _days in removed]
+        _sync_removed_titles_to_moviepilot(removed_titles, drama_cfg, trigger=f'prune:{trigger}')
+    except Exception:
+        pass
 
     result["status"] = "updated"
     return result
@@ -2673,6 +2915,31 @@ def _run_drama_calendar_update(drama_cfg: dict, dry_run: bool = True, trigger: s
         tmdb_min_score = 70
     cmd.extend(['--tmdb-language', tmdb_language, '--tmdb-region', tmdb_region])
     cmd.extend(['--tmdb-year-tolerance', str(tmdb_year_tolerance), '--tmdb-min-score', str(tmdb_min_score)])
+
+    moviepilot_sync_cfg = drama_cfg.get('moviepilot_sync') if isinstance(drama_cfg.get('moviepilot_sync'), dict) else {}
+    moviepilot_enabled = bool(moviepilot_sync_cfg.get('enabled', False))
+    moviepilot_base_url = (
+        moviepilot_sync_cfg.get('base_url')
+        or os.environ.get('MOVIEPILOT_BASE_URL')
+        or ''
+    ).strip()
+    moviepilot_api_token = (
+        moviepilot_sync_cfg.get('api_token')
+        or os.environ.get('MOVIEPILOT_API_TOKEN')
+        or ''
+    ).strip()
+    try:
+        moviepilot_timeout = max(3, min(120, int(moviepilot_sync_cfg.get('timeout_seconds', 15) or 15)))
+    except Exception:
+        moviepilot_timeout = 15
+
+    if moviepilot_enabled:
+        cmd.append('--moviepilot-sync')
+        if moviepilot_base_url:
+            cmd.extend(['--moviepilot-url', moviepilot_base_url])
+        if moviepilot_api_token:
+            cmd.extend(['--moviepilot-token', moviepilot_api_token])
+        cmd.extend(['--moviepilot-timeout', str(moviepilot_timeout)])
 
     post_url = (drama_cfg.get('post_url') or '').strip()
     if post_url:
@@ -4164,6 +4431,116 @@ def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, langu
     return ids
 
 
+def _tmdb_fetch_tv_detail(api_key: str, tv_id: str, language: str = "zh-CN") -> Optional[dict]:
+    key = (api_key or "").strip()
+    if not key:
+        return None
+    try:
+        tv_id_int = int(tv_id)
+    except Exception:
+        return None
+    if tv_id_int <= 0:
+        return None
+    lang = str(language or "zh-CN").strip() or "zh-CN"
+    cache_key = ("tv", str(tv_id_int), lang)
+    cached = _cache_get(_TMDB_TV_DETAIL_CACHE, _TMDB_TV_DETAIL_CACHE_LOCK, cache_key, TMDB_TV_DETAIL_CACHE_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    url = f"https://api.themoviedb.org/3/tv/{tv_id_int}"
+    params = {"api_key": key, "language": lang}
+    try:
+        resp = _requests_get(url, params=params, timeout=20, proxy_scope="service")
+        data = resp.json() if int(getattr(resp, "status_code", 0) or 0) == 200 else None
+    except Exception:
+        data = None
+    if not isinstance(data, dict):
+        return None
+    _cache_set(_TMDB_TV_DETAIL_CACHE, _TMDB_TV_DETAIL_CACHE_LOCK, cache_key, data, max_items=_TMDB_TV_DETAIL_CACHE_MAX_ITEMS)
+    return data
+
+
+def _tmdb_fetch_tv_season_detail(api_key: str, tv_id: str, season: int, language: str = "zh-CN") -> Optional[dict]:
+    key = (api_key or "").strip()
+    if not key:
+        return None
+    try:
+        tv_id_int = int(tv_id)
+        season_int = int(season)
+    except Exception:
+        return None
+    if tv_id_int <= 0 or season_int <= 0:
+        return None
+    lang = str(language or "zh-CN").strip() or "zh-CN"
+    cache_key = ("tv-season", str(tv_id_int), str(season_int), lang)
+    cached = _cache_get(_TMDB_TV_DETAIL_CACHE, _TMDB_TV_DETAIL_CACHE_LOCK, cache_key, TMDB_TV_DETAIL_CACHE_TTL_SECONDS)
+    if isinstance(cached, dict):
+        return cached
+    url = f"https://api.themoviedb.org/3/tv/{tv_id_int}/season/{season_int}"
+    params = {"api_key": key, "language": lang}
+    try:
+        resp = _requests_get(url, params=params, timeout=20, proxy_scope="service")
+        data = resp.json() if int(getattr(resp, "status_code", 0) or 0) == 200 else None
+    except Exception:
+        data = None
+    if not isinstance(data, dict):
+        return None
+    _cache_set(_TMDB_TV_DETAIL_CACHE, _TMDB_TV_DETAIL_CACHE_LOCK, cache_key, data, max_items=_TMDB_TV_DETAIL_CACHE_MAX_ITEMS)
+    return data
+
+
+def _parse_tmdb_date(raw: str) -> Optional[datetime.date]:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.date.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _tmdb_expected_episode_count_for_season(season_detail: Optional[dict], *, only_aired: bool = True) -> Optional[int]:
+    if not isinstance(season_detail, dict):
+        return None
+    episodes = season_detail.get("episodes")
+    if isinstance(episodes, list):
+        episode_list = [ep for ep in episodes if isinstance(ep, dict)]
+        if not only_aired:
+            return len(episode_list)
+        today = datetime.datetime.now(datetime.timezone.utc).date()
+        aired_count = 0
+        has_known_air_date = False
+        for ep in episode_list:
+            air_date = _parse_tmdb_date(ep.get("air_date") or "")
+            if air_date is not None:
+                has_known_air_date = True
+            if air_date and air_date <= today:
+                aired_count += 1
+        if has_known_air_date:
+            return aired_count
+        # No per-episode air dates means we cannot safely infer "already aired" count.
+        # In only_aired mode, prefer unknown over false positives.
+        season_air = _parse_tmdb_date(season_detail.get("air_date") or "")
+        if season_air and season_air > today:
+            return 0
+        return None
+
+    episode_count = season_detail.get("episode_count")
+    try:
+        episode_count = int(episode_count)
+    except Exception:
+        episode_count = None
+    if episode_count is None:
+        return None
+    if not only_aired:
+        return max(0, episode_count)
+    season_air = _parse_tmdb_date(season_detail.get("air_date") or "")
+    if season_air and season_air > datetime.datetime.now(datetime.timezone.utc).date():
+        return 0
+    # When only_aired=True and TMDB doesn't provide per-episode air dates,
+    # episode_count is often the full planned season size, not aired count.
+    return None
+
+
 def _merge_tmdb_ids(tv_ids: list, movie_ids: list, limit: int = 30) -> list:
     tv_list = [str(x) for x in (tv_ids or []) if str(x)]
     movie_list = [str(x) for x in (movie_ids or []) if str(x)]
@@ -4346,6 +4723,88 @@ def _check_public_rate_limit(req, cfg: dict) -> Tuple[bool, int]:
     return True, 0
 
 
+def _reserve_hdhive_open_api_slot(
+    url: str,
+    api_key: str,
+    *,
+    now_ts: Optional[float] = None,
+    window_seconds: int = _HDHIVE_OPEN_API_RATE_LIMIT_WINDOW_SECONDS,
+    max_requests: int = _HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS,
+) -> float:
+    token = str(api_key or "").strip()
+    if not token:
+        return 0.0
+    base = str(url or "").strip().lower()
+    if "/api/open" in base:
+        base = base.split("/api/open", 1)[0]
+    key = (base, token)
+    now = float(now_ts) if now_ts is not None else time.monotonic()
+    window = max(1, int(window_seconds or 60))
+    cap = max(1, int(max_requests or 3))
+    cutoff = now - window
+
+    with _HDHIVE_OPEN_API_RATE_LIMIT_LOCK:
+        history = _HDHIVE_OPEN_API_RATE_LIMIT_CACHE.get(key, [])
+        history = [ts for ts in history if ts >= cutoff]
+        if len(history) < cap:
+            history.append(now)
+            _HDHIVE_OPEN_API_RATE_LIMIT_CACHE[key] = history
+            return 0.0
+        oldest = min(history) if history else now
+        _HDHIVE_OPEN_API_RATE_LIMIT_CACHE[key] = history
+        return max(0.0, window - (now - oldest))
+
+
+def _wait_for_hdhive_open_api_slot(url: str, api_key: str) -> None:
+    while True:
+        wait_seconds = _reserve_hdhive_open_api_slot(url, api_key)
+        if wait_seconds <= 0:
+            return
+        time.sleep(min(60.0, wait_seconds + 0.05))
+
+
+def _parse_retry_after_seconds(value, default_seconds: int = 20) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return int(default_seconds)
+    try:
+        retry_after = int(float(text))
+    except Exception:
+        retry_after = int(default_seconds)
+    return max(1, min(retry_after, 300))
+
+
+def _get_open_api_detail_route_pref(base_url: str) -> str:
+    key = str(base_url or "").strip().rstrip("/").lower()
+    if not key:
+        return ""
+    now = time.time()
+    with _HDHIVE_OPEN_API_DETAIL_ROUTE_LOCK:
+        entry = _HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE.get(key)
+        if not isinstance(entry, dict):
+            return ""
+        ts = float(entry.get("ts") or 0)
+        if (now - ts) > _HDHIVE_OPEN_API_DETAIL_ROUTE_TTL_SECONDS:
+            _HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE.pop(key, None)
+            return ""
+        route = str(entry.get("route") or "").strip().lower()
+        if route in ("legacy", "detail"):
+            return route
+        return ""
+
+
+def _set_open_api_detail_route_pref(base_url: str, route: str) -> None:
+    key = str(base_url or "").strip().rstrip("/").lower()
+    route_token = str(route or "").strip().lower()
+    if not key or route_token not in ("legacy", "detail"):
+        return
+    with _HDHIVE_OPEN_API_DETAIL_ROUTE_LOCK:
+        _HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE[key] = {
+            "route": route_token,
+            "ts": time.time(),
+        }
+
+
 def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dict = None, timeout: int = 20) -> dict:
     headers = {
         "X-API-Key": api_key,
@@ -4353,27 +4812,44 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
     }
     if method.upper() in ("POST", "PATCH"):
         headers["Content-Type"] = "application/json"
-    try:
-        resp = _requests_request(method, url, headers=headers, json=json_body, timeout=timeout, proxy_scope="service")
-    except Exception as e:
-        return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
-    try:
-        data = resp.json()
-    except Exception:
-        data = None
-    if isinstance(data, dict):
-        return data
+    max_attempts = 2
+    for attempt in range(max_attempts):
+        _wait_for_hdhive_open_api_slot(url, api_key)
+        try:
+            resp = _requests_request(method, url, headers=headers, json=json_body, timeout=timeout, proxy_scope="service")
+        except Exception as e:
+            return {"success": False, "code": "NETWORK_ERROR", "message": f"{type(e).__name__}: {e}"}
 
-    try:
-        raw_text = (resp.text or "").strip()
-    except Exception:
-        raw_text = ""
-    compact_text = re.sub(r"\s+", " ", raw_text)[:240]
-    if "Attention Required!" in compact_text and "Cloudflare" in compact_text:
-        compact_text = "Cloudflare challenge blocked request"
-    if not compact_text:
-        compact_text = "Invalid JSON response"
-    return {"success": False, "code": str(resp.status_code), "message": compact_text}
+        status_code = int(getattr(resp, "status_code", 0) or 0)
+        if status_code == 429:
+            retry_after = _parse_retry_after_seconds(
+                (getattr(resp, "headers", {}) or {}).get("Retry-After"),
+                default_seconds=20,
+            )
+            if attempt < (max_attempts - 1):
+                time.sleep(retry_after)
+                continue
+            return {"success": False, "code": "429", "message": f"Open API 请求过于频繁，请 {retry_after} 秒后重试"}
+
+        try:
+            data = resp.json()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            return data
+
+        try:
+            raw_text = (resp.text or "").strip()
+        except Exception:
+            raw_text = ""
+        compact_text = re.sub(r"\s+", " ", raw_text)[:240]
+        if "Attention Required!" in compact_text and "Cloudflare" in compact_text:
+            compact_text = "Cloudflare challenge blocked request"
+        if not compact_text:
+            compact_text = "Invalid JSON response"
+        return {"success": False, "code": str(status_code), "message": compact_text}
+
+    return {"success": False, "code": "429", "message": "Open API 请求过于频繁，请稍后重试"}
 
 
 def _hdhive_open_api_resources(base_url: str, api_key: str, media_type: str, tmdb_id: str) -> dict:
@@ -4434,37 +4910,76 @@ def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> 
 
     api_base = base_url.rstrip("/") + "/api/open"
     legacy_url = f"{api_base}/resources/{slug}"
-    legacy_resp = _hdhive_open_api_request("GET", legacy_url, api_key)
-    if isinstance(legacy_resp, dict) and legacy_resp.get("success") is True:
-        data = legacy_resp.get("data")
-        if isinstance(data, dict):
-            _cache_set(
-                _OPEN_API_RESOURCE_DETAIL_CACHE,
-                _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK,
-                cache_key,
-                legacy_resp,
-                max_items=_OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS,
-            )
-        return legacy_resp
-
     detail_url = f"{api_base}/resources/detail/{slug}"
-    detail_resp = _hdhive_open_api_request("GET", detail_url, api_key)
-    if isinstance(detail_resp, dict) and detail_resp.get("success") is True:
-        data = detail_resp.get("data")
+    detail_resp = None
+    legacy_resp = None
+
+    pref = _get_open_api_detail_route_pref(base_url)
+    prefer_detail = pref != "legacy"
+    first_route = "detail" if prefer_detail else "legacy"
+    second_route = "legacy" if prefer_detail else "detail"
+
+    def _call_route(route: str) -> dict:
+        if route == "legacy":
+            return _hdhive_open_api_request("GET", legacy_url, api_key)
+        return _hdhive_open_api_request("GET", detail_url, api_key)
+
+    first_resp = _call_route(first_route)
+    if first_route == "detail":
+        detail_resp = first_resp
+    else:
+        legacy_resp = first_resp
+    if isinstance(first_resp, dict) and first_resp.get("success") is True:
+        _set_open_api_detail_route_pref(base_url, first_route)
+        data = first_resp.get("data")
         if isinstance(data, dict):
             _cache_set(
                 _OPEN_API_RESOURCE_DETAIL_CACHE,
                 _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK,
                 cache_key,
-                detail_resp,
+                first_resp,
                 max_items=_OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS,
             )
-        return detail_resp
+        return first_resp
 
-    legacy_msg = str((legacy_resp or {}).get("message") or "").strip()
+    second_resp = _call_route(second_route)
+    if second_route == "detail":
+        detail_resp = second_resp
+    else:
+        legacy_resp = second_resp
+    if isinstance(second_resp, dict) and second_resp.get("success") is True:
+        _set_open_api_detail_route_pref(base_url, second_route)
+        data = second_resp.get("data")
+        if isinstance(data, dict):
+            _cache_set(
+                _OPEN_API_RESOURCE_DETAIL_CACHE,
+                _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK,
+                cache_key,
+                second_resp,
+                max_items=_OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS,
+            )
+        return second_resp
+
+    # Prefer richer error payload (description / non-404) to improve diagnostics.
+    for resp in (detail_resp, legacy_resp):
+        if not isinstance(resp, dict):
+            continue
+        desc = str(resp.get("description") or "").strip()
+        if desc and desc != "Invalid JSON response":
+            return resp
+
+    for resp in (detail_resp, legacy_resp):
+        if not isinstance(resp, dict):
+            continue
+        code = str(resp.get("code") or "").strip()
+        msg = str(resp.get("message") or "").strip()
+        if msg and msg != "Invalid JSON response" and code not in ("404", "NOT_FOUND", "not_found"):
+            return resp
+
     detail_msg = str((detail_resp or {}).get("message") or (detail_resp or {}).get("description") or "").strip()
     if detail_msg and detail_msg != "Invalid JSON response":
         return detail_resp
+    legacy_msg = str((legacy_resp or {}).get("message") or "").strip()
     if legacy_msg:
         return legacy_resp
     return detail_resp if isinstance(detail_resp, dict) else legacy_resp
@@ -6734,6 +7249,18 @@ def _normalize_emby_gap_fill_config(raw_cfg: Optional[dict]) -> dict:
     else:
         cfg["only_aired"] = bool(only_aired_raw)
 
+    tmdb_validate_raw = cfg.get("tmdb_validate", True)
+    if isinstance(tmdb_validate_raw, str):
+        cfg["tmdb_validate"] = tmdb_validate_raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        cfg["tmdb_validate"] = bool(tmdb_validate_raw)
+
+    strict_missing_raw = cfg.get("strict_missing_markers_only", False)
+    if isinstance(strict_missing_raw, str):
+        cfg["strict_missing_markers_only"] = strict_missing_raw.strip().lower() in ("1", "true", "yes", "on")
+    else:
+        cfg["strict_missing_markers_only"] = bool(strict_missing_raw)
+
     max_series_raw = cfg.get("max_series", 0)
     if isinstance(max_series_raw, str):
         max_series_raw = max_series_raw.strip()
@@ -7056,6 +7583,113 @@ def _extract_emby_missing_seasons_by_index_gap(items: list, *, only_aired: bool 
     return dict(sorted(season_counts.items(), key=lambda kv: kv[0]))
 
 
+def _extract_emby_missing_seasons_from_season_items(items: list, *, only_aired: bool = True) -> dict:
+    """
+    Supplement missing-season detection using /Shows/{id}/Seasons.
+    This helps when episode-level missing markers are absent (for example only S01 exists locally).
+    """
+    season_counts = {}
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        season = _coerce_season_int(item.get("IndexNumber"))
+        if not season:
+            season = _coerce_season_int(item.get("ParentIndexNumber"))
+        if not season:
+            season = _coerce_season_int(_extract_season_request(str(item.get("Name") or "")))
+        if not season:
+            continue
+
+        if only_aired:
+            premiere = _parse_emby_datetime(item.get("PremiereDate"))
+            if premiere and premiere > now_utc:
+                continue
+
+        is_missing = item.get("IsMissing")
+        location_type = str(item.get("LocationType") or "").strip().lower()
+        has_missing_marker = (is_missing is True) or (location_type in ("virtual", "missing"))
+
+        child_count = None
+        child_count_raw = item.get("ChildCount")
+        if child_count_raw not in (None, ""):
+            try:
+                child_count = int(child_count_raw)
+            except Exception:
+                child_count = None
+
+        recursive_item_count = None
+        recursive_item_count_raw = item.get("RecursiveItemCount")
+        if recursive_item_count_raw not in (None, ""):
+            try:
+                recursive_item_count = int(recursive_item_count_raw)
+            except Exception:
+                recursive_item_count = None
+
+        # Some deployments only expose complete-missing seasons via zero child counts.
+        empty_season = (
+            (child_count is not None and child_count <= 0) or
+            (recursive_item_count is not None and recursive_item_count <= 0)
+        )
+        if not has_missing_marker and not empty_season:
+            continue
+        season_counts[season] = 1
+    return dict(sorted(season_counts.items(), key=lambda kv: kv[0]))
+
+
+def _extract_emby_tmdb_id(series_item: dict) -> str:
+    if not isinstance(series_item, dict):
+        return ""
+    provider_ids = series_item.get("ProviderIds")
+    if not isinstance(provider_ids, dict):
+        provider_ids = {}
+    for key in ("Tmdb", "TMDB", "tmdb", "TheMovieDb", "TheMovieDB", "themoviedb"):
+        val = provider_ids.get(key)
+        token = str(val or "").strip()
+        if token.isdigit():
+            return token
+    for key, val in provider_ids.items():
+        if "tmdb" not in str(key or "").strip().lower():
+            continue
+        token = str(val or "").strip()
+        if token.isdigit():
+            return token
+    return ""
+
+
+def _count_emby_present_episodes_by_season(items: list, *, only_aired: bool = True) -> dict:
+    season_counts = {}
+    seen = set()
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        if only_aired:
+            premiere = _parse_emby_datetime(item.get("PremiereDate"))
+            if premiere and premiere > now_utc:
+                continue
+        is_missing = item.get("IsMissing")
+        location_type = str(item.get("LocationType") or "").strip().lower()
+        if is_missing is True or location_type in ("virtual", "missing"):
+            continue
+        season = _coerce_season_int(item.get("ParentIndexNumber"))
+        if not season:
+            season = _coerce_season_int(_extract_season_request(str(item.get("Name") or "")))
+        if not season:
+            continue
+        episode = _coerce_episode_int(item.get("IndexNumber"))
+        if not episode:
+            episode = _extract_episode_index_from_name(str(item.get("Name") or ""))
+        if not episode:
+            continue
+        pair = (season, episode)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        season_counts[season] = int(season_counts.get(season, 0) or 0) + 1
+    return season_counts
+
+
 def _build_emby_gap_key(series_id: str, season: int) -> str:
     sid = str(series_id or "").strip()
     return f"{sid}:S{int(season):02d}"
@@ -7269,7 +7903,7 @@ def _emby_fetch_series_items(
             params = {
                 "Recursive": "true",
                 "IncludeItemTypes": "Series",
-                "Fields": "ProductionYear,Status,PremiereDate",
+                "Fields": "ProductionYear,Status,PremiereDate,ProviderIds",
                 "SortBy": "SortName",
                 "SortOrder": "Ascending",
                 "Limit": str(limit),
@@ -7407,6 +8041,30 @@ def _emby_fetch_missing_episode_items(
     )
 
 
+def _emby_fetch_season_items(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    series_id: str,
+) -> Tuple[list, str]:
+    sid = str(series_id or "").strip()
+    if not sid:
+        return [], "缺少 series_id"
+    params = {
+        "UserId": str(user_id or "").strip(),
+        "Fields": "PremiereDate,IndexNumber,ParentIndexNumber,LocationType,IsMissing,Name,SeriesName,Path,ChildCount,RecursiveItemCount",
+        "Limit": "300",
+    }
+    path = f"/Shows/{quote(sid, safe='')}/Seasons"
+    ok, payload, err = _emby_request_json(base_url, api_key, path, params=params, timeout=25)
+    if not ok or not isinstance(payload, dict):
+        return [], err or "查询季度列表失败"
+    items = payload.get("Items")
+    if not isinstance(items, list):
+        return [], "Emby 季度响应格式异常"
+    return items, ""
+
+
 def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_only: bool = False) -> dict:
     now_ts = time.time()
     now_str = _format_scheduler_ts(now_ts)
@@ -7433,6 +8091,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             "cooldown_skipped": 0,
             "api_errors": 0,
             "submit_errors": 0,
+            "tmdb_checked_series": 0,
+            "tmdb_conflicts": 0,
         },
         "missing_items": [],
         "submitted_items": [],
@@ -7505,8 +8165,13 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
         cooldown_hours = max(0, cooldown_hours)
         cooldown_seconds = cooldown_hours * 3600
         only_aired = bool(emby_cfg.get("only_aired", True))
+        strict_missing_markers_only = bool(emby_cfg.get("strict_missing_markers_only", False))
         library_ids = _parse_emby_library_ids(emby_cfg.get("library_ids"))
         ignore_rules = _parse_emby_gap_ignore_list(emby_cfg.get("ignore_list"))
+        tmdb_validate = bool(emby_cfg.get("tmdb_validate", True))
+        tmdb_api_key = str((drama_cfg.get("tmdb_api_key") or os.environ.get("TMDB_API_KEY") or "")).strip()
+        tmdb_language = str((drama_cfg.get("tmdb_language") or "zh-CN")).strip() or "zh-CN"
+        tmdb_validation_enabled = bool(tmdb_validate and tmdb_api_key)
 
         def _on_series_page_progress(meta: dict) -> None:
             try:
@@ -7544,6 +8209,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             progress_cb=_on_series_page_progress,
         )
         valid_series = []
+        series_item_map = {}
         for series in series_items:
             if not isinstance(series, dict):
                 continue
@@ -7553,6 +8219,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 continue
             production_year = str(series.get("ProductionYear") or "").strip()
             valid_series.append((sid, title, production_year))
+            series_item_map[sid] = series
 
         if valid_series:
             filtered_series = []
@@ -7598,6 +8265,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
         api_errors = 0
         missing_filter_probe_done = False
         missing_filter_ignored = False
+        tmdb_checked_series = 0
+        tmdb_conflicts = 0
 
         fetch_results = {}
         if valid_series:
@@ -7673,7 +8342,25 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 continue
 
             missing_seasons = _extract_emby_missing_seasons(missing_items, only_aired=only_aired)
-            if not missing_seasons and missing_items:
+            if not strict_missing_markers_only and not missing_seasons and not missing_items:
+                season_items, season_err = _emby_fetch_season_items(
+                    base_url=base_url,
+                    api_key=api_key,
+                    user_id=user_id,
+                    series_id=sid,
+                )
+                if season_err:
+                    _append_emby_gap_fill_log([
+                        f"[{now_str}] [WARN] 查询季度列表失败 series={title}({sid}) err={season_err}"
+                    ])
+                else:
+                    season_level_missing = _extract_emby_missing_seasons_from_season_items(
+                        season_items,
+                        only_aired=only_aired,
+                    )
+                    if season_level_missing:
+                        missing_seasons = season_level_missing
+            if not strict_missing_markers_only and not missing_seasons and missing_items:
                 has_missing_markers = any(
                     isinstance(item, dict) and (
                         item.get("IsMissing") is True or
@@ -7701,6 +8388,96 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                         if inferred:
                             missing_seasons = inferred
                             inferred_missing_count += sum(int(v or 0) for v in inferred.values())
+            if tmdb_validation_enabled and (not strict_missing_markers_only or bool(missing_seasons)):
+                series_meta = series_item_map.get(sid) if isinstance(series_item_map.get(sid), dict) else {}
+                tmdb_id = _extract_emby_tmdb_id(series_meta)
+                if tmdb_id:
+                    tmdb_checked_series += 1
+                    tv_detail = _tmdb_fetch_tv_detail(tmdb_api_key, tmdb_id, language=tmdb_language)
+                    if not isinstance(tv_detail, dict):
+                        _append_emby_gap_fill_log([
+                            f"[{now_str}] [WARN] TMDB 校验失败 series={title}({sid}) tmdb_id={tmdb_id} err=tv_detail_unavailable"
+                        ])
+                    else:
+                        present_items, present_err = _emby_fetch_episode_items(
+                            base_url=base_url,
+                            api_key=api_key,
+                            user_id=user_id,
+                            series_id=sid,
+                            is_missing=None,
+                        )
+                        if present_err:
+                            _append_emby_gap_fill_log([
+                                f"[{now_str}] [WARN] TMDB 校验失败 series={title}({sid}) tmdb_id={tmdb_id} err=emby_present_unavailable:{present_err}"
+                            ])
+                        else:
+                            try:
+                                tmdb_total_seasons = int(tv_detail.get("number_of_seasons") or 0)
+                            except Exception:
+                                tmdb_total_seasons = 0
+                            present_counts = _count_emby_present_episodes_by_season(present_items, only_aired=only_aired)
+
+                            tmdb_candidate_seasons = set()
+                            if strict_missing_markers_only:
+                                for season in list((missing_seasons or {}).keys()):
+                                    season_num = _coerce_season_int(season)
+                                    if season_num:
+                                        tmdb_candidate_seasons.add(season_num)
+                            else:
+                                if tmdb_total_seasons > 0:
+                                    for season_num in range(1, min(tmdb_total_seasons, 60) + 1):
+                                        tmdb_candidate_seasons.add(season_num)
+                                seasons_meta = tv_detail.get("seasons")
+                                if isinstance(seasons_meta, list):
+                                    for season_meta in seasons_meta:
+                                        if not isinstance(season_meta, dict):
+                                            continue
+                                        season_num = _coerce_season_int(season_meta.get("season_number"))
+                                        if season_num and season_num <= 99:
+                                            tmdb_candidate_seasons.add(season_num)
+                                for season in list((missing_seasons or {}).keys()):
+                                    season_num = _coerce_season_int(season)
+                                    if season_num:
+                                        tmdb_candidate_seasons.add(season_num)
+
+                            validated_missing = {}
+                            conflict_items = []
+                            for season_num in sorted(tmdb_candidate_seasons):
+                                if season_num <= 0:
+                                    continue
+                                miss_count = max(0, int((missing_seasons or {}).get(season_num, 0) or 0))
+                                if tmdb_total_seasons > 0 and season_num > tmdb_total_seasons:
+                                    if miss_count > 0:
+                                        conflict_items.append((season_num, "season_out_of_range", 0, int(present_counts.get(season_num, 0) or 0)))
+                                    continue
+                                season_detail = _tmdb_fetch_tv_season_detail(
+                                    tmdb_api_key,
+                                    tmdb_id,
+                                    season_num,
+                                    language=tmdb_language,
+                                )
+                                if not isinstance(season_detail, dict):
+                                    if miss_count > 0:
+                                        validated_missing[season_num] = miss_count
+                                    continue
+                                expected_count = _tmdb_expected_episode_count_for_season(season_detail, only_aired=only_aired)
+                                if expected_count is None:
+                                    if miss_count > 0:
+                                        validated_missing[season_num] = miss_count
+                                    continue
+                                present_count = int(present_counts.get(season_num, 0) or 0)
+                                tmdb_gap = max(0, int(expected_count) - present_count)
+                                if tmdb_gap > 0:
+                                    validated_missing[season_num] = max(miss_count, tmdb_gap)
+                                elif miss_count > 0:
+                                    conflict_items.append((season_num, "no_gap_by_tmdb", int(expected_count), present_count))
+                            if conflict_items:
+                                tmdb_conflicts += len(conflict_items)
+                                for season_num, reason, expected_count, present_count in conflict_items[:6]:
+                                    _append_emby_gap_fill_log([
+                                        f"[{now_str}] [INFO] TMDB 校验冲突跳过 series={title}({sid}) season=S{season_num:02d} reason={reason} expected={expected_count} present={present_count}"
+                                    ])
+                            missing_seasons = validated_missing
             if not missing_seasons:
                 continue
             series_with_missing += 1
@@ -7769,6 +8546,10 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                 int(item.get("season") or 0),
             )
         )
+
+        # Publish discovered missing list immediately so the modal can show details
+        # while the background task is still submitting requests.
+        _set_emby_gap_fill_scheduler_state(last_missing_items=list(missing_items_out))
 
         submit_errors = 0
         submitted = []
@@ -7865,6 +8646,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                     "cooldown_skipped": cooldown_skipped,
                     "api_errors": api_errors,
                     "submit_errors": submit_errors,
+                    "tmdb_checked_series": tmdb_checked_series,
+                    "tmdb_conflicts": tmdb_conflicts,
                 },
             }
             _save_emby_gap_fill_state_data(state)
@@ -7890,6 +8673,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             message += f"，接口异常 {api_errors}"
         if submit_errors > 0:
             message += f"，提交失败 {submit_errors}"
+        if tmdb_conflicts > 0:
+            message += f"，TMDB 冲突跳过 {tmdb_conflicts}"
         if not series_items and not series_err:
             message = "未获取到可扫描的 Emby 剧集"
             status = "warning"
@@ -7897,6 +8682,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             message += "（Emby 缺集标记不可用，已按集号断档推断）"
             if status == "success":
                 status = "warning"
+        if tmdb_conflicts > 0 and status == "success":
+            status = "warning"
 
         if not preview_only:
             notify_raw = emby_cfg.get("notify_user_ids") or ""
@@ -7912,6 +8699,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             f"[{now_str}] [INFO] trigger={trigger_label} mode={run_mode} scanned={scanned_count} missing={missing_count} "
             f"pending={len(candidates)} submitted={len(submitted)} cooldown_skipped={cooldown_skipped} ignored={ignored_skipped} "
             f"inferred_missing={inferred_missing_count} api_errors={api_errors} submit_errors={submit_errors} "
+            f"tmdb_checked_series={tmdb_checked_series} tmdb_conflicts={tmdb_conflicts} "
             f"missing_filter_ignored={str(missing_filter_ignored).lower()}"
         ]
         if preview_only:
@@ -7954,6 +8742,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             "cooldown_skipped": cooldown_skipped,
             "api_errors": api_errors,
             "submit_errors": submit_errors,
+            "tmdb_checked_series": tmdb_checked_series,
+            "tmdb_conflicts": tmdb_conflicts,
         }
         result["missing_filter_ignored"] = bool(missing_filter_ignored)
         result["missing_items"] = missing_items_out
@@ -7977,6 +8767,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             "cooldown_skipped": 0,
             "api_errors": 0,
             "submit_errors": 1,
+            "tmdb_checked_series": 0,
+            "tmdb_conflicts": 0,
         }
         result["missing_items"] = []
         result["submitted_items"] = []
@@ -10125,6 +10917,7 @@ def drama_calendar_settings():
             emby_gap_fill["ignore_list"] = (request.form.get("drama_emby_ignore_list") or "").strip()
             emby_gap_fill["notify_user_ids"] = (request.form.get("drama_emby_notify_user_ids") or "").strip()
             emby_gap_fill["only_aired"] = request.form.get("drama_emby_only_aired") == "on"
+            emby_gap_fill["strict_missing_markers_only"] = request.form.get("drama_emby_strict_missing_markers_only") == "on"
             try:
                 max_series_raw = (request.form.get("drama_emby_max_series") or "").strip()
                 emby_gap_fill["max_series"] = max(0, int(max_series_raw)) if max_series_raw else 0
@@ -10164,6 +10957,19 @@ def drama_calendar_settings():
                 emby_cron_expr = ""
             emby_gap_fill["auto_sync_cron_expr"] = emby_cron_expr
             drama["emby_gap_fill"] = emby_gap_fill
+
+            moviepilot_sync = dict(drama.get("moviepilot_sync") or {})
+            moviepilot_sync["enabled"] = request.form.get("drama_moviepilot_sync_enabled") == "on"
+            moviepilot_sync["base_url"] = (request.form.get("drama_moviepilot_base_url") or "").strip()
+            moviepilot_sync["api_token"] = (request.form.get("drama_moviepilot_api_token") or "").strip()
+            try:
+                moviepilot_sync["timeout_seconds"] = max(
+                    3,
+                    min(120, int((request.form.get("drama_moviepilot_timeout_seconds") or "15").strip() or 15)),
+                )
+            except Exception:
+                moviepilot_sync["timeout_seconds"] = 15
+            drama["moviepilot_sync"] = moviepilot_sync
             return drama
 
         if action == 'update_drama_calendar_settings':
@@ -10511,6 +11317,7 @@ def drama_calendar_settings():
 
                     after_count = len(titles)
                     save_ok = True
+                    removed_titles_for_mp = _collect_removed_titles(current_titles, titles)
                     if new_whitelist == current_whitelist:
                         flash('未检测到变更。', 'info')
                     else:
@@ -10531,6 +11338,15 @@ def drama_calendar_settings():
                             ])
 
                     if save_ok:
+                        if removed_titles_for_mp:
+                            try:
+                                _sync_removed_titles_to_moviepilot(
+                                    removed_titles_for_mp,
+                                    config.get('drama_calendar', {}) if isinstance(config, dict) else {},
+                                    trigger='tv-edit',
+                                )
+                            except Exception:
+                                pass
                         state = _load_drama_calendar_state()
                         source_titles_state = state.get('source_titles') if isinstance(state, dict) else None
                         if not isinstance(source_titles_state, dict):
