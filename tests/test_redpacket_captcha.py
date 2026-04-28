@@ -102,6 +102,7 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
                 "auto_click_random_delay_seconds": "1.5",
                 "auto_click_min_points": "20",
                 "auto_click_min_count": "3",
+                "auto_click_min_average_points": "6.5",
             }
         )
         self.assertEqual(
@@ -115,6 +116,7 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         )
         self.assertEqual(rules.get("min_points"), 20)
         self.assertEqual(rules.get("min_count"), 3)
+        self.assertEqual(rules.get("min_average_points"), 6.5)
 
     def test_auto_click_rules_normalize_delay(self):
         rules = telegram_monitor._get_auto_click_rules(
@@ -161,7 +163,7 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
     def test_extract_poetry_redpacket_meta(self):
         text = "📜 诗词填空：红包积分: 80，红包个数: 5\n《春晓》：__来风雨声，花落知多少。"
         meta = telegram_monitor._extract_poetry_redpacket_meta(text)
-        self.assertEqual(meta, {"points": 80, "count": 5})
+        self.assertEqual(meta, {"points": 80, "count": 5, "average_points": 16.0})
 
     def test_poetry_redpacket_threshold_check_blocks_low_points(self):
         text = "📜 诗词填空：红包积分: 8，红包个数: 5\n《春晓》：__来风雨声，花落知多少。"
@@ -170,8 +172,18 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         )
         ok, meta, reason = telegram_monitor._poetry_redpacket_threshold_check(text, rules)
         self.assertFalse(ok)
-        self.assertEqual(meta, {"points": 8, "count": 5})
+        self.assertEqual(meta, {"points": 8, "count": 5, "average_points": 1.6})
         self.assertIn("红包积分 8 < 10", reason)
+
+    def test_poetry_redpacket_threshold_check_blocks_low_average_points(self):
+        text = "📜 诗词填空：红包积分: 20，红包个数: 4\n《春晓》：__来风雨声，花落知多少。"
+        rules = telegram_monitor._get_auto_click_rules(
+            {"auto_click_min_average_points": "6"}
+        )
+        ok, meta, reason = telegram_monitor._poetry_redpacket_threshold_check(text, rules)
+        self.assertFalse(ok)
+        self.assertEqual(meta, {"points": 20, "count": 4, "average_points": 5.0})
+        self.assertIn("平均积分 5 < 6", reason)
 
     def test_auto_click_buttons_waits_before_click(self):
         msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
@@ -254,6 +266,56 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
 
         self.assertFalse(clicked)
         self.assertEqual(len(msg.clicked), 0)
+
+    def test_poetry_auto_click_thresholds_block_low_average_points(self):
+        msg = _DummyMsg(100, "📜 诗词填空：红包积分: 20，红包个数: 4\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_min_average_points": "6",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+
+        clicked = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(
+                _DummyEvent(),
+                msg,
+                entry,
+                msg.message,
+            )
+        )
+
+        self.assertFalse(clicked)
+        self.assertEqual(len(msg.clicked), 0)
+
+    def test_poetry_auto_click_thresholds_pass_average_points(self):
+        msg = _DummyMsg(100, "📜 诗词填空：红包积分: 20，红包个数: 3\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_min_average_points": "6.5",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+
+        clicked = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(
+                _DummyEvent(),
+                msg,
+                entry,
+                msg.message,
+            )
+        )
+
+        self.assertTrue(clicked)
+        self.assertEqual(len(msg.clicked), 1)
 
     def test_poetry_auto_click_thresholds_block_missing_meta(self):
         msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")

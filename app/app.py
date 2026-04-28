@@ -58,7 +58,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.84"
+VERSION = "0.5.85"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -11795,6 +11795,11 @@ def manage_config():
             except (TypeError, ValueError):
                 auto_click_min_count = 0
             auto_click_min_count = max(0, min(auto_click_min_count, 10000))
+            try:
+                auto_click_min_average_points = float((request.form.get('auto_click_min_average_points') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                auto_click_min_average_points = 0.0
+            auto_click_min_average_points = max(0.0, min(auto_click_min_average_points, 1000000.0))
             monitor_types = request.form.getlist('monitor_types')
             forward_only = False
             forward_enabled = keep_video_message or force_forward_all
@@ -11862,6 +11867,7 @@ def manage_config():
                             entry['auto_click_random_delay_seconds'] = auto_click_random_delay_seconds
                             entry['auto_click_min_points'] = auto_click_min_points
                             entry['auto_click_min_count'] = auto_click_min_count
+                            entry['auto_click_min_average_points'] = auto_click_min_average_points
                             for obsolete_key in (
                                 'auto_click_keywords',
                                 'auto_click_button_texts',
@@ -11915,6 +11921,7 @@ def manage_config():
                         "auto_click_random_delay_seconds": auto_click_random_delay_seconds,
                         "auto_click_min_points": auto_click_min_points,
                         "auto_click_min_count": auto_click_min_count,
+                        "auto_click_min_average_points": auto_click_min_average_points,
                         "monitor_types": monitor_types,
                         "forward_only": forward_only
                     })

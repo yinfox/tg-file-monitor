@@ -3530,6 +3530,16 @@ def _normalize_auto_click_threshold(value, *, max_value: int) -> int:
     return max(0, min(threshold, int(max_value)))
 
 
+def _normalize_auto_click_threshold_float(value, *, max_value: float) -> float:
+    try:
+        threshold = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if threshold < 0:
+        return 0.0
+    return min(threshold, float(max_value))
+
+
 def _normalize_auto_click_risk_settings(restricted_entry: dict) -> Dict[str, object]:
     return {
         "enabled": bool(restricted_entry.get('auto_click_risk_control_enabled')),
@@ -3561,6 +3571,10 @@ def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
         restricted_entry.get('auto_click_min_count'),
         max_value=10_000,
     )
+    min_average_points = _normalize_auto_click_threshold_float(
+        restricted_entry.get('auto_click_min_average_points'),
+        max_value=1_000_000.0,
+    )
 
     return {
         "keywords": [],
@@ -3573,6 +3587,7 @@ def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
         "risk": risk_settings,
         "min_points": min_points,
         "min_count": min_count,
+        "min_average_points": min_average_points,
     }
 
 
@@ -5375,7 +5390,7 @@ def _extract_first_int(patterns: List[str], text: str) -> Optional[int]:
     return None
 
 
-def _extract_poetry_redpacket_meta(message_text: str) -> Dict[str, Optional[int]]:
+def _extract_poetry_redpacket_meta(message_text: str) -> Dict[str, object]:
     text = str(message_text or '')
     points = _extract_first_int(
         [
@@ -5395,18 +5410,23 @@ def _extract_poetry_redpacket_meta(message_text: str) -> Dict[str, Optional[int]
         ],
         text,
     )
-    return {"points": points, "count": count}
+    average_points = None
+    if points is not None and count is not None and count > 0:
+        average_points = float(points) / float(count)
+    return {"points": points, "count": count, "average_points": average_points}
 
 
-def _poetry_redpacket_threshold_check(message_text: str, rules: dict) -> Tuple[bool, Dict[str, Optional[int]], str]:
+def _poetry_redpacket_threshold_check(message_text: str, rules: dict) -> Tuple[bool, Dict[str, object], str]:
     min_points = int(rules.get('min_points') or 0)
     min_count = int(rules.get('min_count') or 0)
-    if min_points <= 0 and min_count <= 0:
-        return True, {"points": None, "count": None}, ''
+    min_average_points = float(rules.get('min_average_points') or 0)
+    if min_points <= 0 and min_count <= 0 and min_average_points <= 0:
+        return True, {"points": None, "count": None, "average_points": None}, ''
 
     meta = _extract_poetry_redpacket_meta(message_text)
     points = meta.get("points")
     count = meta.get("count")
+    average_points = meta.get("average_points")
     failures = []
     if min_points > 0:
         if points is None:
@@ -5418,6 +5438,11 @@ def _poetry_redpacket_threshold_check(message_text: str, rules: dict) -> Tuple[b
             failures.append(f"未解析到红包个数(要求 >= {min_count})")
         elif count < min_count:
             failures.append(f"红包个数 {count} < {min_count}")
+    if min_average_points > 0:
+        if average_points is None:
+            failures.append(f"未解析到平均积分(要求 >= {min_average_points:g})")
+        elif float(average_points) < min_average_points:
+            failures.append(f"平均积分 {float(average_points):g} < {min_average_points:g}")
     return not failures, meta, "；".join(failures)
 
 
@@ -5453,7 +5478,8 @@ async def _maybe_auto_click_poetry_redpacket_quiz(
             log_message(
                 f"诗词红包门槛跳过点击: ch={chat_id} msg={msg_id} "
                 f"answer='{answer}' points={redpacket_meta.get('points')} "
-                f"count={redpacket_meta.get('count')} reason={threshold_reason}",
+                f"count={redpacket_meta.get('count')} avg={redpacket_meta.get('average_points')} "
+                f"reason={threshold_reason}",
                 level="WARNING",
             )
             return False
@@ -5493,9 +5519,12 @@ async def _maybe_auto_click_poetry_redpacket_quiz(
         log_message(f"已自动点击诗词红包答案: ch={chat_id} msg={msg_id} answer='{answer}' btn='{btn_text}'")
         notify_title = f"已自动点击诗词红包答案: {answer}"
         if redpacket_meta.get('points') is not None or redpacket_meta.get('count') is not None:
+            avg = redpacket_meta.get('average_points')
+            avg_text = f"{float(avg):g}" if avg is not None else "-"
             notify_title += (
                 f"（积分: {redpacket_meta.get('points') if redpacket_meta.get('points') is not None else '-'}"
-                f"，个数: {redpacket_meta.get('count') if redpacket_meta.get('count') is not None else '-'}）"
+                f"，个数: {redpacket_meta.get('count') if redpacket_meta.get('count') is not None else '-'}"
+                f"，平均: {avg_text}）"
             )
         await _send_auto_click_notify(
             event,
