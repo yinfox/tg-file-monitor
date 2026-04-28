@@ -94,6 +94,7 @@
         .sidebar {
             width: var(--sidebar-width);
             height: 100vh;
+            height: 100dvh;
             position: fixed;
             left: 0;
             top: 0;
@@ -109,6 +110,8 @@
             color: var(--page-ink);
             padding: 1.5rem 0;
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
         .sidebar::before,
@@ -200,6 +203,12 @@
             position: relative;
             z-index: 1;
             gap: 0.15rem;
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overscroll-behavior: contain;
+            -webkit-overflow-scrolling: touch;
+            padding-bottom: 0.85rem;
         }
 
         .sidebar-section-label {
@@ -283,8 +292,9 @@
         }
 
         .sidebar-footer {
-            position: absolute;
-            bottom: 0;
+            position: relative;
+            z-index: 1;
+            margin-top: auto;
             width: 100%;
             padding: 1rem;
             border-top: 1px solid rgba(125, 160, 190, 0.14);

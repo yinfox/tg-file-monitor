@@ -7,6 +7,8 @@ from app.app import (
     _extract_emby_missing_seasons,
     _extract_emby_missing_seasons_by_index_gap,
     _extract_emby_missing_seasons_from_season_items,
+    _count_emby_present_episodes_by_season,
+    _emby_fetch_episode_items,
     _normalize_emby_gap_fill_config,
     _emby_fetch_series_items,
     _prune_emby_gap_missing_items,
@@ -96,6 +98,28 @@ class EmbyGapFillTestCase(unittest.TestCase):
         expected = {season: 1 for season in range(1, 8)}
         self.assertEqual(result, expected)
 
+    def test_extract_emby_missing_seasons_by_index_gap_skips_large_leading_absolute_numbering(self):
+        items = [
+            {"ParentIndexNumber": 1, "IndexNumber": 892, "Name": "第 892 集"},
+            {"ParentIndexNumber": 1, "IndexNumber": 893, "Name": "第 893 集"},
+        ]
+        result = _extract_emby_missing_seasons_by_index_gap(items, only_aired=False)
+        self.assertEqual(result, {})
+
+    def test_extract_emby_missing_seasons_by_index_gap_ignores_known_future_holes(self):
+        now = datetime.datetime.now(datetime.timezone.utc)
+        past = (now - datetime.timedelta(days=1)).isoformat().replace("+00:00", "Z")
+        future = (now + datetime.timedelta(days=3)).isoformat().replace("+00:00", "Z")
+        items = [
+            {"ParentIndexNumber": 1, "IndexNumber": 1, "PremiereDate": past},
+            {"ParentIndexNumber": 1, "IndexNumber": 2, "PremiereDate": past},
+            {"ParentIndexNumber": 1, "IndexNumber": 3, "PremiereDate": future},
+            {"ParentIndexNumber": 1, "IndexNumber": 4, "PremiereDate": future},
+            {"ParentIndexNumber": 1, "IndexNumber": 5, "PremiereDate": past},
+        ]
+        result = _extract_emby_missing_seasons_by_index_gap(items, only_aired=True)
+        self.assertEqual(result, {})
+
     def test_extract_emby_missing_seasons_from_season_items_detects_virtual_or_empty_seasons(self):
         now = datetime.datetime.now(datetime.timezone.utc)
         past = (now - datetime.timedelta(days=1)).isoformat().replace("+00:00", "Z")
@@ -108,6 +132,16 @@ class EmbyGapFillTestCase(unittest.TestCase):
         ]
         result = _extract_emby_missing_seasons_from_season_items(season_items, only_aired=True)
         self.assertEqual(result, {2: 1, 3: 1})
+
+    def test_count_emby_present_episodes_by_season_skips_missing_placeholders(self):
+        items = [
+            {"ParentIndexNumber": 1, "IndexNumber": 1, "IsMissing": False, "LocationType": "FileSystem"},
+            {"ParentIndexNumber": 1, "IndexNumber": 2, "IsMissing": True, "LocationType": "Virtual"},
+            {"ParentIndexNumber": 1, "IndexNumber": 3, "IsMissing": None, "LocationType": "missing"},
+            {"ParentIndexNumber": 1, "IndexNumber": 4, "IsMissing": None, "LocationType": "FileSystem"},
+        ]
+        result = _count_emby_present_episodes_by_season(items, only_aired=False)
+        self.assertEqual(result, {1: 2})
 
     def test_normalize_emby_gap_fill_config_blank_max_series_means_unlimited(self):
         normalized = _normalize_emby_gap_fill_config({"max_series": ""})
@@ -229,6 +263,38 @@ class EmbyGapFillTestCase(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertEqual(len(items), 200)
         self.assertEqual(calls, [0, 200, 400])
+
+    def test_emby_fetch_episode_items_paginates_when_more_than_one_thousand(self):
+        calls = []
+
+        def _fake_emby_request_json(_base_url, _api_key, _path, params=None, timeout=25):
+            params = params or {}
+            start_index = int(params.get("StartIndex", "0") or 0)
+            calls.append(start_index)
+            if start_index == 0:
+                return True, {
+                    "Items": [{"Id": f"e{i}", "Name": f"E{i}", "ParentIndexNumber": 1, "IndexNumber": i} for i in range(1, 1001)],
+                    "TotalRecordCount": 1050,
+                }, ""
+            if start_index == 1000:
+                return True, {
+                    "Items": [{"Id": f"e{i}", "Name": f"E{i}", "ParentIndexNumber": 1, "IndexNumber": i} for i in range(1001, 1051)],
+                    "TotalRecordCount": 1050,
+                }, ""
+            return True, {"Items": [], "TotalRecordCount": 1050}, ""
+
+        with patch("app.app._emby_request_json", side_effect=_fake_emby_request_json):
+            items, err = _emby_fetch_episode_items(
+                base_url="http://127.0.0.1:8096",
+                api_key="emby-key",
+                user_id="user-1",
+                series_id="series-1",
+                is_missing=None,
+            )
+
+        self.assertEqual(err, "")
+        self.assertEqual(len(items), 1050)
+        self.assertEqual(calls[:2], [0, 1000])
 
     def test_run_emby_gap_fill_scheduler_submits_all_candidates(self):
         config = self._build_base_config(max_missing_requests=1)
@@ -488,6 +554,61 @@ class EmbyGapFillTestCase(unittest.TestCase):
         self.assertEqual(result.get("summary", {}).get("tmdb_checked_series"), 1)
         self.assertEqual(result.get("summary", {}).get("tmdb_conflicts"), 0)
         run_request.assert_called_once()
+
+    def test_run_emby_gap_fill_scheduler_tmdb_only_aired_caps_unreleased_missing_count(self):
+        config = self._build_base_config(max_missing_requests=1)
+        config["drama_calendar"]["tmdb_api_key"] = "tmdb-key"
+        series_items = [
+            {
+                "Id": "series-1",
+                "Name": "示例剧",
+                "ProductionYear": 2026,
+                "ProviderIds": {"Tmdb": "12345"},
+            }
+        ]
+        # Emby may return placeholder missing entries without reliable premiere dates,
+        # including unaired episodes.
+        missing_items = [
+            {"IsMissing": True, "ParentIndexNumber": 1, "IndexNumber": 10},
+            {"IsMissing": True, "ParentIndexNumber": 1, "IndexNumber": 11},
+            {"IsMissing": True, "ParentIndexNumber": 1, "IndexNumber": 12},
+            {"IsMissing": True, "ParentIndexNumber": 1, "IndexNumber": 13},
+        ]
+        present_items = [
+            {"ParentIndexNumber": 1, "IndexNumber": ep, "PremiereDate": "2025-01-01T00:00:00Z", "IsMissing": False, "LocationType": "FileSystem"}
+            for ep in range(1, 10)
+        ]
+        season_detail = {
+            "episodes": [
+                {"episode_number": ep, "air_date": "2025-01-01"} for ep in range(1, 11)
+            ] + [
+                {"episode_number": ep, "air_date": "2099-01-01"} for ep in range(11, 14)
+            ]
+        }
+
+        with patch("app.app._get_self_service_runtime", return_value=self._runtime()), \
+             patch("app.app._emby_resolve_user_id", return_value=("user-1", "")), \
+             patch("app.app._emby_fetch_series_items", return_value=(series_items, "")), \
+             patch("app.app._emby_fetch_missing_episode_items", return_value=(missing_items, "")), \
+             patch("app.app._emby_fetch_episode_items", return_value=(present_items, "")), \
+             patch("app.app._tmdb_fetch_tv_detail", return_value={"number_of_seasons": 1}), \
+             patch("app.app._tmdb_fetch_tv_season_detail", return_value=season_detail), \
+             patch("app.app._load_emby_gap_fill_state_data", return_value={"requested": {}, "last_run": {}}), \
+             patch("app.app._save_emby_gap_fill_state_data"), \
+             patch("app.app._append_emby_gap_fill_log"), \
+             patch("app.app._enqueue_message"), \
+             patch("app.app._set_self_service_result"), \
+             patch("app.app._run_self_service_request") as run_request:
+            result = _run_emby_gap_fill_once(config, trigger="scheduler")
+
+        self.assertEqual(result.get("status"), "success")
+        self.assertEqual(result.get("summary", {}).get("missing"), 1)
+        self.assertEqual(result.get("summary", {}).get("submitted"), 1)
+        missing_items_out = result.get("missing_items") or []
+        self.assertEqual(len(missing_items_out), 1)
+        self.assertEqual(int(missing_items_out[0].get("missing_episodes") or 0), 1)
+        submitted_payload = run_request.call_args[0][0]
+        self.assertEqual(int(submitted_payload.get("missing_episodes") or 0), 1)
 
     def test_run_emby_gap_fill_scheduler_tmdb_present_compare_uses_unfiltered_episode_list(self):
         config = self._build_base_config(max_missing_requests=1)
@@ -779,6 +900,96 @@ class EmbyGapFillTestCase(unittest.TestCase):
         self.assertIn("按集号断档推断", result.get("message", ""))
         run_request.assert_not_called()
 
+    def test_run_emby_gap_fill_preview_filter_probe_is_per_series(self):
+        config = self._build_base_config(max_missing_requests=1, cooldown_hours=24)
+        config["drama_calendar"]["emby_gap_fill"]["enabled"] = False
+        series_items = [
+            {"Id": "series-1", "Name": "第一部剧", "ProductionYear": 2026},
+            {"Id": "series-2", "Name": "第二部剧", "ProductionYear": 2026},
+        ]
+        missing_no_marker_full = [
+            {
+                "Id": "s1e1",
+                "Name": "第 1 集",
+                "ParentIndexNumber": 1,
+                "IndexNumber": 1,
+                "PremiereDate": "2026-01-01T00:00:00Z",
+                "IsMissing": None,
+                "LocationType": None,
+            },
+            {
+                "Id": "s1e2",
+                "Name": "第 2 集",
+                "ParentIndexNumber": 1,
+                "IndexNumber": 2,
+                "PremiereDate": "2026-01-02T00:00:00Z",
+                "IsMissing": None,
+                "LocationType": None,
+            },
+        ]
+        missing_no_marker_gap = [
+            {
+                "Id": "s2e1",
+                "Name": "第 1 集",
+                "ParentIndexNumber": 1,
+                "IndexNumber": 1,
+                "PremiereDate": "2026-01-01T00:00:00Z",
+                "IsMissing": None,
+                "LocationType": None,
+            },
+            {
+                "Id": "s2e3",
+                "Name": "第 3 集",
+                "ParentIndexNumber": 1,
+                "IndexNumber": 3,
+                "PremiereDate": "2026-01-02T00:00:00Z",
+                "IsMissing": None,
+                "LocationType": None,
+            },
+        ]
+        present_partial = [dict(missing_no_marker_full[0])]
+
+        def _fake_missing(_base_url, _api_key, _user_id, sid):
+            if sid == "series-1":
+                return missing_no_marker_full, ""
+            return missing_no_marker_gap, ""
+
+        def _fake_fetch_episode(*args, **kwargs):
+            sid = str(kwargs.get("series_id") or "")
+            if not sid and len(args) >= 4:
+                sid = str(args[3] or "")
+            is_missing = kwargs.get("is_missing", None)
+            if is_missing is False and sid == "series-1":
+                return present_partial, ""
+            if is_missing is False and sid == "series-2":
+                return missing_no_marker_gap, ""
+            if sid == "series-1":
+                return missing_no_marker_full, ""
+            return missing_no_marker_gap, ""
+
+        with patch("app.app._get_self_service_runtime", return_value={"enabled": False}), \
+             patch("app.app._emby_resolve_user_id", return_value=("user-1", "")), \
+             patch("app.app._emby_fetch_series_items", return_value=(series_items, "")), \
+             patch("app.app._emby_fetch_missing_episode_items", side_effect=_fake_missing), \
+             patch("app.app._emby_fetch_episode_items", side_effect=_fake_fetch_episode), \
+             patch("app.app._load_emby_gap_fill_state_data", return_value={"requested": {}, "last_run": {}}), \
+             patch("app.app._save_emby_gap_fill_state_data"), \
+             patch("app.app._append_emby_gap_fill_log"), \
+             patch("app.app._run_self_service_request") as run_request:
+            result = _run_emby_gap_fill_once(config, trigger="manual_preview", preview_only=True)
+
+        self.assertEqual(result.get("status"), "warning")
+        self.assertEqual(result.get("summary", {}).get("missing"), 1)
+        self.assertEqual(result.get("summary", {}).get("pending"), 1)
+        self.assertEqual(result.get("summary", {}).get("inferred_missing"), 1)
+        self.assertTrue(bool(result.get("missing_filter_ignored")))
+        self.assertEqual(int(result.get("missing_filter_ignored_series") or 0), 1)
+        self.assertIn("按集号断档推断", result.get("message", ""))
+        missing_list = result.get("missing_items", [])
+        self.assertEqual(len(missing_list), 1)
+        self.assertEqual(missing_list[0].get("title"), "第二部剧")
+        run_request.assert_not_called()
+
     def test_run_emby_gap_fill_preview_still_runs_when_lock_busy(self):
         config = self._build_base_config(max_missing_requests=1, cooldown_hours=24)
         config["drama_calendar"]["emby_gap_fill"]["enabled"] = False
@@ -866,6 +1077,52 @@ class EmbyGapFillTestCase(unittest.TestCase):
         last_missing_items = kwargs.get("last_missing_items") if isinstance(kwargs.get("last_missing_items"), list) else []
         self.assertEqual(len(last_missing_items), 1)
         self.assertEqual(last_missing_items[0].get("series_id"), "series-2")
+
+    def test_update_emby_gap_fill_state_from_result_keeps_previous_list_on_suspicious_empty_scan(self):
+        previous_missing_items = [
+            {"series_id": "series-1", "season": 1, "season_label": "S01", "title": "示例剧 A"},
+        ]
+        result = {
+            "status": "success",
+            "message": "done",
+            "summary": {
+                "scanned": 488,
+                "missing": 0,
+                "submitted": 0,
+                "pending": 0,
+                "ignored": 0,
+                "inferred_missing": 0,
+                "series_with_missing": 0,
+                "cooldown_skipped": 0,
+                "api_errors": 0,
+                "submit_errors": 0,
+                "tmdb_checked_series": 0,
+                "tmdb_conflicts": 0,
+            },
+            "missing_items": [],
+            "submitted_items": [],
+            "strict_missing_markers_only": False,
+            "tmdb_validation_enabled": True,
+        }
+        with patch(
+            "app.app.get_emby_gap_fill_scheduler_state",
+            return_value={
+                "schedule_mode": "interval",
+                "next_run_at": "未启用",
+                "enabled": True,
+                "last_missing_items": previous_missing_items,
+            },
+        ), patch("app.app._set_emby_gap_fill_scheduler_state") as set_state, patch("app.app._append_emby_gap_fill_log"):
+            status, message = _update_emby_gap_fill_state_from_result(result)
+
+        kwargs = set_state.call_args.kwargs
+        last_missing_items = kwargs.get("last_missing_items") if isinstance(kwargs.get("last_missing_items"), list) else []
+        self.assertEqual(len(last_missing_items), 1)
+        self.assertEqual(last_missing_items[0].get("series_id"), "series-1")
+        self.assertEqual(status, "warning")
+        self.assertEqual(kwargs.get("last_status"), "warning")
+        self.assertIn("已保留上次缺失列表", message)
+        self.assertIn("已保留上次缺失列表", str(kwargs.get("last_message") or ""))
 
     def test_submit_emby_gap_item_respects_cooldown(self):
         config = self._build_base_config(max_missing_requests=1, cooldown_hours=24)

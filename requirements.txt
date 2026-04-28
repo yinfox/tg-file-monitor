@@ -12,3 +12,4 @@ p115client>=0.0.7
 p115cipher>=0.0.4
 p115oss>=0.0.9
 p115pickcode>=0.0.5
+ddddocr>=1.5.6

@@ -2757,6 +2757,10 @@
                     扫描 {{ emby_summary.get('scanned', '0') or '0' }} 部剧 · 缺季 {{ emby_summary.get('missing', '0') or '0' }} · 待提交 {{ emby_summary.get('pending', '0') or '0' }} · 已提交 {{ emby_summary.get('submitted', '0') or '0' }} · 忽略 {{ emby_summary.get('ignored', '0') or '0' }}
                 </div>
                 {% if emby_missing_items %}
+                <div class="mb-2">
+                    <input type="text" class="form-control form-control-sm" id="embyMissingSearchInput" placeholder="输入剧名筛选，例如：梦魇绝镇">
+                    <div class="form-text" id="embyMissingSearchMeta">共 {{ emby_missing_items|length }} 条</div>
+                </div>
                 <div class="table-responsive">
                     <table class="table table-sm table-striped align-middle">
                         <thead>
@@ -2772,7 +2776,7 @@
                         </thead>
                         <tbody>
                             {% for item in emby_missing_items %}
-                            <tr>
+                            <tr data-emby-missing-row data-title="{{ item.get('title', '')|lower }}" data-season="{{ item.get('season_label', '')|lower }}">
                                 <td>{{ loop.index }}</td>
                                 <td>{{ item.get('title', '未知剧集') }}</td>
                                 <td>{{ item.get('season_label', '') }}</td>
@@ -3093,6 +3097,9 @@
         const embyGapUiPendingHint = document.getElementById('embyGapUiPendingHint');
         const embyGapModalPendingHint = document.getElementById('embyGapModalPendingHint');
         const embyMissingDetailModalEl = document.getElementById('embyMissingDetailModal');
+        const embyMissingSearchInput = document.getElementById('embyMissingSearchInput');
+        const embyMissingSearchMeta = document.getElementById('embyMissingSearchMeta');
+        const embyMissingRows = Array.from(document.querySelectorAll('tr[data-emby-missing-row]'));
         const embyGapRunning = {{ 'true' if emby_gap_running else 'false' }};
 
         function setEmbyPendingHint(text) {
@@ -3165,10 +3172,42 @@
             });
         });
 
+        function applyEmbyMissingFilter() {
+            if (!embyMissingRows.length) {
+                return;
+            }
+            const keyword = String((embyMissingSearchInput && embyMissingSearchInput.value) || '').trim().toLowerCase();
+            let visibleCount = 0;
+            embyMissingRows.forEach((row) => {
+                const title = String(row.dataset.title || '').toLowerCase();
+                const season = String(row.dataset.season || '').toLowerCase();
+                const matched = !keyword || title.includes(keyword) || season.includes(keyword);
+                row.classList.toggle('d-none', !matched);
+                if (matched) {
+                    visibleCount += 1;
+                }
+            });
+            if (embyMissingSearchMeta) {
+                if (keyword) {
+                    embyMissingSearchMeta.textContent = `匹配 ${visibleCount} / ${embyMissingRows.length} 条`;
+                } else {
+                    embyMissingSearchMeta.textContent = `共 ${embyMissingRows.length} 条`;
+                }
+            }
+        }
+
+        if (embyMissingSearchInput && embyMissingRows.length) {
+            embyMissingSearchInput.addEventListener('input', applyEmbyMissingFilter);
+            applyEmbyMissingFilter();
+        }
+
         if (embyMissingDetailModalEl) {
             embyMissingDetailModalEl.addEventListener('shown.bs.modal', () => {
                 if (embyGapModalPendingHint && embyGapModalPendingHint.classList.contains('text-muted')) {
                     embyGapModalPendingHint.textContent = '🟢 弹窗就绪，可单独提交补缺。';
+                }
+                if (embyMissingSearchInput) {
+                    embyMissingSearchInput.focus();
                 }
             });
         }

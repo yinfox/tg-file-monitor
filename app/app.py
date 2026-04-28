@@ -1,6 +1,7 @@
 # app/app.py
 import os
 import json
+import hashlib
 import asyncio
 import subprocess
 import threading
@@ -57,7 +58,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.71"
+VERSION = "0.5.80"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -91,14 +92,18 @@ LOG_REFRESH_INTERVAL_DEFAULT = 10
 SELF_SERVICE_RESULT_TTL_SECONDS = None
 SELF_SERVICE_RESULT_MAX_ITEMS = 200
 SELF_SERVICE_RECENT_DISPLAY_LIMIT = 8
+SELF_SERVICE_PUBLIC_EMBY_AUTH_TTL_SECONDS = 24 * 60 * 60
 TMDB_SEARCH_CACHE_TTL_SECONDS = 1800
 TMDB_TV_DETAIL_CACHE_TTL_SECONDS = 6 * 60 * 60
 OPEN_API_RESOURCES_CACHE_TTL_SECONDS = 600
 OPEN_API_RESOURCE_DETAIL_CACHE_TTL_SECONDS = 600
+SELF_SERVICE_OPEN_API_SEARCH_CACHE_TTL_SECONDS = 10 * 60
+SELF_SERVICE_OPEN_API_SEARCH_MISS_CACHE_TTL_SECONDS = 2 * 60
 _TMDB_SEARCH_CACHE_MAX_ITEMS = 1024
 _TMDB_TV_DETAIL_CACHE_MAX_ITEMS = 2048
 _OPEN_API_RESOURCES_CACHE_MAX_ITEMS = 2048
 _OPEN_API_RESOURCE_DETAIL_CACHE_MAX_ITEMS = 2048
+_SELF_SERVICE_OPEN_API_SEARCH_CACHE_MAX_ITEMS = 1024
 
 _MESSAGE_QUEUE_LOCK = threading.Lock()
 _SELF_SERVICE_RESULT_LOCK = threading.Lock()
@@ -106,12 +111,14 @@ _TMDB_SEARCH_CACHE_LOCK = threading.Lock()
 _TMDB_TV_DETAIL_CACHE_LOCK = threading.Lock()
 _OPEN_API_RESOURCES_CACHE_LOCK = threading.Lock()
 _OPEN_API_RESOURCE_DETAIL_CACHE_LOCK = threading.Lock()
+_SELF_SERVICE_OPEN_API_SEARCH_CACHE_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_LOCK = threading.Lock()
 _PUBLIC_RATE_LIMIT_CACHE = {}
 _TMDB_SEARCH_CACHE = {}
 _TMDB_TV_DETAIL_CACHE = {}
 _OPEN_API_RESOURCES_CACHE = {}
 _OPEN_API_RESOURCE_DETAIL_CACHE = {}
+_SELF_SERVICE_OPEN_API_SEARCH_CACHE = {}
 _HDHIVE_OPEN_API_RATE_LIMIT_LOCK = threading.Lock()
 _HDHIVE_OPEN_API_RATE_LIMIT_CACHE = {}
 _HDHIVE_OPEN_API_RATE_LIMIT_WINDOW_SECONDS = 60
@@ -138,6 +145,14 @@ def _normalize_self_service_storage_mode(mode) -> str:
     if normalized not in ("any", "115", "123", "115_123"):
         return "any"
     return normalized
+
+
+def _normalize_self_service_open_api_rate_limit_per_minute(raw, default: int = 12) -> int:
+    try:
+        value = int(raw if raw not in (None, "") else default)
+    except Exception:
+        value = int(default)
+    return max(1, min(value, 120))
 
 
 _DRAMA_SHORT_DRAMA_KEYWORDS = (
@@ -230,6 +245,8 @@ def load_config():
         "self_service_search_max_results": 5,
         "self_service_cookie_check_mode": "warn",
         "self_service_use_open_api": False,
+        "self_service_open_api_rate_limit_per_minute": 12,
+        "self_service_open_api_no_site_fallback": True,
         "self_service_storage_mode": "any",
         "self_service_public_enabled": False,
         "self_service_public_access_key": "",
@@ -412,6 +429,15 @@ def load_config():
                     config["self_service_cookie_check_mode"] = default_config["self_service_cookie_check_mode"]
                 if "self_service_use_open_api" not in config:
                     config["self_service_use_open_api"] = default_config["self_service_use_open_api"]
+                if "self_service_open_api_rate_limit_per_minute" not in config:
+                    config["self_service_open_api_rate_limit_per_minute"] = default_config["self_service_open_api_rate_limit_per_minute"]
+                else:
+                    config["self_service_open_api_rate_limit_per_minute"] = _normalize_self_service_open_api_rate_limit_per_minute(
+                        config.get("self_service_open_api_rate_limit_per_minute"),
+                        default=default_config["self_service_open_api_rate_limit_per_minute"],
+                    )
+                if "self_service_open_api_no_site_fallback" not in config:
+                    config["self_service_open_api_no_site_fallback"] = default_config["self_service_open_api_no_site_fallback"]
                 if "self_service_storage_mode" not in config:
                     legacy_only_115 = bool(config.get("self_service_only_115", False))
                     config["self_service_storage_mode"] = "115" if legacy_only_115 else default_config["self_service_storage_mode"]
@@ -4394,6 +4420,65 @@ def _cache_set(cache: dict, lock: threading.Lock, key, value, max_items: int = 1
                         break
 
 
+def _self_service_open_api_search_cache_get(key):
+    now = time.time()
+    with _SELF_SERVICE_OPEN_API_SEARCH_CACHE_LOCK:
+        entry = _SELF_SERVICE_OPEN_API_SEARCH_CACHE.get(key)
+        if not isinstance(entry, dict):
+            return None
+        ts = float(entry.get("ts") or 0)
+        hit = bool(entry.get("hit"))
+        ttl = (
+            SELF_SERVICE_OPEN_API_SEARCH_CACHE_TTL_SECONDS
+            if hit else
+            SELF_SERVICE_OPEN_API_SEARCH_MISS_CACHE_TTL_SECONDS
+        )
+        if ttl > 0 and (now - ts) > ttl:
+            _SELF_SERVICE_OPEN_API_SEARCH_CACHE.pop(key, None)
+            return None
+        try:
+            return copy.deepcopy(entry)
+        except Exception:
+            return dict(entry)
+
+
+def _self_service_open_api_search_cache_set(
+    key,
+    *,
+    hit: bool,
+    resources: list,
+    tmdb_ids: list,
+    tmdb_calls: int,
+    keyword_slug_count: int,
+) -> None:
+    entry = {
+        "ts": time.time(),
+        "hit": bool(hit),
+        "resources": list(resources or []),
+        "tmdb_ids": [str(x) for x in (tmdb_ids or []) if str(x).strip()],
+        "tmdb_calls": int(tmdb_calls or 0),
+        "keyword_slug_count": max(0, int(keyword_slug_count or 0)),
+    }
+    with _SELF_SERVICE_OPEN_API_SEARCH_CACHE_LOCK:
+        _SELF_SERVICE_OPEN_API_SEARCH_CACHE[key] = entry
+        if len(_SELF_SERVICE_OPEN_API_SEARCH_CACHE) > _SELF_SERVICE_OPEN_API_SEARCH_CACHE_MAX_ITEMS:
+            try:
+                items = sorted(
+                    _SELF_SERVICE_OPEN_API_SEARCH_CACHE.items(),
+                    key=lambda kv: float((kv[1] or {}).get("ts") or 0),
+                    reverse=True,
+                )
+                _SELF_SERVICE_OPEN_API_SEARCH_CACHE.clear()
+                for k, v in items[:_SELF_SERVICE_OPEN_API_SEARCH_CACHE_MAX_ITEMS]:
+                    _SELF_SERVICE_OPEN_API_SEARCH_CACHE[k] = v
+            except Exception:
+                while len(_SELF_SERVICE_OPEN_API_SEARCH_CACHE) > _SELF_SERVICE_OPEN_API_SEARCH_CACHE_MAX_ITEMS:
+                    try:
+                        _SELF_SERVICE_OPEN_API_SEARCH_CACHE.pop(next(iter(_SELF_SERVICE_OPEN_API_SEARCH_CACHE)))
+                    except Exception:
+                        break
+
+
 def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, language: str = "zh-CN") -> list:
     api_key = (api_key or '').strip()
     if not api_key or not query:
@@ -4429,6 +4514,25 @@ def _tmdb_search_ids(api_key: str, query: str, year: str, media_type: str, langu
             ids.append(int(item.get("id")))
     _cache_set(_TMDB_SEARCH_CACHE, _TMDB_SEARCH_CACHE_LOCK, cache_key, ids, max_items=_TMDB_SEARCH_CACHE_MAX_ITEMS)
     return ids
+
+
+def _build_tmdb_query_candidates(*parts: str, max_items: int = 4) -> list:
+    candidates = []
+    for raw in parts:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        # Remove common noise words to improve TMDB hit rate.
+        text = re.sub(r"\b(tv|movie)\b", " ", text, flags=re.I)
+        text = re.sub(r"(电视剧|电影|剧集|影片|资源|自助观影)", " ", text)
+        text = _strip_season_tokens(text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if not text or text in candidates:
+            continue
+        candidates.append(text)
+        if len(candidates) >= max(1, int(max_items)):
+            break
+    return candidates
 
 
 def _tmdb_fetch_tv_detail(api_key: str, tv_id: str, language: str = "zh-CN") -> Optional[dict]:
@@ -4755,9 +4859,14 @@ def _reserve_hdhive_open_api_slot(
         return max(0.0, window - (now - oldest))
 
 
-def _wait_for_hdhive_open_api_slot(url: str, api_key: str) -> None:
+def _wait_for_hdhive_open_api_slot(url: str, api_key: str, *, max_requests: Optional[int] = None) -> None:
+    cap = (
+        _normalize_self_service_open_api_rate_limit_per_minute(max_requests, default=_HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS)
+        if max_requests is not None else
+        _HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS
+    )
     while True:
-        wait_seconds = _reserve_hdhive_open_api_slot(url, api_key)
+        wait_seconds = _reserve_hdhive_open_api_slot(url, api_key, max_requests=cap)
         if wait_seconds <= 0:
             return
         time.sleep(min(60.0, wait_seconds + 0.05))
@@ -4805,16 +4914,28 @@ def _set_open_api_detail_route_pref(base_url: str, route: str) -> None:
         }
 
 
-def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dict = None, timeout: int = 20) -> dict:
+def _hdhive_open_api_request(
+    method: str,
+    url: str,
+    api_key: str,
+    json_body: dict = None,
+    timeout: int = 20,
+    *,
+    local_rate_limit_per_minute: Optional[int] = None,
+) -> dict:
     headers = {
         "X-API-Key": api_key,
         "Accept": "application/json",
     }
     if method.upper() in ("POST", "PATCH"):
         headers["Content-Type"] = "application/json"
+    local_cap = _normalize_self_service_open_api_rate_limit_per_minute(
+        local_rate_limit_per_minute,
+        default=_HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS,
+    )
     max_attempts = 2
     for attempt in range(max_attempts):
-        _wait_for_hdhive_open_api_slot(url, api_key)
+        _wait_for_hdhive_open_api_slot(url, api_key, max_requests=local_cap)
         try:
             resp = _requests_request(method, url, headers=headers, json=json_body, timeout=timeout, proxy_scope="service")
         except Exception as e:
@@ -4852,7 +4973,14 @@ def _hdhive_open_api_request(method: str, url: str, api_key: str, json_body: dic
     return {"success": False, "code": "429", "message": "Open API 请求过于频繁，请稍后重试"}
 
 
-def _hdhive_open_api_resources(base_url: str, api_key: str, media_type: str, tmdb_id: str) -> dict:
+def _hdhive_open_api_resources(
+    base_url: str,
+    api_key: str,
+    media_type: str,
+    tmdb_id: str,
+    *,
+    local_rate_limit_per_minute: Optional[int] = None,
+) -> dict:
     cache_key = (
         str(base_url or "").rstrip("/").lower(),
         str(media_type or "").strip().lower(),
@@ -4868,7 +4996,12 @@ def _hdhive_open_api_resources(base_url: str, api_key: str, media_type: str, tmd
         return cached
     api_base = base_url.rstrip("/") + "/api/open"
     url = f"{api_base}/resources/{media_type}/{tmdb_id}"
-    resp = _hdhive_open_api_request("GET", url, api_key)
+    resp = _hdhive_open_api_request(
+        "GET",
+        url,
+        api_key,
+        local_rate_limit_per_minute=local_rate_limit_per_minute,
+    )
     if isinstance(resp, dict) and resp.get("success") is True:
         data = resp.get("data")
         if isinstance(data, list):
@@ -4882,19 +5015,42 @@ def _hdhive_open_api_resources(base_url: str, api_key: str, media_type: str, tmd
     return resp
 
 
-def _hdhive_open_api_ping(base_url: str, api_key: str) -> dict:
+def _hdhive_open_api_ping(base_url: str, api_key: str, *, local_rate_limit_per_minute: Optional[int] = None) -> dict:
     api_base = base_url.rstrip("/") + "/api/open"
     url = f"{api_base}/ping"
-    return _hdhive_open_api_request("GET", url, api_key)
+    return _hdhive_open_api_request(
+        "GET",
+        url,
+        api_key,
+        local_rate_limit_per_minute=local_rate_limit_per_minute,
+    )
 
 
-def _hdhive_open_api_unlock(base_url: str, api_key: str, slug: str) -> dict:
+def _hdhive_open_api_unlock(
+    base_url: str,
+    api_key: str,
+    slug: str,
+    *,
+    local_rate_limit_per_minute: Optional[int] = None,
+) -> dict:
     api_base = base_url.rstrip("/") + "/api/open"
     url = f"{api_base}/resources/unlock"
-    return _hdhive_open_api_request("POST", url, api_key, json_body={"slug": slug})
+    return _hdhive_open_api_request(
+        "POST",
+        url,
+        api_key,
+        json_body={"slug": slug},
+        local_rate_limit_per_minute=local_rate_limit_per_minute,
+    )
 
 
-def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> dict:
+def _hdhive_open_api_resource_detail(
+    base_url: str,
+    api_key: str,
+    slug: str,
+    *,
+    local_rate_limit_per_minute: Optional[int] = None,
+) -> dict:
     cache_key = (
         str(base_url or "").rstrip("/").lower(),
         str(slug or "").strip(),
@@ -4921,8 +5077,18 @@ def _hdhive_open_api_resource_detail(base_url: str, api_key: str, slug: str) -> 
 
     def _call_route(route: str) -> dict:
         if route == "legacy":
-            return _hdhive_open_api_request("GET", legacy_url, api_key)
-        return _hdhive_open_api_request("GET", detail_url, api_key)
+            return _hdhive_open_api_request(
+                "GET",
+                legacy_url,
+                api_key,
+                local_rate_limit_per_minute=local_rate_limit_per_minute,
+            )
+        return _hdhive_open_api_request(
+            "GET",
+            detail_url,
+            api_key,
+            local_rate_limit_per_minute=local_rate_limit_per_minute,
+        )
 
     first_resp = _call_route(first_route)
     if first_route == "detail":
@@ -5341,11 +5507,33 @@ def _resource_guess_storage_mode(item) -> str:
             hits.add("115")
         if "123pan" in lower or "123网盘" in lower or "123云盘" in lower:
             hits.add("123")
+        # Known non-target providers; mark as "other" so we can skip expensive
+        # detail probing when storage mode is strict (e.g. only 115).
+        if (
+            "quark" in lower or "夸克" in lower or
+            "uc" == lower or "uc网盘" in lower or
+            "189" in lower or "天翼" in lower or
+            "aliyun" in lower or "alipan" in lower or "阿里云盘" in lower or
+            "baidu" in lower or "百度网盘" in lower or
+            "xunlei" in lower or "迅雷" in lower or
+            "pikpak" in lower
+        ):
+            hits.add("other")
         if key_name in {"storage", "pan", "drive", "provider", "source", "cloud", "netdisk", "storage_type"}:
             if "115" in lower:
                 hits.add("115")
             if "123" in lower:
                 hits.add("123")
+            if (
+                "quark" in lower or "夸克" in lower or
+                "uc" == lower or "uc网盘" in lower or
+                "189" in lower or "天翼" in lower or
+                "aliyun" in lower or "alipan" in lower or "阿里云盘" in lower or
+                "baidu" in lower or "百度网盘" in lower or
+                "xunlei" in lower or "迅雷" in lower or
+                "pikpak" in lower
+            ):
+                hits.add("other")
 
     _walk(item)
     if "115" in hits and "123" in hits:
@@ -5354,6 +5542,8 @@ def _resource_guess_storage_mode(item) -> str:
         return "115"
     if "123" in hits:
         return "123"
+    if "other" in hits:
+        return "other"
     return ""
 
 
@@ -5379,6 +5569,8 @@ def _storage_guess_label(guess: str) -> str:
         return "123"
     if guess == "115_123":
         return "115/123"
+    if guess == "other":
+        return "其它网盘"
     return "待解析"
 
 
@@ -5399,6 +5591,7 @@ def _build_self_service_interactive_resources(
     resolution_preference: str,
     dolby_preference: str,
     storage_mode: str,
+    open_api_local_rate_limit_per_minute: Optional[int] = None,
 ) -> tuple[list, int, int]:
     built = []
     filtered_out = 0
@@ -5421,7 +5614,12 @@ def _build_self_service_interactive_resources(
         need_detail_fetch = bool(slug and open_api_key and storage_mode != "any" and not _resource_guess_storage_mode(merged))
         if need_detail_fetch:
             try:
-                detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
+                detail_resp = _hdhive_open_api_resource_detail(
+                    base_url,
+                    open_api_key,
+                    slug,
+                    local_rate_limit_per_minute=open_api_local_rate_limit_per_minute,
+                )
             except Exception:
                 detail_resp = None
             detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
@@ -5476,6 +5674,8 @@ def _build_self_service_interactive_resources(
         season_match = _resource_match_seasons(merged, requested_seasons) if requested_seasons else None
         resolution_match = _resource_match_resolution(merged, resolution_preference) if resolution_preference else None
         is_dolby = _resource_is_dolby(merged)
+        if dolby_preference == "exclude" and is_dolby:
+            continue
 
         detail = _build_self_service_detail([
             f"状态: {'已拥有/已解锁' if unlocked else (f'{points} 积分' if points is not None else '积分未知')}",
@@ -5514,6 +5714,9 @@ def _build_self_service_interactive_resources(
             "last_action_note": "",
             "last_action_at": 0,
         })
+
+    if dolby_preference == "prefer" and built:
+        built.sort(key=lambda item: (0 if item.get("is_dolby") else 1))
 
     return built, filtered_out, unknown_storage_count
 
@@ -5628,6 +5831,10 @@ def _get_self_service_runtime(config: dict) -> dict:
     except Exception:
         max_results = 5
     max_results = max(1, min(max_results, 20))
+    open_api_local_rate_limit = _normalize_self_service_open_api_rate_limit_per_minute(
+        config.get("self_service_open_api_rate_limit_per_minute"),
+        default=12,
+    )
     base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip() or "https://hdhive.com"
     tmdb_key = ""
     try:
@@ -5643,11 +5850,305 @@ def _get_self_service_runtime(config: dict) -> dict:
         "hdhive_cookie": (config.get("hdhive_cookie") or "").strip(),
         "hdhive_api_key": (config.get("hdhive_open_api_key") or "").strip(),
         "use_open_api": bool(config.get("self_service_use_open_api", False)),
+        "open_api_local_rate_limit_per_minute": open_api_local_rate_limit,
+        "open_api_no_site_fallback": bool(config.get("self_service_open_api_no_site_fallback", True)),
         "allow_open_api_direct": bool(config.get("hdhive_open_api_direct_unlock", False)),
         "storage_mode": _normalize_self_service_storage_mode(config.get("self_service_storage_mode", "any")),
         "base_url": base_url,
         "tmdb_api_key": tmdb_key,
     }
+
+
+def _normalize_self_service_requester_account(raw) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    # Keep the account concise and stable for matching/logging.
+    text = re.sub(r"\s+", " ", text)
+    if len(text) > 64:
+        text = text[:64]
+    return text
+
+
+def _resolve_self_service_emby_runtime(config: dict) -> dict:
+    drama_cfg = config.get("drama_calendar") if isinstance(config.get("drama_calendar"), dict) else {}
+    emby_cfg = _normalize_emby_gap_fill_config(drama_cfg.get("emby_gap_fill"))
+    base_url = str(emby_cfg.get("base_url") or "").strip().rstrip("/")
+    api_key = str(emby_cfg.get("api_key") or "").strip()
+    return {
+        "base_url": base_url,
+        "api_key": api_key,
+    }
+
+
+def _resolve_self_service_emby_binding(config: dict, requester_account: str) -> tuple[dict, str]:
+    account = _normalize_self_service_requester_account(requester_account)
+    if not account:
+        return {}, "请填写 Emby 账户。"
+
+    binding = {
+        "account": account,
+        "name": account,
+        "id": "",
+        "verified": False,
+    }
+
+    emby_runtime = _resolve_self_service_emby_runtime(config)
+    base_url = emby_runtime.get("base_url") or ""
+    api_key = emby_runtime.get("api_key") or ""
+
+    # If Emby runtime is not configured, keep textual account binding only.
+    if not base_url or not api_key:
+        return binding, ""
+
+    ok, payload, err = _emby_request_json(
+        base_url,
+        api_key,
+        "/Users/Query",
+        params={"Limit": "200"},
+        timeout=20,
+    )
+    if not ok:
+        return {}, f"Emby 用户校验失败：{err or '请求失败'}"
+
+    items = payload.get("Items") if isinstance(payload, dict) else None
+    if not isinstance(items, list) or not items:
+        return {}, "Emby 用户校验失败：用户列表为空"
+
+    account_norm = _normalize_title_for_match(account)
+    account_lower = account.lower()
+
+    matched = None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("Id") or item.get("id") or "").strip()
+        user_name = str(
+            item.get("Name")
+            or item.get("name")
+            or item.get("UserName")
+            or item.get("username")
+            or ""
+        ).strip()
+        user_name_norm = _normalize_title_for_match(user_name)
+        user_id_lower = user_id.lower()
+        user_name_lower = user_name.lower()
+        if account and user_id and (account == user_id or account_lower == user_id_lower):
+            matched = item
+            break
+        if account and user_name and account_lower == user_name_lower:
+            matched = item
+            break
+        if account_norm and user_name_norm and account_norm == user_name_norm:
+            matched = item
+            break
+
+    if not isinstance(matched, dict):
+        return {}, f"未找到对应 Emby 用户：{account}"
+
+    binding["id"] = str(matched.get("Id") or matched.get("id") or "").strip()
+    binding["name"] = str(
+        matched.get("Name")
+        or matched.get("name")
+        or matched.get("UserName")
+        or matched.get("username")
+        or account
+    ).strip() or account
+    binding["verified"] = True
+    return binding, ""
+
+
+def _format_self_service_emby_binding_label(binding: dict) -> str:
+    if not isinstance(binding, dict):
+        return ""
+    name = str(binding.get("name") or binding.get("account") or "").strip()
+    user_id = str(binding.get("id") or "").strip()
+    verified = bool(binding.get("verified"))
+    if not name:
+        return ""
+    if user_id:
+        return f"{name} ({user_id})"
+    if verified:
+        return name
+    return f"{name}（未校验）"
+
+
+_SELF_SERVICE_PUBLIC_EMBY_SESSION_KEY = "self_service_public_emby_auth"
+_SELF_SERVICE_PUBLIC_ACCESS_SESSION_KEY = "self_service_public_access_granted"
+
+
+def _self_service_public_access_digest(raw_key: str) -> str:
+    token = str(raw_key or "").strip()
+    if not token:
+        return ""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def _set_self_service_public_access_granted(raw_key: str) -> None:
+    digest = _self_service_public_access_digest(raw_key)
+    if not digest:
+        return
+    session[_SELF_SERVICE_PUBLIC_ACCESS_SESSION_KEY] = {
+        "digest": digest,
+        "at": time.time(),
+    }
+
+
+def _has_self_service_public_access_granted(raw_key: str) -> bool:
+    token = str(raw_key or "").strip()
+    if not token:
+        return True
+    info = session.get(_SELF_SERVICE_PUBLIC_ACCESS_SESSION_KEY)
+    if not isinstance(info, dict):
+        return False
+    digest = str(info.get("digest") or "").strip()
+    return bool(digest and digest == _self_service_public_access_digest(token))
+
+
+def _clear_self_service_public_access_granted() -> None:
+    session.pop(_SELF_SERVICE_PUBLIC_ACCESS_SESSION_KEY, None)
+
+
+def _set_self_service_public_emby_session(binding: dict) -> None:
+    if not isinstance(binding, dict):
+        return
+    account = _normalize_self_service_requester_account(binding.get("account") or binding.get("name") or "")
+    if not account:
+        return
+    session[_SELF_SERVICE_PUBLIC_EMBY_SESSION_KEY] = {
+        "account": account,
+        "name": str(binding.get("name") or account).strip() or account,
+        "id": str(binding.get("id") or "").strip(),
+        "verified": bool(binding.get("verified")),
+        "at": time.time(),
+    }
+
+
+def _get_self_service_public_emby_session() -> dict:
+    raw = session.get(_SELF_SERVICE_PUBLIC_EMBY_SESSION_KEY)
+    if not isinstance(raw, dict):
+        return {}
+
+    account = _normalize_self_service_requester_account(raw.get("account") or raw.get("name") or "")
+    if not account:
+        session.pop(_SELF_SERVICE_PUBLIC_EMBY_SESSION_KEY, None)
+        return {}
+
+    try:
+        login_ts = float(raw.get("at") or 0)
+    except Exception:
+        login_ts = 0
+    ttl = int(SELF_SERVICE_PUBLIC_EMBY_AUTH_TTL_SECONDS or 0)
+    if ttl > 0 and login_ts and (time.time() - login_ts > ttl):
+        session.pop(_SELF_SERVICE_PUBLIC_EMBY_SESSION_KEY, None)
+        return {}
+
+    binding = {
+        "account": account,
+        "name": str(raw.get("name") or account).strip() or account,
+        "id": str(raw.get("id") or "").strip(),
+        "verified": bool(raw.get("verified")),
+    }
+    return binding
+
+
+def _clear_self_service_public_emby_session() -> None:
+    session.pop(_SELF_SERVICE_PUBLIC_EMBY_SESSION_KEY, None)
+
+
+def _clear_self_service_public_auth_session() -> None:
+    _clear_self_service_public_emby_session()
+    _clear_self_service_public_access_granted()
+
+
+def _emby_authenticate_public_user(base_url: str, username: str, password: str, timeout: int = 20) -> tuple[dict, str]:
+    normalized_base = str(base_url or "").strip().rstrip("/")
+    account = _normalize_self_service_requester_account(username)
+    passwd = str(password or "")
+    if not normalized_base:
+        return {}, "Emby 未配置（请先在追剧配置中设置 Emby 地址）。"
+    if not account:
+        return {}, "请填写 Emby 账户。"
+    if not passwd:
+        return {}, "请填写 Emby 密码。"
+
+    try:
+        timeout_seconds = max(5, int(timeout or 20))
+    except Exception:
+        timeout_seconds = 20
+
+    auth_header = (
+        'MediaBrowser Client="tg-file-monitor", '
+        'Device="SelfServicePublic", DeviceId="tg-file-monitor-self-service-public", Version="1.0.0"'
+    )
+    headers = {
+        "User-Agent": "tg-file-monitor/self-service-public",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "X-Emby-Authorization": auth_header,
+    }
+    payload = {
+        "Username": account,
+        "Pw": passwd,
+    }
+
+    paths = ["/Users/AuthenticateByName"]
+    if "/emby" not in normalized_base.lower():
+        paths.append("/emby/Users/AuthenticateByName")
+
+    errors = []
+    for path in paths:
+        url = f"{normalized_base}{path}"
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout_seconds)
+        except Exception as e:
+            errors.append(f"{path}: {e}")
+            continue
+
+        resp_payload = None
+        try:
+            resp_payload = resp.json()
+        except Exception:
+            resp_payload = None
+
+        if resp.status_code >= 400:
+            detail = ""
+            if isinstance(resp_payload, dict):
+                detail = str(
+                    resp_payload.get("Message")
+                    or resp_payload.get("message")
+                    or resp_payload.get("error")
+                    or resp_payload.get("ErrorMessage")
+                    or ""
+                ).strip()
+            if not detail:
+                detail = (resp.text or "").strip()[:200]
+            if not detail:
+                detail = f"HTTP {resp.status_code}"
+            errors.append(f"{path}: {detail}")
+            continue
+
+        data = resp_payload if isinstance(resp_payload, dict) else {}
+        user = data.get("User") if isinstance(data.get("User"), dict) else {}
+        user_id = str(user.get("Id") or user.get("id") or "").strip()
+        user_name = str(
+            user.get("Name")
+            or user.get("name")
+            or user.get("UserName")
+            or user.get("username")
+            or account
+        ).strip() or account
+        binding = {
+            "account": account,
+            "name": user_name,
+            "id": user_id,
+            "verified": True,
+        }
+        return binding, ""
+
+    if errors:
+        return {}, f"Emby 登录失败：{errors[-1]}"
+    return {}, "Emby 登录失败。"
 
 
 def _submit_self_service_request(
@@ -5659,6 +6160,7 @@ def _submit_self_service_request(
     disabled_message: str,
     missing_targets_message: str,
     strict_cookie_message: str,
+    requester_binding_override: Optional[dict] = None,
 ):
     if not runtime.get("enabled"):
         flash(disabled_message, "warning")
@@ -5701,7 +6203,37 @@ def _submit_self_service_request(
 
     request_type = (request.form.get("type") or "").strip()
     request_year = (request.form.get("year") or "").strip()
+    requester_account = _normalize_self_service_requester_account(request.form.get("requester_account") or "")
+    requester_binding = {}
+    requester_label = ""
+    if isinstance(requester_binding_override, dict) and requester_binding_override:
+        binding_account = _normalize_self_service_requester_account(
+            requester_binding_override.get("account")
+            or requester_binding_override.get("name")
+            or requester_account
+            or ""
+        )
+        if not binding_account:
+            flash("请先使用 Emby 账号登录。", "error")
+            return redirect(url_for(endpoint))
+        requester_binding = {
+            "account": binding_account,
+            "name": str(requester_binding_override.get("name") or binding_account).strip() or binding_account,
+            "id": str(requester_binding_override.get("id") or "").strip(),
+            "verified": bool(requester_binding_override.get("verified")),
+        }
+        requester_account = binding_account
+        requester_label = _format_self_service_emby_binding_label(requester_binding)
+    elif requester_account:
+        requester_binding, requester_error = _resolve_self_service_emby_binding(config, requester_account)
+        if requester_error:
+            flash(requester_error, "error")
+            return redirect(url_for(endpoint))
+        requester_label = _format_self_service_emby_binding_label(requester_binding)
+
     request_note = ""
+    if requester_label:
+        request_note = f"requester={requester_label}"
     dolby_preference = (request.form.get("dolby_preference") or "any").strip().lower()
     if dolby_preference not in ("any", "prefer", "exclude"):
         dolby_preference = "any"
@@ -5733,6 +6265,8 @@ def _submit_self_service_request(
         "tmdb_api_key": runtime.get("tmdb_api_key") or "",
         "tmdb_id": "",
         "use_open_api": effective_use_open_api,
+        "open_api_local_rate_limit_per_minute": int(runtime.get("open_api_local_rate_limit_per_minute") or 12),
+        "open_api_no_site_fallback": bool(runtime.get("open_api_no_site_fallback", True)),
         "hdhive_open_api_key": runtime.get("hdhive_api_key") or "",
         "open_api_direct_unlock": bool(runtime.get("allow_open_api_direct")),
         "unlock_threshold": int(config.get("hdhive_auto_unlock_points_threshold", 0) or 0),
@@ -5742,16 +6276,38 @@ def _submit_self_service_request(
         "resolution": resolution_pref,
         "advanced_mode": advanced_mode,
         "request_id": request_id,
+        "requester_account": requester_account,
+        "emby_user_name": str(requester_binding.get("name") or requester_account or "").strip(),
+        "emby_user_id": str(requester_binding.get("id") or "").strip(),
+        "emby_user_verified": bool(requester_binding.get("verified")),
     }
     payload.update(_build_115_transfer_payload(config))
 
     processing_detail = _build_self_service_detail([
+        f"Emby用户: {requester_label}" if requester_label else "",
         f"片名: {title}" if title else "",
         f"年份: {request_year}" if request_year else "",
     ])
-    _set_self_service_result(request_id, "processing", "正在解析中，请稍候。", processing_detail)
+    _set_self_service_result(
+        request_id,
+        "processing",
+        "正在解析中，请稍候。",
+        processing_detail,
+        extras={
+            "requester_account": requester_account,
+            "emby_user_name": str(requester_binding.get("name") or requester_account or "").strip(),
+            "emby_user_id": str(requester_binding.get("id") or "").strip(),
+            "emby_user_verified": bool(requester_binding.get("verified")),
+            "request_title": title,
+            "request_year": request_year,
+            "request_type": request_type,
+            "request_season": season_val or "",
+            "request_resolution": resolution_pref or "",
+        },
+    )
     submit_detail = _build_self_service_detail([
         f"来源: {source_label}",
+        f"Emby用户: {requester_label}" if requester_label else "",
         f"片名: {title}" if title else "",
         f"类型: {request_type}" if request_type else "",
         f"年份: {request_year}" if request_year else "",
@@ -6080,6 +6636,55 @@ def _prune_self_service_results(data: dict) -> dict:
     return data
 
 
+def _extract_self_service_requester_from_entry(entry: dict) -> dict:
+    if not isinstance(entry, dict):
+        return {}
+    account = _normalize_self_service_requester_account(
+        entry.get("requester_account")
+        or entry.get("emby_user_name")
+        or ""
+    )
+    user_name = str(entry.get("emby_user_name") or account or "").strip()
+    user_id = str(entry.get("emby_user_id") or "").strip()
+    verified = bool(entry.get("emby_user_verified"))
+    if not account and not user_name and not user_id:
+        return {}
+    return {
+        "account": account or _normalize_self_service_requester_account(user_name),
+        "name": user_name or account,
+        "id": user_id,
+        "verified": verified,
+    }
+
+
+def _self_service_entry_belongs_to_binding(entry: dict, binding: dict) -> bool:
+    if not isinstance(entry, dict) or not isinstance(binding, dict):
+        return False
+
+    bind_id = str(binding.get("id") or "").strip().lower()
+    bind_account = _normalize_self_service_requester_account(
+        binding.get("account")
+        or binding.get("name")
+        or ""
+    )
+    bind_account_norm = _normalize_title_for_match(bind_account)
+
+    owner = _extract_self_service_requester_from_entry(entry)
+    owner_id = str(owner.get("id") or "").strip().lower()
+    owner_account = _normalize_self_service_requester_account(
+        owner.get("account")
+        or owner.get("name")
+        or ""
+    )
+    owner_account_norm = _normalize_title_for_match(owner_account)
+
+    if bind_id and owner_id:
+        return bind_id == owner_id
+    if bind_account_norm and owner_account_norm:
+        return bind_account_norm == owner_account_norm
+    return False
+
+
 def _set_self_service_result(request_id: str, status: str, message: str, detail: str = "", extras: Optional[dict] = None) -> None:
     rid = (request_id or "").strip()
     if not rid:
@@ -6123,6 +6728,12 @@ def _format_ts(ts_val) -> str:
         return ""
 
 
+def _self_service_status_counts_as_record(status: str) -> bool:
+    normalized = str(status or "").strip().lower()
+    # 申请记录仅保留已入库成功（以及后续删除成功记录）。
+    return normalized in {"success", "deleted"}
+
+
 def _list_self_service_results(limit: int = 30) -> list:
     with _SELF_SERVICE_RESULT_LOCK:
         data = _load_self_service_results()
@@ -6134,10 +6745,13 @@ def _list_self_service_results(limit: int = 30) -> list:
     for rid, entry in data.items():
         if not isinstance(entry, dict):
             continue
+        status = str(entry.get("status") or "").strip().lower()
+        if not _self_service_status_counts_as_record(status):
+            continue
         ts = entry.get("updated_at") or entry.get("created_at") or 0
         items.append({
             "request_id": rid,
-            "status": entry.get("status") or "",
+            "status": status,
             "message": entry.get("message") or "",
             "detail": entry.get("detail") or "",
             "updated_at": ts,
@@ -6150,6 +6764,362 @@ def _list_self_service_results(limit: int = 30) -> list:
     if isinstance(limit, int) and limit > 0:
         items = items[:limit]
     return items
+
+
+def _list_self_service_results_for_binding(binding: dict, limit: int = 30) -> list:
+    if not isinstance(binding, dict) or not binding:
+        return []
+    with _SELF_SERVICE_RESULT_LOCK:
+        data = _load_self_service_results()
+        data = _prune_self_service_results(data)
+        _save_self_service_results(data)
+    if not isinstance(data, dict):
+        return []
+    items = []
+    for rid, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        status = str(entry.get("status") or "").strip().lower()
+        if not _self_service_status_counts_as_record(status):
+            continue
+        if not _self_service_entry_belongs_to_binding(entry, binding):
+            continue
+        ts = entry.get("updated_at") or entry.get("created_at") or 0
+        items.append({
+            "request_id": rid,
+            "status": status,
+            "message": entry.get("message") or "",
+            "detail": entry.get("detail") or "",
+            "updated_at": ts,
+            "updated_at_str": _format_ts(ts),
+        })
+    try:
+        items.sort(key=lambda x: float(x.get("updated_at") or 0), reverse=True)
+    except Exception:
+        pass
+    if isinstance(limit, int) and limit > 0:
+        items = items[:limit]
+    return items
+
+
+def _get_self_service_result_for_context(request_id: str) -> dict:
+    result = _get_self_service_result(request_id)
+    if not result:
+        return {}
+    if session.get("logged_in"):
+        return result
+    binding = _get_self_service_public_emby_session()
+    if not binding:
+        return {}
+    if not _self_service_entry_belongs_to_binding(result, binding):
+        return {}
+    return result
+
+
+def _delete_self_service_result(request_id: str) -> bool:
+    rid = (request_id or "").strip()
+    if not rid:
+        return False
+    with _SELF_SERVICE_RESULT_LOCK:
+        data = _load_self_service_results()
+        data = _prune_self_service_results(data)
+        if not isinstance(data, dict) or rid not in data:
+            _save_self_service_results(data if isinstance(data, dict) else {})
+            return False
+        data.pop(rid, None)
+        _save_self_service_results(data)
+    return True
+
+
+def _extract_self_service_request_meta(entry: dict) -> dict:
+    if not isinstance(entry, dict):
+        return {"title": "", "year": "", "type": "", "season": "", "resolution": ""}
+
+    title = str(entry.get("request_title") or "").strip()
+    year = str(entry.get("request_year") or "").strip()
+    req_type = str(entry.get("request_type") or "").strip()
+    season = str(entry.get("request_season") or "").strip()
+    resolution = str(entry.get("request_resolution") or "").strip()
+
+    detail = str(entry.get("detail") or "")
+    if detail:
+        for line in detail.splitlines():
+            text = str(line or "").strip()
+            if not text:
+                continue
+            if not title and text.startswith("片名:"):
+                title = text.split(":", 1)[1].strip()
+            elif not year and text.startswith("年份:"):
+                year = text.split(":", 1)[1].strip()
+            elif not req_type and text.startswith("类型:"):
+                req_type = text.split(":", 1)[1].strip()
+            elif not season and text.startswith("季:"):
+                season = text.split(":", 1)[1].strip()
+            elif not resolution and text.startswith("分辨率:"):
+                resolution = text.split(":", 1)[1].strip()
+
+    return {
+        "title": title,
+        "year": year,
+        "type": req_type,
+        "season": season,
+        "resolution": resolution,
+    }
+
+
+def _emby_item_type_matches_request(item: dict, request_type: str) -> bool:
+    req = str(request_type or "").strip().lower()
+    if not req:
+        return True
+    item_type = str((item or {}).get("Type") or "").strip().lower()
+    if not item_type:
+        return True
+    if req in ("电影", "movie"):
+        return item_type == "movie"
+    if req in ("电视剧", "tv", "series"):
+        return item_type in ("series", "tvseries")
+    if req in ("综艺", "动画", "纪录片"):
+        return item_type in ("series", "tvseries", "movie")
+    return True
+
+
+def _emby_item_year(item: dict) -> str:
+    if not isinstance(item, dict):
+        return ""
+    year = str(item.get("ProductionYear") or "").strip()
+    if year.isdigit():
+        return year
+    premiere = str(item.get("PremiereDate") or "").strip()
+    m = re.match(r"^(\d{4})", premiere)
+    if m:
+        return m.group(1)
+    return ""
+
+
+def _emby_search_user_items_for_delete(
+    base_url: str,
+    api_key: str,
+    user_id: str,
+    title: str,
+    request_type: str,
+) -> Tuple[list, str]:
+    title_text = str(title or "").strip()
+    if not title_text:
+        return [], "片名为空"
+    uid = str(user_id or "").strip()
+    if not uid:
+        return [], "Emby 用户为空"
+
+    include_item_types = "Movie,Series"
+    req = str(request_type or "").strip().lower()
+    if req in ("电影", "movie"):
+        include_item_types = "Movie"
+    elif req in ("电视剧", "tv", "series", "综艺", "动画", "纪录片"):
+        include_item_types = "Series"
+
+    path = f"/Users/{quote(uid, safe='')}/Items"
+    params = {
+        "SearchTerm": title_text,
+        "Recursive": "true",
+        "Limit": "80",
+        "IncludeItemTypes": include_item_types,
+        "Fields": "ProductionYear,PremiereDate,DateCreated,ProviderIds,Path",
+        "SortBy": "DateCreated,SortName",
+        "SortOrder": "Descending",
+    }
+    ok, payload, err = _emby_request_json(base_url, api_key, path, params=params, timeout=25)
+    if not ok or not isinstance(payload, dict):
+        return [], err or "查询 Emby 资源失败"
+    items = payload.get("Items")
+    if not isinstance(items, list):
+        return [], "Emby 返回结果异常"
+    return items, ""
+
+
+def _select_emby_delete_candidate(items: list, *, title: str, year: str, request_type: str) -> Tuple[Optional[dict], str]:
+    title_norm = _normalize_title_for_match(title)
+    if not title_norm:
+        return None, "片名为空"
+
+    year_text = str(year or "").strip()
+    year_num = year_text if year_text.isdigit() and len(year_text) == 4 else ""
+
+    exact_name_matches = []
+    for item in (items or []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("Name") or "").strip()
+        if not name:
+            continue
+        if _normalize_title_for_match(name) != title_norm:
+            continue
+        if not _emby_item_type_matches_request(item, request_type):
+            continue
+        exact_name_matches.append(item)
+
+    if not exact_name_matches:
+        return None, "未在 Emby 媒体库找到同名资源"
+
+    if year_num:
+        exact_year_matches = [item for item in exact_name_matches if _emby_item_year(item) == year_num]
+        if len(exact_year_matches) == 1:
+            return exact_year_matches[0], ""
+        if len(exact_year_matches) > 1:
+            sample = []
+            for item in exact_year_matches[:3]:
+                sample.append(str(item.get("Name") or "").strip())
+            hint = "、".join([s for s in sample if s]) or "多个同名资源"
+            return None, f"命中多个同名同年份资源：{hint}"
+        return None, f"未找到年份为 {year_num} 的同名资源"
+
+    if len(exact_name_matches) == 1:
+        return exact_name_matches[0], ""
+
+    sample = []
+    for item in exact_name_matches[:5]:
+        sample_name = str(item.get("Name") or "").strip()
+        sample_year = _emby_item_year(item)
+        sample_type = str(item.get("Type") or "").strip()
+        line = sample_name
+        if sample_year:
+            line += f"({sample_year})"
+        if sample_type:
+            line += f"[{sample_type}]"
+        if line:
+            sample.append(line)
+    hint = "、".join(sample) if sample else "多个同名资源"
+    return None, f"命中多个同名资源，请补充年份再删除：{hint}"
+
+
+def _emby_delete_item(base_url: str, api_key: str, item_id: str, timeout: int = 25) -> Tuple[bool, str]:
+    iid = str(item_id or "").strip()
+    if not iid:
+        return False, "资源 ID 为空"
+    base = str(base_url or "").strip().rstrip("/")
+    token = str(api_key or "").strip()
+    if not base:
+        return False, "Emby 地址为空"
+    if not token:
+        return False, "Emby API Key 为空"
+
+    headers = {
+        "Accept": "application/json",
+        "X-Emby-Token": token,
+        "User-Agent": "tg-file-monitor/self-service-delete",
+    }
+    params = {"api_key": token}
+
+    attempts = [
+        ("DELETE", f"{base}/Items/{quote(iid, safe='')}"),
+        ("DELETE", f"{base}/emby/Items/{quote(iid, safe='')}"),
+        ("POST", f"{base}/Items/{quote(iid, safe='')}/Delete"),
+        ("POST", f"{base}/emby/Items/{quote(iid, safe='')}/Delete"),
+    ]
+    last_err = ""
+    for method, url in attempts:
+        try:
+            resp = _requests_request(
+                method,
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout,
+                proxy_scope="service",
+            )
+        except Exception as e:
+            last_err = f"{type(e).__name__}: {e}"
+            continue
+
+        status = int(getattr(resp, "status_code", 0) or 0)
+        if status in (200, 202, 204):
+            return True, ""
+
+        body = ""
+        try:
+            payload = resp.json()
+            if isinstance(payload, dict):
+                body = str(
+                    payload.get("Message")
+                    or payload.get("message")
+                    or payload.get("error")
+                    or payload.get("ErrorMessage")
+                    or ""
+                ).strip()
+        except Exception:
+            body = ""
+        if not body:
+            body = (resp.text or "").strip()[:200]
+        if status == 404:
+            last_err = "资源不存在或已删除"
+        elif body:
+            last_err = f"HTTP {status}: {body}"
+        else:
+            last_err = f"HTTP {status}"
+    return False, last_err or "删除 Emby 资源失败"
+
+
+def _emby_delete_media_for_result(config: dict, result_entry: dict) -> dict:
+    emby_runtime = _resolve_self_service_emby_runtime(config)
+    base_url = emby_runtime.get("base_url") or ""
+    api_key = emby_runtime.get("api_key") or ""
+    if not base_url or not api_key:
+        return {"ok": False, "message": "未配置 Emby 地址或 API Key。"}
+
+    meta = _extract_self_service_request_meta(result_entry)
+    title = str(meta.get("title") or "").strip()
+    year = str(meta.get("year") or "").strip()
+    request_type = str(meta.get("type") or "").strip()
+    if not title:
+        return {"ok": False, "message": "该记录缺少片名，无法定位 Emby 实体资源。"}
+
+    preferred_user_id = ""
+    try:
+        preferred_user_id = str(
+            ((config.get("drama_calendar") or {}).get("emby_gap_fill") or {}).get("user_id")
+            or ""
+        ).strip()
+    except Exception:
+        preferred_user_id = ""
+
+    user_id, user_err = _emby_resolve_user_id(base_url, api_key, preferred_user_id)
+    if not user_id:
+        return {"ok": False, "message": f"解析 Emby 用户失败：{user_err or '未知错误'}"}
+
+    items, search_err = _emby_search_user_items_for_delete(
+        base_url,
+        api_key,
+        user_id,
+        title,
+        request_type,
+    )
+    if search_err:
+        return {"ok": False, "message": search_err}
+
+    picked, pick_err = _select_emby_delete_candidate(
+        items,
+        title=title,
+        year=year,
+        request_type=request_type,
+    )
+    if not isinstance(picked, dict):
+        return {"ok": False, "message": pick_err or "未匹配到可删除资源"}
+
+    item_id = str(picked.get("Id") or "").strip()
+    item_name = str(picked.get("Name") or title).strip() or title
+    item_year = _emby_item_year(picked)
+    ok, delete_err = _emby_delete_item(base_url, api_key, item_id, timeout=25)
+    if not ok:
+        return {"ok": False, "message": delete_err or "删除失败"}
+
+    return {
+        "ok": True,
+        "item_id": item_id,
+        "item_name": item_name,
+        "item_year": item_year,
+        "title": title,
+        "year": year,
+        "type": request_type,
+    }
 
 
 def _search_hdhive_resource_urls(
@@ -6379,8 +7349,9 @@ def _run_self_service_request(payload: dict) -> None:
     max_results = int(payload.get("max_results", 5) or 5)
     max_results = max(1, min(max_results, 20))
     # Fetch a wider candidate pool, then rank/filter down to max_results.
-    search_fetch_limit = max(max_results, 15)
-    open_api_pick_limit = max(max_results, 20)
+    # Keep these caps tighter to reduce overall latency in API mode.
+    search_fetch_limit = max(max_results, 8)
+    open_api_pick_limit = max(max_results, 8)
     hdhive_cookie = payload.get("hdhive_cookie", "") or ""
     base_url = payload.get("base_url", "") or "https://hdhive.com"
     request_type = payload.get("type", "")
@@ -6389,11 +7360,19 @@ def _run_self_service_request(payload: dict) -> None:
     direct_url = (payload.get("hdhive_url", "") or "").strip()
     use_open_api = bool(payload.get("use_open_api"))
     open_api_key = (payload.get("hdhive_open_api_key") or "").strip()
+    open_api_local_rate_limit = _normalize_self_service_open_api_rate_limit_per_minute(
+        payload.get("open_api_local_rate_limit_per_minute"),
+        default=12,
+    )
+    open_api_no_site_fallback = bool(payload.get("open_api_no_site_fallback", True))
     tmdb_id_input = (payload.get("tmdb_id") or "").strip()
     unlock_threshold = int(payload.get("unlock_threshold", 0) or 0)
     allow_open_api_direct = bool(payload.get("open_api_direct_unlock", False))
     storage_mode = _normalize_self_service_storage_mode(payload.get("storage_mode", "any"))
     storage_label = _storage_mode_label(storage_mode)
+    if storage_mode == "115":
+        search_fetch_limit = max(max_results, 6)
+        open_api_pick_limit = max(max_results, 5)
     dolby_preference = str(payload.get("dolby_preference", "any") or "any").lower()
     if dolby_preference not in ("any", "prefer", "exclude"):
         dolby_preference = "any"
@@ -6406,6 +7385,42 @@ def _run_self_service_request(payload: dict) -> None:
     season_strict = bool(explicit_seasons)
     season_label = _format_season_label(requested_seasons)
     title_for_search = _strip_season_tokens(title) if requested_seasons else title
+    requester_account = _normalize_self_service_requester_account(
+        payload.get("requester_account")
+        or payload.get("emby_user_name")
+        or ""
+    )
+    requester_binding = {
+        "account": requester_account,
+        "name": str(payload.get("emby_user_name") or requester_account or "").strip(),
+        "id": str(payload.get("emby_user_id") or "").strip(),
+        "verified": bool(payload.get("emby_user_verified")),
+    }
+    requester_label = _format_self_service_emby_binding_label(requester_binding)
+    result_extras_base = {
+        "requester_account": requester_account,
+        "emby_user_name": str(requester_binding.get("name") or requester_account or "").strip(),
+        "emby_user_id": str(requester_binding.get("id") or "").strip(),
+        "emby_user_verified": bool(requester_binding.get("verified")),
+        "request_title": title,
+        "request_year": request_year,
+        "request_type": request_type,
+        "request_season": str(payload.get("season") or "").strip(),
+        "request_resolution": resolution_preference,
+        "open_api_local_rate_limit_per_minute": open_api_local_rate_limit,
+        "open_api_no_site_fallback": open_api_no_site_fallback,
+    }
+
+    def _inject_requester_detail(detail_text: str) -> str:
+        text = str(detail_text or "").strip()
+        if not requester_label:
+            return text
+        prefix = f"Emby用户: {requester_label}"
+        if not text:
+            return prefix
+        if text.startswith(prefix):
+            return text
+        return prefix + "\n" + text
 
     def _record_result(success: bool, detail: str = "", resolved: bool = False) -> None:
         if success:
@@ -6422,15 +7437,18 @@ def _run_self_service_request(payload: dict) -> None:
                 f"季: {season_label}" if season_label else "",
                 f"分辨率: {resolution_label}" if resolution_preference else "",
             ])
+        detail = _inject_requester_detail(detail)
         if request_id:
             status = "success" if success else ("partial" if resolved else "error")
-            _set_self_service_result(request_id, status, msg, detail)
+            _set_self_service_result(request_id, status, msg, detail, extras=result_extras_base)
         _self_service_notify_result(target_ids, success, detail=detail, resolved=resolved)
 
     if use_open_api and direct_url and not allow_open_api_direct:
         use_open_api = False
 
-    _append_self_service_log([f"[{ts}] [INFO] submit query={query} targets={target_ids}"])
+    _append_self_service_log([
+        f"[{ts}] [INFO] submit query={query} requester={requester_label or '-'} targets={target_ids}"
+    ])
 
     dolby_url_cache: dict = {}
 
@@ -6454,6 +7472,7 @@ def _run_self_service_request(payload: dict) -> None:
         _append_self_service_log([f"[{ts}] [WARN] no targets configured"])
         if request_id:
             detail = _build_self_service_detail([
+                f"Emby用户: {requester_label}" if requester_label else "",
                 f"片名: {title}" if title else "",
                 f"年份: {request_year}" if request_year else "",
                 "说明: 未配置通知用户",
@@ -6485,7 +7504,12 @@ def _run_self_service_request(payload: dict) -> None:
         # Direct resource slug unlock
         if direct_url:
             slug = direct_url.rstrip('/').split('/')[-1]
-            detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
+            detail_resp = _hdhive_open_api_resource_detail(
+                base_url,
+                open_api_key,
+                slug,
+                local_rate_limit_per_minute=open_api_local_rate_limit,
+            )
             detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
             unlock_points = None
             already_owned = False
@@ -6530,7 +7554,12 @@ def _run_self_service_request(payload: dict) -> None:
                     _record_result(False, detail=detail, resolved=False)
                     _append_self_service_log([f"[{ts}] [WARN] open_api direct points {unlock_points} > threshold {unlock_threshold} slug={slug}"])
                     return
-            unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+            unlock_resp = _hdhive_open_api_unlock(
+                base_url,
+                open_api_key,
+                slug,
+                local_rate_limit_per_minute=open_api_local_rate_limit,
+            )
             if not unlock_resp.get("success"):
                 detail = _build_self_service_detail([
                     f"片名: {title}" if title else "",
@@ -6626,108 +7655,192 @@ def _run_self_service_request(payload: dict) -> None:
                 item.update(meta)
             collected_resources.append(item)
 
-        keyword_search_limit = max(max_results * 3, 15)
-        keyword_probe_limit = max(max_results * 2, 10)
+        keyword_search_limit = max(max_results * 2, 8)
+        keyword_probe_limit = max(max_results + 2, 6)
+        if storage_mode == "115":
+            keyword_search_limit = max(max_results + 1, 6)
+            keyword_probe_limit = max(max_results, 5)
         keyword_slugs = []
+        keyword_slug_count = 0
         tv_tmdb_ids = []
         movie_tmdb_ids = []
         tmdb_ids = []
-        if tmdb_id_input:
-            tmdb_ids = [tmdb_id_input]
-        else:
-            tmdb_key = (payload.get("tmdb_api_key") or "").strip()
-            if tmdb_key and title_for_search:
-                if media_type:
-                    tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, media_type)]
-                else:
-                    tv_tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "tv")]
-                    movie_tmdb_ids = [str(x) for x in _tmdb_search_ids(tmdb_key, title_for_search, request_year, "movie")]
-                    prefer_tv_first = bool(requested_seasons)
-                    if prefer_tv_first:
-                        tmdb_ids = tv_tmdb_ids + [x for x in movie_tmdb_ids if x not in tv_tmdb_ids]
-                    else:
-                        tmdb_ids = movie_tmdb_ids + [x for x in tv_tmdb_ids if x not in movie_tmdb_ids]
-                    tmdb_ids = tmdb_ids[:40]
-
-        tmdb_probe_limit = 5 if media_type else 10
         tmdb_call_count = 0
-        tv_tmdb_set = set(tv_tmdb_ids)
-        movie_tmdb_set = set(movie_tmdb_ids)
-        for tid in tmdb_ids[:tmdb_probe_limit]:
-            if media_type:
-                mt_candidates = [media_type]
-            elif tmdb_id_input:
-                mt_candidates = ["movie", "tv"]
+        search_cache_key = (
+            str(base_url or "").strip().rstrip("/").lower(),
+            str(media_type or "").strip().lower(),
+            str(request_type or "").strip().lower(),
+            str(request_year or "").strip(),
+            str(tmdb_id_input or "").strip(),
+            tuple(int(s) for s in (requested_seasons or []) if int(s) > 0),
+            str(resolution_preference or "").strip().lower(),
+            str(dolby_preference or "").strip().lower(),
+            str(storage_mode or "").strip().lower(),
+            str(title_for_search or "").strip().lower(),
+            str(title or "").strip().lower(),
+            str(query or "").strip().lower(),
+            bool(open_api_no_site_fallback),
+            int(max_results or 5),
+        )
+        search_cache_entry = _self_service_open_api_search_cache_get(search_cache_key)
+        if isinstance(search_cache_entry, dict):
+            cached_resources = search_cache_entry.get("resources") if isinstance(search_cache_entry.get("resources"), list) else []
+            collected_resources = [dict(item) for item in cached_resources if isinstance(item, dict)]
+            tmdb_ids = [str(x) for x in (search_cache_entry.get("tmdb_ids") or []) if str(x).strip()]
+            tmdb_call_count = int(search_cache_entry.get("tmdb_calls") or 0)
+            keyword_slug_count = max(0, int(search_cache_entry.get("keyword_slug_count") or 0))
+            _append_self_service_log([
+                f"[{ts}] [INFO] open_api search_cache_hit query={query} hit={bool(search_cache_entry.get('hit'))} resources={len(collected_resources)} tmdb_ids={len(tmdb_ids)}"
+            ])
+        else:
+            if tmdb_id_input:
+                tmdb_ids = [tmdb_id_input]
             else:
-                mt_candidates = []
-                if tid in movie_tmdb_set:
-                    mt_candidates.append("movie")
-                if tid in tv_tmdb_set:
-                    mt_candidates.append("tv")
-                if not mt_candidates:
+                tmdb_key = (payload.get("tmdb_api_key") or "").strip()
+                tmdb_query_candidates = _build_tmdb_query_candidates(title_for_search, title, query, max_items=4)
+                if tmdb_key and tmdb_query_candidates:
+                    search_languages = ("zh-CN", "en-US")
+                    if media_type:
+                        seen_tmdb_ids = set()
+                        for q in tmdb_query_candidates:
+                            for lang in search_languages:
+                                ids = _tmdb_search_ids(tmdb_key, q, request_year, media_type, language=lang)
+                                for tid in ids:
+                                    tid_text = str(tid)
+                                    if tid_text in seen_tmdb_ids:
+                                        continue
+                                    seen_tmdb_ids.add(tid_text)
+                                    tmdb_ids.append(tid_text)
+                                if tmdb_ids:
+                                    break
+                            if tmdb_ids:
+                                break
+                    else:
+                        seen_tv_ids = set()
+                        seen_movie_ids = set()
+                        for q in tmdb_query_candidates:
+                            for lang in search_languages:
+                                tv_ids = _tmdb_search_ids(tmdb_key, q, request_year, "tv", language=lang)
+                                movie_ids = _tmdb_search_ids(tmdb_key, q, request_year, "movie", language=lang)
+                                for tid in tv_ids:
+                                    tid_text = str(tid)
+                                    if tid_text in seen_tv_ids:
+                                        continue
+                                    seen_tv_ids.add(tid_text)
+                                    tv_tmdb_ids.append(tid_text)
+                                for tid in movie_ids:
+                                    tid_text = str(tid)
+                                    if tid_text in seen_movie_ids:
+                                        continue
+                                    seen_movie_ids.add(tid_text)
+                                    movie_tmdb_ids.append(tid_text)
+                            if tv_tmdb_ids or movie_tmdb_ids:
+                                break
+                        prefer_tv_first = bool(requested_seasons)
+                        if prefer_tv_first:
+                            tmdb_ids = tv_tmdb_ids + [x for x in movie_tmdb_ids if x not in tv_tmdb_ids]
+                        else:
+                            tmdb_ids = movie_tmdb_ids + [x for x in tv_tmdb_ids if x not in movie_tmdb_ids]
+                        tmdb_ids = tmdb_ids[:20]
+
+            tmdb_probe_limit = 4 if media_type else 6
+            if storage_mode == "115":
+                tmdb_probe_limit = 3 if media_type else 4
+            tv_tmdb_set = set(tv_tmdb_ids)
+            movie_tmdb_set = set(movie_tmdb_ids)
+            for tid in tmdb_ids[:tmdb_probe_limit]:
+                if media_type:
+                    mt_candidates = [media_type]
+                elif tmdb_id_input:
                     mt_candidates = ["movie", "tv"]
-            for mt in mt_candidates:
-                tmdb_call_count += 1
-                try:
-                    resp = _hdhive_open_api_resources(base_url, open_api_key, mt, tid)
-                    resp = resp if isinstance(resp, dict) else {}
-                    if not resp.get("success"):
+                else:
+                    mt_candidates = []
+                    if tid in movie_tmdb_set:
+                        mt_candidates.append("movie")
+                    if tid in tv_tmdb_set:
+                        mt_candidates.append("tv")
+                    if not mt_candidates:
+                        mt_candidates = ["movie", "tv"]
+                for mt in mt_candidates:
+                    tmdb_call_count += 1
+                    try:
+                        resp = _hdhive_open_api_resources(
+                            base_url,
+                            open_api_key,
+                            mt,
+                            tid,
+                            local_rate_limit_per_minute=open_api_local_rate_limit,
+                        )
+                        resp = resp if isinstance(resp, dict) else {}
+                        if not resp.get("success"):
+                            continue
+                        data = resp.get("data") if isinstance(resp, dict) else None
+                        if isinstance(data, list) and data:
+                            for item in data:
+                                if isinstance(item, dict):
+                                    _append_open_api_resource(item, _tmdb_id=tid, _media_type=mt, _source="tmdb")
+                    except Exception:
                         continue
-                    data = resp.get("data") if isinstance(resp, dict) else None
-                    if isinstance(data, list) and data:
-                        for item in data:
-                            if isinstance(item, dict):
-                                _append_open_api_resource(item, _tmdb_id=tid, _media_type=mt, _source="tmdb")
-                except Exception:
-                    continue
+                if query_terms and collected_resources:
+                    try:
+                        current_best_score = max(_resource_query_match_score(item, query_terms) for item in collected_resources)
+                    except Exception:
+                        current_best_score = 0
+                    min_candidates_for_break = max(3, min(max_results, 4))
+                    if current_best_score >= 4 and len(collected_resources) >= min_candidates_for_break:
+                        break
+                    if current_best_score >= 3 and len(collected_resources) >= (min_candidates_for_break + 2):
+                        break
+
+            best_tmdb_score = 0
             if query_terms and collected_resources:
-                try:
-                    current_best_score = max(_resource_query_match_score(item, query_terms) for item in collected_resources)
-                except Exception:
-                    current_best_score = 0
-                min_candidates_for_break = max(3, min(max_results, 4))
-                if current_best_score >= 4 and len(collected_resources) >= min_candidates_for_break:
-                    break
-                if current_best_score >= 3 and len(collected_resources) >= (min_candidates_for_break + 2):
-                    break
+                best_tmdb_score = max(_resource_query_match_score(item, query_terms) for item in collected_resources)
 
-        best_tmdb_score = 0
-        if query_terms and collected_resources:
-            best_tmdb_score = max(_resource_query_match_score(item, query_terms) for item in collected_resources)
-
-        need_keyword_fallback = (not collected_resources) or best_tmdb_score < 3
-        if need_keyword_fallback:
-            seen_keyword_slugs = set()
-            for term in query_terms[:3]:
-                urls, _debug, _tmdb_urls, _tmdb_ids = _search_hdhive_resource_urls(
-                    term,
-                    max_results=keyword_search_limit,
-                    cookie_header=hdhive_cookie,
-                    base_url=base_url,
-                    request_timeout=8,
-                )
-                for res_url in urls:
-                    slug = _normalize_hdhive_test_slug(res_url)
-                    if not slug or slug in seen_keyword_slugs:
-                        continue
-                    seen_keyword_slugs.add(slug)
-                    keyword_slugs.append(slug)
+            need_keyword_fallback = (not collected_resources) or best_tmdb_score < 3
+            if need_keyword_fallback and open_api_no_site_fallback:
+                _append_self_service_log([
+                    f"[{ts}] [INFO] open_api skip_keyword_fallback query={query} no_site_fallback=on score={best_tmdb_score} resources={len(collected_resources)}"
+                ])
+            elif need_keyword_fallback:
+                seen_keyword_slugs = set()
+                for term in query_terms[:2]:
+                    urls, _debug, _tmdb_urls, _tmdb_ids = _search_hdhive_resource_urls(
+                        term,
+                        max_results=keyword_search_limit,
+                        cookie_header=hdhive_cookie,
+                        base_url=base_url,
+                        request_timeout=8,
+                    )
+                    for res_url in urls:
+                        slug = _normalize_hdhive_test_slug(res_url)
+                        if not slug or slug in seen_keyword_slugs:
+                            continue
+                        seen_keyword_slugs.add(slug)
+                        keyword_slugs.append(slug)
+                        if len(keyword_slugs) >= keyword_probe_limit:
+                            break
                     if len(keyword_slugs) >= keyword_probe_limit:
                         break
-                if len(keyword_slugs) >= keyword_probe_limit:
-                    break
 
-            keyword_detail_probe_limit = max(max_results * 2, 10)
-            for slug in keyword_slugs[:keyword_detail_probe_limit]:
-                detail_resp = _hdhive_open_api_resource_detail(base_url, open_api_key, slug)
-                detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
-                if not isinstance(detail_data, dict):
-                    continue
-                detail_item = dict(detail_data)
-                detail_item.setdefault("slug", slug)
-                _append_open_api_resource(detail_item, _source="keyword")
-                if len(collected_resources) >= keyword_detail_probe_limit:
-                    break
+                keyword_detail_probe_limit = max(max_results + 2, 6)
+                if storage_mode == "115":
+                    keyword_detail_probe_limit = max(max_results + 1, 5)
+                for slug in keyword_slugs[:keyword_detail_probe_limit]:
+                    detail_resp = _hdhive_open_api_resource_detail(
+                        base_url,
+                        open_api_key,
+                        slug,
+                        local_rate_limit_per_minute=open_api_local_rate_limit,
+                    )
+                    detail_data = detail_resp.get("data") if isinstance(detail_resp, dict) else None
+                    if not isinstance(detail_data, dict):
+                        continue
+                    detail_item = dict(detail_data)
+                    detail_item.setdefault("slug", slug)
+                    _append_open_api_resource(detail_item, _source="keyword")
+                    if len(collected_resources) >= keyword_detail_probe_limit:
+                        break
+            keyword_slug_count = len(keyword_slugs)
 
         if query_terms and collected_resources:
             scored_items = []
@@ -6738,15 +7851,40 @@ def _run_self_service_request(payload: dict) -> None:
                 scored_items.sort(key=lambda x: (-x[0], x[1]))
                 collected_resources = [item for _score, _idx, item in scored_items]
 
-        collect_cap = max(open_api_pick_limit * 3, 30)
+        collect_cap = max(open_api_pick_limit * 2, 16)
+        if storage_mode == "115":
+            collect_cap = max(open_api_pick_limit * 2, 12)
         if len(collected_resources) > collect_cap:
             collected_resources = collected_resources[:collect_cap]
+        if search_cache_entry is None:
+            _self_service_open_api_search_cache_set(
+                search_cache_key,
+                hit=bool(collected_resources),
+                resources=collected_resources,
+                tmdb_ids=tmdb_ids,
+                tmdb_calls=tmdb_call_count,
+                keyword_slug_count=keyword_slug_count,
+            )
         _append_self_service_log([
-            f"[{ts}] [INFO] open_api candidates query={query} keyword_slugs={len(keyword_slugs)} tmdb_ids={len(tmdb_ids)} tmdb_calls={tmdb_call_count} resources={len(collected_resources)}"
+            f"[{ts}] [INFO] open_api candidates query={query} keyword_slugs={keyword_slug_count} tmdb_ids={len(tmdb_ids)} tmdb_calls={tmdb_call_count} resources={len(collected_resources)}"
         ])
 
         if not collected_resources:
             _append_self_service_log([f"[{ts}] [WARN] open_api no resources query={query}"])
+            if open_api_no_site_fallback:
+                reason_text = "说明: Open API 未找到可用资源（已禁用站点回退）"
+                if not tmdb_ids and not tmdb_id_input:
+                    reason_text = "说明: 未命中 TMDB ID，未发起 Open API 资源检索（已禁用站点回退）"
+                detail = _build_self_service_detail([
+                    f"片名: {title}" if title else "",
+                    f"网盘: {storage_label}" if storage_label != "不限" else "",
+                    reason_text,
+                    f"杜比: {dolby_label}" if dolby_preference != "any" else "",
+                    f"分辨率: {resolution_label}" if resolution_preference else "",
+                ])
+                _record_result(False, detail=detail, resolved=False)
+                _append_self_service_log([f"[{ts}] [INFO] open_api stop_without_site_fallback query={query}"])
+                return
             fallback_payload = dict(payload)
             fallback_payload["use_open_api"] = False
             fallback_note = (request_note or "").strip()
@@ -6768,6 +7906,7 @@ def _run_self_service_request(payload: dict) -> None:
                 resolution_preference=resolution_preference,
                 dolby_preference=dolby_preference,
                 storage_mode=storage_mode,
+                open_api_local_rate_limit_per_minute=open_api_local_rate_limit,
             )
             if not interactive_resources:
                 detail = _build_self_service_detail([
@@ -6796,6 +7935,7 @@ def _run_self_service_request(payload: dict) -> None:
                 "说明: 已跳过自动优先级筛选与自动转存，请手动选择资源",
                 "说明: 当前仅支持手动转存到 115" if not manual_transfer_supported else "",
             ], max_lines=10, max_line_len=220)
+            detail = _inject_requester_detail(detail)
             extras = {
                 "advanced_mode": True,
                 "resources": interactive_resources,
@@ -6810,6 +7950,7 @@ def _run_self_service_request(payload: dict) -> None:
                     "resolution_label": resolution_label,
                     "dolby_label": dolby_label,
                     "manual_transfer_supported": manual_transfer_supported,
+                    "requester_label": requester_label,
                 },
             }
             _set_self_service_result(
@@ -6820,6 +7961,7 @@ def _run_self_service_request(payload: dict) -> None:
                 extras=extras,
             )
             ready_detail = _build_self_service_detail([
+                f"Emby用户: {requester_label}" if requester_label else "",
                 f"片名: {title}" if title else "",
                 f"网盘: {storage_label}" if storage_label != "不限" else "",
                 f"候选资源: {len(interactive_resources)} 条",
@@ -6862,14 +8004,35 @@ def _run_self_service_request(payload: dict) -> None:
             res_matched = [item for item in collected_resources if _resource_match_resolution(item, resolution_preference)]
             if res_matched:
                 collected_resources = res_matched
+        if storage_mode != "any" and collected_resources:
+            storage_prefiltered = []
+            storage_filtered_out = 0
+            for item in collected_resources:
+                guess = _resource_guess_storage_mode(item)
+                if guess and not _storage_guess_matches_mode(guess, storage_mode):
+                    storage_filtered_out += 1
+                    continue
+                storage_prefiltered.append(item)
+            if storage_prefiltered:
+                collected_resources = storage_prefiltered
+            if storage_filtered_out:
+                _append_self_service_log([
+                    f"[{ts}] [INFO] open_api prefilter storage query={query} filtered={storage_filtered_out} remain={len(collected_resources)}"
+                ])
 
         candidate_pool = []
         resources_sorted = _sort_hdhive_resources(collected_resources, resolution_preference=resolution_preference)
         for item in resources_sorted:
+            guess = _resource_guess_storage_mode(item)
+            if guess and not _storage_guess_matches_mode(guess, storage_mode):
+                continue
             if item.get("is_unlocked"):
                 candidate_pool.append(item)
         for item in resources_sorted:
             if item in candidate_pool:
+                continue
+            guess = _resource_guess_storage_mode(item)
+            if guess and not _storage_guess_matches_mode(guess, storage_mode):
                 continue
             points = _resource_unlock_points(item)
             if points is None:
@@ -6911,7 +8074,12 @@ def _run_self_service_request(payload: dict) -> None:
             slug = item.get("slug") or ""
             if not slug:
                 continue
-            unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+            unlock_resp = _hdhive_open_api_unlock(
+                base_url,
+                open_api_key,
+                slug,
+                local_rate_limit_per_minute=open_api_local_rate_limit,
+            )
             if not unlock_resp.get("success"):
                 continue
             data = unlock_resp.get("data") if isinstance(unlock_resp, dict) else {}
@@ -7539,14 +8707,11 @@ def _extract_emby_missing_seasons_by_index_gap(items: list, *, only_aired: bool 
     Infer missing episodes by checking gaps in episode numbers per season.
     """
     seasons = {}
+    future_by_season = {}
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     for item in (items or []):
         if not isinstance(item, dict):
             continue
-        if only_aired:
-            premiere = _parse_emby_datetime(item.get("PremiereDate"))
-            if premiere and premiere > now_utc:
-                continue
         season = _coerce_season_int(item.get("ParentIndexNumber"))
         if not season:
             season = _coerce_season_int(_extract_season_request(str(item.get("Name") or "")))
@@ -7556,6 +8721,11 @@ def _extract_emby_missing_seasons_by_index_gap(items: list, *, only_aired: bool 
         if not episode:
             episode = _extract_episode_index_from_name(str(item.get("Name") or ""))
         if not episode:
+            continue
+        premiere = _parse_emby_datetime(item.get("PremiereDate"))
+        is_future = bool(premiere and premiere > now_utc)
+        if only_aired and is_future:
+            future_by_season.setdefault(season, set()).add(episode)
             continue
         seasons.setdefault(season, set()).add(episode)
 
@@ -7567,11 +8737,19 @@ def _extract_emby_missing_seasons_by_index_gap(items: list, *, only_aired: bool 
         start = min(episode_nums)
         end = max(episode_nums)
         missing = []
-        if start > 1:
+        if start > 1 and start <= 20:
             # Detect leading gaps like "missing E01" when first available episode starts at E02+.
+            # Skip very large starts to avoid false positives when Emby uses absolute numbering.
             missing.extend(range(1, start))
         if end > start:
             missing.extend(sorted(set(range(start, end + 1)) - set(episode_nums)))
+        if only_aired and missing:
+            known_future = future_by_season.get(season) or set()
+            if known_future:
+                # If Emby has out-of-order premiere dates (e.g. E39/E40 aired while
+                # E36-E38 are marked future), avoid treating known-future episodes
+                # as current gaps.
+                missing = [ep for ep in missing if ep not in known_future]
         if missing:
             season_counts[season] = len(missing)
     if seen_seasons:
@@ -7663,6 +8841,11 @@ def _count_emby_present_episodes_by_season(items: list, *, only_aired: bool = Tr
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     for item in (items or []):
         if not isinstance(item, dict):
+            continue
+        is_missing = item.get("IsMissing")
+        location_type = str(item.get("LocationType") or "").strip().lower()
+        # Never count explicit virtual/missing placeholders as present episodes.
+        if (is_missing is True) or (location_type in ("virtual", "missing")):
             continue
         if only_aired:
             premiere = _parse_emby_datetime(item.get("PremiereDate"))
@@ -8007,23 +9190,80 @@ def _emby_fetch_episode_items(
     sid = str(series_id or "").strip()
     if not sid:
         return [], "缺少 series_id"
-    params = {
+    params_base = {
         "UserId": str(user_id or "").strip(),
         "Fields": "PremiereDate,ParentIndexNumber,IndexNumber,LocationType,IsMissing,Name,SeriesName,Path",
-        "Limit": "1000",
     }
     if is_missing is True:
-        params["IsMissing"] = "true"
+        params_base["IsMissing"] = "true"
     elif is_missing is False:
-        params["IsMissing"] = "false"
+        params_base["IsMissing"] = "false"
     path = f"/Shows/{quote(sid, safe='')}/Episodes"
-    ok, payload, err = _emby_request_json(base_url, api_key, path, params=params, timeout=25)
-    if not ok or not isinstance(payload, dict):
-        return [], err or "查询缺失剧集失败"
-    items = payload.get("Items")
-    if not isinstance(items, list):
-        return [], "Emby 剧集响应格式异常"
-    return items, ""
+    page_size = 1000
+    max_pages = 60
+    all_items = []
+    seen_ids = set()
+    start_index = 0
+    repeat_page_count = 0
+    no_new_pages = 0
+    last_page_signature = None
+
+    for _ in range(max_pages):
+        params = dict(params_base)
+        params["Limit"] = str(page_size)
+        params["StartIndex"] = str(start_index)
+        ok, payload, err = _emby_request_json(base_url, api_key, path, params=params, timeout=25)
+        if not ok or not isinstance(payload, dict):
+            if not all_items:
+                return [], err or "查询缺失剧集失败"
+            break
+        items = payload.get("Items")
+        if not isinstance(items, list):
+            if not all_items:
+                return [], "Emby 剧集响应格式异常"
+            break
+        if not items:
+            break
+
+        added = 0
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            item_id = str(item.get("Id") or "").strip()
+            if item_id:
+                if item_id in seen_ids:
+                    continue
+                seen_ids.add(item_id)
+            all_items.append(item)
+            added += 1
+
+        page_items = len(items)
+        first_id = str((items[0] or {}).get("Id") or "") if items else ""
+        last_id = str((items[-1] or {}).get("Id") or "") if items else ""
+        page_signature = (page_items, first_id, last_id)
+        if page_signature == last_page_signature:
+            repeat_page_count += 1
+        else:
+            repeat_page_count = 0
+        last_page_signature = page_signature
+
+        if added <= 0:
+            no_new_pages += 1
+        else:
+            no_new_pages = 0
+
+        if repeat_page_count >= 1 or no_new_pages >= 2:
+            break
+
+        start_index += page_items
+        total = payload.get("TotalRecordCount")
+        if isinstance(total, int) and total >= 0:
+            if start_index >= total:
+                break
+        elif page_items < page_size:
+            break
+
+    return all_items, ""
 
 
 def _emby_fetch_missing_episode_items(
@@ -8096,6 +9336,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
         },
         "missing_items": [],
         "submitted_items": [],
+        "strict_missing_markers_only": False,
+        "tmdb_validation_enabled": False,
     }
 
     def _publish_running(message: str, *, scanned: int = 0, missing: int = 0, pending: int = 0, submitted: int = 0) -> None:
@@ -8172,6 +9414,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
         tmdb_api_key = str((drama_cfg.get("tmdb_api_key") or os.environ.get("TMDB_API_KEY") or "")).strip()
         tmdb_language = str((drama_cfg.get("tmdb_language") or "zh-CN")).strip() or "zh-CN"
         tmdb_validation_enabled = bool(tmdb_validate and tmdb_api_key)
+        result["strict_missing_markers_only"] = bool(strict_missing_markers_only)
+        result["tmdb_validation_enabled"] = bool(tmdb_validation_enabled)
 
         def _on_series_page_progress(meta: dict) -> None:
             try:
@@ -8263,10 +9507,70 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
         cooldown_skipped = 0
         ignored_skipped = 0
         api_errors = 0
-        missing_filter_probe_done = False
-        missing_filter_ignored = False
+        missing_filter_ignored_series = 0
         tmdb_checked_series = 0
         tmdb_conflicts = 0
+        tmdb_id_by_series = {}
+        if tmdb_validation_enabled:
+            for sid, _title, _production_year in valid_series:
+                series_meta = series_item_map.get(sid) if isinstance(series_item_map.get(sid), dict) else {}
+                tmdb_id = _extract_emby_tmdb_id(series_meta)
+                if tmdb_id:
+                    tmdb_id_by_series[sid] = tmdb_id
+        tmdb_total_series = len(tmdb_id_by_series)
+
+        summary_publish_interval_seconds = 2.0
+        preview_sync_interval_seconds = 8.0
+        last_summary_publish_ts = 0.0
+        last_preview_sync_ts = 0.0
+
+        def _short_progress_title(raw_title: str, *, max_len: int = 18) -> str:
+            text = str(raw_title or "").strip()
+            if not text:
+                return ""
+            if len(text) <= max_len:
+                return text
+            return text[: max(1, max_len - 1)] + "…"
+
+        def _publish_summary_progress(
+            current_title: str = "",
+            *,
+            tmdb_detail: str = "",
+            force: bool = False,
+            sync_preview: bool = False,
+        ) -> None:
+            nonlocal last_summary_publish_ts
+            nonlocal last_preview_sync_ts
+            now_progress_ts = time.time()
+            if not force and (now_progress_ts - last_summary_publish_ts) < summary_publish_interval_seconds:
+                return
+            title_text = _short_progress_title(current_title, max_len=22)
+            message = (
+                f"后台执行中：结果汇总 {scanned_count}/{total_series}，已发现缺季 {missing_count}，"
+                f"待提交 {len(candidates)}。"
+            )
+            if title_text:
+                message += f" 当前：{title_text}"
+            tmdb_text = str(tmdb_detail or "").strip()
+            if tmdb_text:
+                message += f" TMDB：{tmdb_text}"
+            _publish_running(
+                message,
+                scanned=scanned_count,
+                missing=missing_count,
+                pending=len(candidates),
+                submitted=0,
+            )
+            last_summary_publish_ts = now_progress_ts
+            if preview_only:
+                should_sync_preview = (
+                    force
+                    or sync_preview
+                    or (now_progress_ts - last_preview_sync_ts) >= preview_sync_interval_seconds
+                )
+                if should_sync_preview:
+                    _set_emby_gap_fill_scheduler_state(last_missing_items=list(missing_items_out))
+                    last_preview_sync_ts = now_progress_ts
 
         fetch_results = {}
         if valid_series:
@@ -8316,7 +9620,11 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                             )
 
         _publish_running(
-            f"后台执行中：查漏请求完成，正在汇总结果...",
+            (
+                f"后台执行中：查漏请求完成，开始逐条汇总（共 {total_series} 部"
+                + (f"，TMDB 校验 {tmdb_total_series} 部" if tmdb_total_series > 0 else "")
+                + "）..."
+            ),
             scanned=total_series,
             missing=0,
             pending=0,
@@ -8325,20 +9633,21 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
 
         for sid, title, production_year in valid_series:
             scanned_count += 1
+            _publish_summary_progress(
+                title,
+                force=(scanned_count == 1 or scanned_count == total_series),
+            )
             missing_items, missing_err = fetch_results.get(sid, ([], "未获取到缺集结果"))
             if missing_err:
                 api_errors += 1
                 _append_emby_gap_fill_log([
                     f"[{now_str}] [WARN] 查询缺失剧集失败 series={title}({sid}) err={missing_err}"
                 ])
-                if scanned_count == 1 or scanned_count % 20 == 0 or scanned_count == total_series:
-                    _publish_running(
-                        f"后台执行中：结果汇总 {scanned_count}/{total_series}，已发现缺季 {missing_count}。",
-                        scanned=scanned_count,
-                        missing=missing_count,
-                        pending=len(candidates),
-                        submitted=0,
-                    )
+                _publish_summary_progress(
+                    title,
+                    force=(scanned_count == 1 or scanned_count == total_series or scanned_count % 20 == 0),
+                    sync_preview=(scanned_count % 20 == 0),
+                )
                 continue
 
             missing_seasons = _extract_emby_missing_seasons(missing_items, only_aired=only_aired)
@@ -8369,30 +9678,34 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                     for item in missing_items
                 )
                 if not has_missing_markers:
-                    if not missing_filter_probe_done:
-                        verify_items, verify_err = _emby_fetch_episode_items(
-                            base_url=base_url,
-                            api_key=api_key,
-                            user_id=user_id,
-                            series_id=sid,
-                            is_missing=False,
-                        )
-                        if not verify_err:
-                            ids_missing = {str(i.get("Id") or "") for i in missing_items if isinstance(i, dict)}
-                            ids_all = {str(i.get("Id") or "") for i in verify_items if isinstance(i, dict)}
-                            if ids_missing and ids_all and ids_missing == ids_all:
-                                missing_filter_ignored = True
-                        missing_filter_probe_done = True
-                    if missing_filter_ignored:
+                    series_filter_ignored = False
+                    verify_items, verify_err = _emby_fetch_episode_items(
+                        base_url=base_url,
+                        api_key=api_key,
+                        user_id=user_id,
+                        series_id=sid,
+                        is_missing=False,
+                    )
+                    if not verify_err:
+                        ids_missing = {str(i.get("Id") or "") for i in missing_items if isinstance(i, dict)}
+                        ids_all = {str(i.get("Id") or "") for i in verify_items if isinstance(i, dict)}
+                        if ids_missing and ids_all and ids_missing == ids_all:
+                            series_filter_ignored = True
+                    if series_filter_ignored:
                         inferred = _extract_emby_missing_seasons_by_index_gap(missing_items, only_aired=only_aired)
                         if inferred:
                             missing_seasons = inferred
                             inferred_missing_count += sum(int(v or 0) for v in inferred.values())
+                            missing_filter_ignored_series += 1
             if tmdb_validation_enabled and (not strict_missing_markers_only or bool(missing_seasons)):
-                series_meta = series_item_map.get(sid) if isinstance(series_item_map.get(sid), dict) else {}
-                tmdb_id = _extract_emby_tmdb_id(series_meta)
+                tmdb_id = str(tmdb_id_by_series.get(sid) or "").strip()
                 if tmdb_id:
                     tmdb_checked_series += 1
+                    tmdb_progress_prefix = f"{tmdb_checked_series}/{max(1, tmdb_total_series)} 部剧"
+                    _publish_summary_progress(
+                        title,
+                        tmdb_detail=f"{tmdb_progress_prefix}，准备校验",
+                    )
                     tv_detail = _tmdb_fetch_tv_detail(tmdb_api_key, tmdb_id, language=tmdb_language)
                     if not isinstance(tv_detail, dict):
                         _append_emby_gap_fill_log([
@@ -8415,7 +9728,9 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                                 tmdb_total_seasons = int(tv_detail.get("number_of_seasons") or 0)
                             except Exception:
                                 tmdb_total_seasons = 0
-                            present_counts = _count_emby_present_episodes_by_season(present_items, only_aired=only_aired)
+                            # Use full on-disk episode count for present side to avoid
+                            # false positives caused by Emby premiere-date drift.
+                            present_counts = _count_emby_present_episodes_by_season(present_items, only_aired=False)
 
                             tmdb_candidate_seasons = set()
                             if strict_missing_markers_only:
@@ -8442,9 +9757,15 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
 
                             validated_missing = {}
                             conflict_items = []
-                            for season_num in sorted(tmdb_candidate_seasons):
+                            tmdb_sorted_seasons = sorted(tmdb_candidate_seasons)
+                            tmdb_season_total = len(tmdb_sorted_seasons)
+                            for season_idx, season_num in enumerate(tmdb_sorted_seasons, start=1):
                                 if season_num <= 0:
                                     continue
+                                _publish_summary_progress(
+                                    title,
+                                    tmdb_detail=f"{tmdb_progress_prefix}，第 {season_idx}/{tmdb_season_total} 季",
+                                )
                                 miss_count = max(0, int((missing_seasons or {}).get(season_num, 0) or 0))
                                 if tmdb_total_seasons > 0 and season_num > tmdb_total_seasons:
                                     if miss_count > 0:
@@ -8468,7 +9789,13 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                                 present_count = int(present_counts.get(season_num, 0) or 0)
                                 tmdb_gap = max(0, int(expected_count) - present_count)
                                 if tmdb_gap > 0:
-                                    validated_missing[season_num] = max(miss_count, tmdb_gap)
+                                    # In only_aired mode TMDB gap already reflects aired episodes only.
+                                    # Keep it as the authoritative count to avoid counting unaired episodes
+                                    # from Emby placeholders/inferred gaps.
+                                    if only_aired:
+                                        validated_missing[season_num] = tmdb_gap
+                                    else:
+                                        validated_missing[season_num] = max(miss_count, tmdb_gap)
                                 elif miss_count > 0:
                                     conflict_items.append((season_num, "no_gap_by_tmdb", int(expected_count), present_count))
                             if conflict_items:
@@ -8523,14 +9850,11 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                     "year": production_year,
                 })
 
-            if scanned_count == 1 or scanned_count % 20 == 0 or scanned_count == total_series:
-                _publish_running(
-                    f"后台执行中：结果汇总 {scanned_count}/{total_series}，已发现缺季 {missing_count}，待提交 {len(candidates)}。",
-                    scanned=scanned_count,
-                    missing=missing_count,
-                    pending=len(candidates),
-                    submitted=0,
-                )
+            _publish_summary_progress(
+                title,
+                force=(scanned_count == 1 or scanned_count == total_series or scanned_count % 20 == 0),
+                sync_preview=(scanned_count % 20 == 0),
+            )
 
         candidates.sort(
             key=lambda item: (
@@ -8581,6 +9905,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
                     "type": "电视剧",
                     "year": year,
                     "note": f"Emby 自动补缺 {season_label}（缺失 {int(item.get('missing_episodes') or 0)} 集）",
+                    "missing_episodes": int(item.get("missing_episodes") or 0),
                     "hdhive_url": "",
                     "tmdb_api_key": runtime.get("tmdb_api_key") or "",
                     "tmdb_id": "",
@@ -8678,7 +10003,7 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
         if not series_items and not series_err:
             message = "未获取到可扫描的 Emby 剧集"
             status = "warning"
-        elif missing_filter_ignored:
+        elif missing_filter_ignored_series > 0:
             message += "（Emby 缺集标记不可用，已按集号断档推断）"
             if status == "success":
                 status = "warning"
@@ -8700,7 +10025,10 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             f"pending={len(candidates)} submitted={len(submitted)} cooldown_skipped={cooldown_skipped} ignored={ignored_skipped} "
             f"inferred_missing={inferred_missing_count} api_errors={api_errors} submit_errors={submit_errors} "
             f"tmdb_checked_series={tmdb_checked_series} tmdb_conflicts={tmdb_conflicts} "
-            f"missing_filter_ignored={str(missing_filter_ignored).lower()}"
+            f"tmdb_validation_enabled={str(bool(tmdb_validation_enabled)).lower()} "
+            f"strict_missing={str(bool(strict_missing_markers_only)).lower()} "
+            f"missing_filter_ignored_series={int(missing_filter_ignored_series)} "
+            f"missing_filter_ignored={str(missing_filter_ignored_series > 0).lower()}"
         ]
         if preview_only:
             for item in missing_items_out[:20]:
@@ -8745,7 +10073,8 @@ def _run_emby_gap_fill_once(config: dict, trigger: str = "manual", *, preview_on
             "tmdb_checked_series": tmdb_checked_series,
             "tmdb_conflicts": tmdb_conflicts,
         }
-        result["missing_filter_ignored"] = bool(missing_filter_ignored)
+        result["missing_filter_ignored"] = bool(missing_filter_ignored_series > 0)
+        result["missing_filter_ignored_series"] = int(missing_filter_ignored_series)
         result["missing_items"] = missing_items_out
         result["submitted_items"] = submitted
         return result
@@ -8864,6 +10193,7 @@ def _submit_emby_gap_item(
         "type": "电视剧",
         "year": show_year,
         "note": f"Emby 手动补缺 {season_label}（缺失 {miss_count} 集）",
+        "missing_episodes": miss_count,
         "hdhive_url": "",
         "tmdb_api_key": runtime.get("tmdb_api_key") or "",
         "tmdb_id": "",
@@ -8918,6 +10248,42 @@ def _submit_emby_gap_item(
     }
 
 
+def _should_preserve_previous_emby_missing_items(result: dict, previous_items: list) -> bool:
+    if not isinstance(previous_items, list) or not previous_items:
+        return False
+    if not isinstance(result, dict):
+        return False
+    if bool(result.get("strict_missing_markers_only", False)):
+        return False
+    if not bool(result.get("tmdb_validation_enabled", False)):
+        return False
+    summary_raw = result.get("summary") if isinstance(result.get("summary"), dict) else {}
+
+    def _to_int(val, default: int = 0) -> int:
+        try:
+            return int(val or 0)
+        except Exception:
+            return int(default)
+
+    scanned = _to_int(summary_raw.get("scanned", 0))
+    missing = _to_int(summary_raw.get("missing", 0))
+    inferred_missing = _to_int(summary_raw.get("inferred_missing", 0))
+    series_with_missing = _to_int(summary_raw.get("series_with_missing", 0))
+    tmdb_checked_series = _to_int(summary_raw.get("tmdb_checked_series", 0))
+    api_errors = _to_int(summary_raw.get("api_errors", 0))
+    submit_errors = _to_int(summary_raw.get("submit_errors", 0))
+    if scanned <= 0 or missing != 0:
+        return False
+    if inferred_missing > 0 or series_with_missing > 0:
+        return False
+    if api_errors > 0 or submit_errors > 0:
+        return False
+    # This pattern has been observed on some servers when Emby/TMDB probing
+    # intermittently returns empty responses. Keep the previous list to avoid
+    # wiping known missing items with an obviously suspicious all-zero run.
+    return tmdb_checked_series == 0
+
+
 def _update_emby_gap_fill_state_from_result(result: dict) -> tuple[str, str]:
     status = str((result or {}).get("status") or "error").strip().lower() or "error"
     message = str((result or {}).get("message") or "").strip() or "执行完成"
@@ -8934,6 +10300,16 @@ def _update_emby_gap_fill_state_from_result(result: dict) -> tuple[str, str]:
     if missing_items_state and submitted_items_state:
         missing_items_state, _ = _prune_emby_gap_missing_items(missing_items_state, submitted_items_state)
     current_state = get_emby_gap_fill_scheduler_state()
+    previous_missing_items = current_state.get("last_missing_items") if isinstance(current_state.get("last_missing_items"), list) else []
+    if _should_preserve_previous_emby_missing_items(result, previous_missing_items):
+        missing_items_state = list(previous_missing_items)
+        if "已保留上次缺失列表" not in message:
+            message = f"{message}（本次查漏结果为空，已保留上次缺失列表）"
+        if status == "success":
+            status = "warning"
+        _append_emby_gap_fill_log([
+            f"[{_format_scheduler_ts(time.time())}] [WARN] 本次查漏结果为空，沿用上次缺失列表 count={len(missing_items_state)}"
+        ])
     _set_emby_gap_fill_scheduler_state(
         last_run_at=_format_scheduler_ts(time.time()),
         last_status=status,
@@ -9379,6 +10755,17 @@ def _emby_gap_fill_scheduler_loop():
         submitted_items_state = result.get("submitted_items") if isinstance(result.get("submitted_items"), list) else []
         if missing_items_state and submitted_items_state:
             missing_items_state, _ = _prune_emby_gap_missing_items(missing_items_state, submitted_items_state)
+        current_state = get_emby_gap_fill_scheduler_state()
+        previous_missing_items = current_state.get("last_missing_items") if isinstance(current_state.get("last_missing_items"), list) else []
+        if _should_preserve_previous_emby_missing_items(result, previous_missing_items):
+            missing_items_state = list(previous_missing_items)
+            if "已保留上次缺失列表" not in message:
+                message = f"{message}（本次查漏结果为空，已保留上次缺失列表）"
+            if status == "success":
+                status = "warning"
+            _append_emby_gap_fill_log([
+                f"[{_format_scheduler_ts(time.time())}] [WARN] trigger=scheduler mode=apply 本次查漏结果为空，沿用上次缺失列表 count={len(missing_items_state)}"
+            ])
 
         if use_cron:
             next_run_ts = _next_run_by_cron(cron_expr, time.time())
@@ -10381,6 +11768,8 @@ def manage_config():
             auto_click_notify_targets = [k.strip() for k in request.form.get('auto_click_notify_targets', '').split(',') if k.strip()]
             auto_click_fast = request.form.get('auto_click_fast') == 'on'
             auto_click_fast_skip_processing = request.form.get('auto_click_fast_skip_processing') == 'on'
+            auto_click_captcha_reply = request.form.get('auto_click_captcha_reply') == 'on'
+            auto_click_captcha_keywords = [k.strip() for k in request.form.get('auto_click_captcha_keywords', '').split(',') if k.strip()]
             monitor_types = request.form.getlist('monitor_types')
             forward_only = False
             forward_enabled = keep_video_message or force_forward_all
@@ -10400,7 +11789,12 @@ def manage_config():
                 channel_id_int = int(channel_id)
                 target_user_ids_list = [uid.strip() for uid in target_user_ids_restricted.split(',') if uid.strip()]
 
-                auto_click_enabled = auto_click_redpacket or bool(auto_click_keywords)
+                auto_click_enabled = (
+                    auto_click_redpacket
+                    or bool(auto_click_keywords)
+                    or auto_click_captcha_reply
+                    or bool(auto_click_captcha_keywords)
+                )
 
                 # 如果不是转发模式，检查下载目录必须存在
                 if not forward_enabled and (not download_directory or not os.path.isdir(download_directory)):
@@ -10445,6 +11839,8 @@ def manage_config():
                             entry['auto_click_notify_targets'] = auto_click_notify_targets
                             entry['auto_click_fast'] = auto_click_fast
                             entry['auto_click_fast_skip_processing'] = auto_click_fast_skip_processing
+                            entry['auto_click_captcha_reply'] = auto_click_captcha_reply
+                            entry['auto_click_captcha_keywords'] = auto_click_captcha_keywords
                             entry['monitor_types'] = monitor_types
                             entry['forward_only'] = forward_only
                             found = True
@@ -10485,6 +11881,8 @@ def manage_config():
                         "auto_click_notify_targets": auto_click_notify_targets,
                         "auto_click_fast": auto_click_fast,
                         "auto_click_fast_skip_processing": auto_click_fast_skip_processing,
+                        "auto_click_captcha_reply": auto_click_captcha_reply,
+                        "auto_click_captcha_keywords": auto_click_captcha_keywords,
                         "monitor_types": monitor_types,
                         "forward_only": forward_only
                     })
@@ -10608,11 +12006,21 @@ def manage_config():
             max_results_raw = (request.form.get('self_service_search_max_results') or '').strip()
             cookie_check_mode = (request.form.get('self_service_cookie_check_mode') or 'warn').strip().lower()
             use_open_api = (request.form.get('self_service_use_open_api') or 'off').strip().lower() == 'on'
+            open_api_rate_limit_raw = (request.form.get('self_service_open_api_rate_limit_per_minute') or '').strip()
+            open_api_no_site_fallback_raw = request.form.get('self_service_open_api_no_site_fallback')
+            if open_api_no_site_fallback_raw is None:
+                open_api_no_site_fallback = bool(config.get("self_service_open_api_no_site_fallback", True))
+            else:
+                open_api_no_site_fallback = str(open_api_no_site_fallback_raw).strip().lower() in ("1", "true", "on", "yes")
             try:
                 max_results = int(max_results_raw) if max_results_raw != '' else 5
             except Exception:
                 max_results = 5
             max_results = max(1, min(max_results, 20))
+            open_api_rate_limit = _normalize_self_service_open_api_rate_limit_per_minute(
+                open_api_rate_limit_raw,
+                default=config.get("self_service_open_api_rate_limit_per_minute", 12) or 12,
+            )
             if cookie_check_mode not in ('strict', 'warn', 'off'):
                 cookie_check_mode = 'warn'
             try:
@@ -10643,6 +12051,8 @@ def manage_config():
             config['self_service_search_max_results'] = max_results
             config['self_service_cookie_check_mode'] = cookie_check_mode
             config['self_service_use_open_api'] = use_open_api
+            config['self_service_open_api_rate_limit_per_minute'] = open_api_rate_limit
+            config['self_service_open_api_no_site_fallback'] = open_api_no_site_fallback
             save_config(config)
             flash("自助观影申请配置已更新！", "success")
 
@@ -12192,7 +13602,7 @@ def self_service_request():
 @app.route('/self_service_result', strict_slashes=False)
 def self_service_result():
     rid = (request.args.get('rid') or '').strip()
-    result = _get_self_service_result(rid)
+    result = _get_self_service_result_for_context(rid)
     if not result:
         return jsonify({"found": False})
     return jsonify({"found": True, **result})
@@ -12206,7 +13616,7 @@ def self_service_transfer():
     if not rid or not slug:
         return jsonify({"success": False, "message": "缺少请求 ID 或资源标识。"}), 400
 
-    result = _get_self_service_result(rid)
+    result = _get_self_service_result_for_context(rid)
     if not result:
         return jsonify({"success": False, "message": "未找到对应的自助观影记录。"}), 404
     if not result.get("advanced_mode"):
@@ -12228,6 +13638,10 @@ def self_service_transfer():
     config = load_config()
     open_api_key = (config.get("hdhive_open_api_key") or "").strip()
     base_url = (config.get("hdhive_base_url") or "https://hdhive.com").strip() or "https://hdhive.com"
+    local_open_api_rate_limit = _normalize_self_service_open_api_rate_limit_per_minute(
+        config.get("self_service_open_api_rate_limit_per_minute"),
+        default=12,
+    )
     effective_targets = _get_self_service_notify_targets(config)
     interactive_meta = result.get("interactive_meta") if isinstance(result.get("interactive_meta"), dict) else {}
     storage_mode = _normalize_self_service_storage_mode(
@@ -12244,7 +13658,12 @@ def self_service_transfer():
         return jsonify({"success": False, "message": "当前仅支持手动转存到 115。"}), 400
 
     try:
-        unlock_resp = _hdhive_open_api_unlock(base_url, open_api_key, slug)
+        unlock_resp = _hdhive_open_api_unlock(
+            base_url,
+            open_api_key,
+            slug,
+            local_rate_limit_per_minute=local_open_api_rate_limit,
+        )
     except Exception as e:
         unlock_resp = {"success": False, "message": f"{type(e).__name__}: {e}"}
 
@@ -12328,6 +13747,59 @@ def self_service_transfer():
         "result": updated_result,
     })
 
+
+@app.route('/self_service_public_delete', methods=['POST'], strict_slashes=False)
+def self_service_public_delete():
+    rid = str(request.form.get("rid") or request.form.get("request_id") or "").strip()
+    if not rid:
+        flash("缺少申请记录 ID。", "warning")
+        return redirect(url_for("self_service_public"))
+
+    result = _get_self_service_result_for_context(rid)
+    if not result:
+        flash("未找到对应申请记录或无权限。", "warning")
+        return redirect(url_for("self_service_public"))
+
+    status = str(result.get("status") or "").strip().lower()
+    if status != "success":
+        flash("仅可删除申请成功的资源记录。", "warning")
+        return redirect(url_for("self_service_public"))
+
+    config = load_config()
+    delete_result = _emby_delete_media_for_result(config, result)
+    if not delete_result.get("ok"):
+        flash(f"删除 Emby 实体资源失败：{delete_result.get('message') or '未知错误'}", "error")
+        return redirect(url_for("self_service_public"))
+
+    item_name = str(delete_result.get("item_name") or "").strip()
+    item_year = str(delete_result.get("item_year") or "").strip()
+    item_id = str(delete_result.get("item_id") or "").strip()
+    deleted_label = item_name
+    if item_year:
+        deleted_label += f" ({item_year})"
+    if not deleted_label:
+        deleted_label = "目标资源"
+
+    detail = _build_self_service_detail([
+        f"Emby用户: {_format_self_service_emby_binding_label(_extract_self_service_requester_from_entry(result))}",
+        f"片名: {delete_result.get('title')}" if delete_result.get("title") else "",
+        f"年份: {delete_result.get('year')}" if delete_result.get("year") else "",
+        f"类型: {delete_result.get('type')}" if delete_result.get("type") else "",
+        f"说明: 已删除 Emby 媒体库实体资源",
+        f"资源: {deleted_label}",
+        f"EmbyID: {item_id}" if item_id else "",
+    ], max_lines=10, max_line_len=220)
+    _set_self_service_result(
+        rid,
+        "deleted",
+        "🗑️ 已删除 Emby 媒体库实体资源。",
+        detail,
+        extras={"emby_deleted": True, "emby_deleted_at": time.time(), "emby_deleted_item_id": item_id},
+    )
+
+    flash(f"已删除 Emby 实体资源：{deleted_label}", "success")
+    return redirect(url_for("self_service_public"))
+
 @app.route('/self_service_public', methods=['GET', 'POST'], strict_slashes=False)
 def self_service_public():
     config = load_config()
@@ -12335,6 +13807,16 @@ def self_service_public():
     enabled = bool(runtime.get("enabled"))
     public_enabled = bool(config.get("self_service_public_enabled", False))
     public_access_key = (config.get("self_service_public_access_key") or "").strip()
+    emby_runtime = _resolve_self_service_emby_runtime(config)
+    emby_login_available = bool(emby_runtime.get("base_url"))
+    emby_binding = _get_self_service_public_emby_session()
+    emby_logged_in = bool(emby_binding)
+    emby_binding_label = _format_self_service_emby_binding_label(emby_binding)
+    access_granted = _has_self_service_public_access_granted(public_access_key)
+    request_id = (request.args.get('rid') or '').strip()
+    request_result = _get_self_service_result_for_context(request_id) if request_id else {}
+    recent_limit = SELF_SERVICE_RECENT_DISPLAY_LIMIT
+    public_recent_results = _list_self_service_results_for_binding(emby_binding, recent_limit) if emby_logged_in else []
 
     if request.method == 'POST':
         if not enabled:
@@ -12343,11 +13825,50 @@ def self_service_public():
         if not public_enabled:
             flash("公共提交入口未启用，请联系管理员。", "warning")
             return redirect(url_for('self_service_public'))
-        if public_access_key:
-            provided_key = (request.form.get('access_key') or '').strip()
-            if provided_key != public_access_key:
-                flash("访问口令错误。", "error")
+
+        action = (request.form.get("action") or "submit").strip().lower()
+        if action == "public_logout":
+            _clear_self_service_public_auth_session()
+            flash("已退出 Emby 登录。", "info")
+            return redirect(url_for('self_service_public'))
+
+        if action == "public_login":
+            if public_access_key:
+                provided_key = (request.form.get('access_key') or '').strip()
+                if provided_key != public_access_key:
+                    flash("访问口令错误。", "error")
+                    return redirect(url_for('self_service_public'))
+                _set_self_service_public_access_granted(public_access_key)
+
+            if not emby_login_available:
+                flash("未配置 Emby 地址，请联系管理员先在追剧设置中配置 Emby。", "error")
                 return redirect(url_for('self_service_public'))
+
+            username = _normalize_self_service_requester_account(request.form.get("emby_username") or "")
+            password = str(request.form.get("emby_password") or "")
+            binding, err = _emby_authenticate_public_user(
+                emby_runtime.get("base_url") or "",
+                username,
+                password,
+                timeout=20,
+            )
+            if err:
+                flash(err, "error")
+                return redirect(url_for('self_service_public'))
+
+            _set_self_service_public_emby_session(binding)
+            flash(f"Emby 登录成功：{_format_self_service_emby_binding_label(binding)}", "success")
+            return redirect(url_for('self_service_public'))
+
+        if public_access_key and not _has_self_service_public_access_granted(public_access_key):
+            flash("请先输入访问口令并完成 Emby 登录。", "warning")
+            return redirect(url_for('self_service_public'))
+
+        emby_binding = _get_self_service_public_emby_session()
+        if not emby_binding:
+            flash("请先使用 Emby 账号登录。", "warning")
+            return redirect(url_for('self_service_public'))
+
         rate_cfg = config.get("self_service_public_rate_limit") if isinstance(config.get("self_service_public_rate_limit"), dict) else {}
         allowed, retry_after = _check_public_rate_limit(request, rate_cfg)
         if not allowed:
@@ -12362,6 +13883,7 @@ def self_service_public():
             disabled_message="自助观影申请功能未启用，请联系管理员。",
             missing_targets_message="未配置通知用户，请联系管理员。",
             strict_cookie_message="请联系管理员。",
+            requester_binding_override=emby_binding,
         )
 
     return render_template(
@@ -12369,13 +13891,19 @@ def self_service_public():
         enabled=enabled,
         public_enabled=public_enabled,
         require_access_key=bool(public_access_key),
+        access_granted=access_granted,
+        emby_login_available=emby_login_available,
+        emby_logged_in=emby_logged_in,
+        emby_binding_label=emby_binding_label,
         max_results=runtime.get("max_results"),
         has_cookie=bool(runtime.get("hdhive_cookie")),
         has_open_api_key=bool(runtime.get("hdhive_api_key")),
         use_open_api=runtime.get("use_open_api"),
         target_display="管理员" if runtime.get("effective_targets") else "未配置",
-        request_id=(request.args.get('rid') or '').strip(),
-        request_result=_get_self_service_result(request.args.get('rid') or ''),
+        request_id=request_id,
+        request_result=request_result,
+        recent_limit=recent_limit,
+        public_recent_results=public_recent_results,
     )
 
 @app.route('/api/download', methods=['POST'])

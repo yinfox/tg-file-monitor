@@ -9,10 +9,11 @@ import sqlite3
 import re
 import codecs
 import shutil
+import hashlib
 from functools import lru_cache
-from collections import deque
+from collections import deque, Counter
 from dataclasses import dataclass
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Set
 from types import SimpleNamespace
 import html
 from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
@@ -3426,6 +3427,51 @@ def match_keyword(pattern, text, text_lower: Optional[str] = None):
 
 AUTO_CLICK_HISTORY: Dict[Tuple[int, int], float] = {}
 AUTO_CLICK_HISTORY_TTL_SECONDS = 30
+AUTO_CAPTCHA_REPLY_HISTORY: Dict[Tuple[int, int], float] = {}
+AUTO_CAPTCHA_REPLY_HISTORY_TTL_SECONDS = 180
+AUTO_CAPTCHA_REPLY_INFLIGHT: Dict[Tuple[int, int], float] = {}
+AUTO_CAPTCHA_REPLY_INFLIGHT_TTL_SECONDS = 45
+AUTO_CAPTCHA_NOTIFY_HISTORY: Dict[Tuple[int, int, str], float] = {}
+AUTO_CAPTCHA_NOTIFY_DEFAULT_TTL_SECONDS = 120
+AUTO_CAPTCHA_REPLY_CANDIDATE_WAIT_SECONDS = 7.0
+AUTO_CAPTCHA_REPLY_CANDIDATE_POLL_SECONDS = 0.35
+AUTO_CAPTCHA_POST_CLICK_PROBE_OFFSETS = (0.25, 0.7, 1.2, 2.0, 3.2, 5.0, 7.0)
+
+_CAPTCHA_OCR_ENGINE = None
+_CAPTCHA_OCR_INIT_DONE = False
+_CAPTCHA_OCR_OLD_ENGINE = None
+_CAPTCHA_OCR_OLD_INIT_DONE = False
+_CAPTCHA_OCR_DET_ENGINE = None
+_CAPTCHA_OCR_DET_INIT_DONE = False
+_CAPTCHA_OCR_LOCK = threading.Lock()
+_CAPTCHA_OCR_INFER_LOCK = threading.Lock()
+_CAPTCHA_OCR_CHARSET = list("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+_CAPTCHA_CHAR_CONFUSION_MAP: Dict[str, List[str]] = {
+    "0": ["O", "o", "Q"],
+    "1": ["I", "l", "i", "T"],
+    "2": ["Z", "z"],
+    "5": ["S", "s", "Y"],
+    "6": ["G", "g"],
+    "8": ["B", "b"],
+    "9": ["g", "q"],
+    "H": ["N", "M", "h"],
+    "h": ["n", "m", "H"],
+    "N": ["H", "M", "n"],
+    "n": ["h", "m", "N"],
+    "S": ["Y", "5", "s"],
+    "s": ["y", "5", "S"],
+    "Y": ["S", "V", "y"],
+    "y": ["s", "v", "Y"],
+    "V": ["Y", "v"],
+    "v": ["y", "V"],
+    "O": ["0", "Q", "o"],
+    "o": ["0", "a", "O"],
+    "I": ["1", "l", "i"],
+    "l": ["1", "I", "i"],
+    "i": ["1", "l", "I"],
+    "B": ["8", "b"],
+    "b": ["8", "B"],
+}
 
 
 def _normalize_keyword_list(value) -> List[str]:
@@ -3440,19 +3486,36 @@ def _normalize_keyword_list(value) -> List[str]:
     return [str(v).strip() for v in items if str(v).strip()]
 
 
-def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, List[str]]:
+def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
     keywords = _normalize_keyword_list(restricted_entry.get('auto_click_keywords'))
     button_texts = _normalize_keyword_list(restricted_entry.get('auto_click_button_texts'))
     notify_targets = _normalize_keyword_list(restricted_entry.get('auto_click_notify_targets'))
+    captcha_keywords = _normalize_keyword_list(restricted_entry.get('auto_click_captcha_keywords'))
+
+    if restricted_entry.get('auto_click_captcha_reply') is None:
+        captcha_reply_enabled = bool(restricted_entry.get('auto_click_redpacket'))
+    else:
+        captcha_reply_enabled = bool(restricted_entry.get('auto_click_captcha_reply'))
+    if restricted_entry.get('auto_click_captcha_reply_from_success_only') is None:
+        captcha_reply_from_success_only = True
+    else:
+        captcha_reply_from_success_only = bool(
+            restricted_entry.get('auto_click_captcha_reply_from_success_only')
+        )
 
     # Backward-compatible quick toggle: auto_click_redpacket=true uses default keyword
     if restricted_entry.get('auto_click_redpacket') and not keywords:
         keywords = ['发了一个红包']
+    if restricted_entry.get('auto_click_redpacket') and not captcha_keywords:
+        captcha_keywords = ['回复本消息', '验证码', '口令红包']
 
     return {
         "keywords": keywords,
         "button_texts": button_texts,
         "notify_targets": notify_targets,
+        "captcha_reply_enabled": captcha_reply_enabled,
+        "captcha_reply_from_success_only": captcha_reply_from_success_only,
+        "captcha_keywords": captcha_keywords,
     }
 
 
@@ -3554,6 +3617,1419 @@ def _auto_click_recently(chat_id: int, msg_id: int) -> bool:
 
 def _mark_auto_clicked(chat_id: int, msg_id: int) -> None:
     AUTO_CLICK_HISTORY[(chat_id, msg_id)] = time.time()
+
+
+def _auto_captcha_replied_recently(chat_id: int, msg_id: int) -> bool:
+    now = time.time()
+    stale_keys = []
+    for k, ts in AUTO_CAPTCHA_REPLY_HISTORY.items():
+        if now - ts > AUTO_CAPTCHA_REPLY_HISTORY_TTL_SECONDS:
+            stale_keys.append(k)
+    for k in stale_keys:
+        AUTO_CAPTCHA_REPLY_HISTORY.pop(k, None)
+    ts = AUTO_CAPTCHA_REPLY_HISTORY.get((chat_id, msg_id))
+    return bool(ts and (now - ts) < AUTO_CAPTCHA_REPLY_HISTORY_TTL_SECONDS)
+
+
+def _mark_auto_captcha_replied(chat_id: int, msg_id: int) -> None:
+    AUTO_CAPTCHA_REPLY_HISTORY[(chat_id, msg_id)] = time.time()
+
+
+def _try_acquire_auto_captcha_reply_slot(chat_id: int, msg_id: int) -> bool:
+    now = time.time()
+    stale_keys = []
+    for k, ts in AUTO_CAPTCHA_REPLY_INFLIGHT.items():
+        if now - ts > AUTO_CAPTCHA_REPLY_INFLIGHT_TTL_SECONDS:
+            stale_keys.append(k)
+    for k in stale_keys:
+        AUTO_CAPTCHA_REPLY_INFLIGHT.pop(k, None)
+
+    key = (chat_id, msg_id)
+    ts = AUTO_CAPTCHA_REPLY_INFLIGHT.get(key)
+    if ts and (now - ts) < AUTO_CAPTCHA_REPLY_INFLIGHT_TTL_SECONDS:
+        return False
+    AUTO_CAPTCHA_REPLY_INFLIGHT[key] = now
+    return True
+
+
+def _release_auto_captcha_reply_slot(chat_id: int, msg_id: int) -> None:
+    AUTO_CAPTCHA_REPLY_INFLIGHT.pop((chat_id, msg_id), None)
+
+
+def _captcha_notify_recently(chat_id: int, msg_id: int, stage: str, *, ttl_seconds: int) -> bool:
+    now = time.time()
+    ttl = max(20, int(ttl_seconds))
+    stale_keys = []
+    for k, ts in AUTO_CAPTCHA_NOTIFY_HISTORY.items():
+        if now - ts > max(ttl, AUTO_CAPTCHA_NOTIFY_DEFAULT_TTL_SECONDS):
+            stale_keys.append(k)
+    for k in stale_keys:
+        AUTO_CAPTCHA_NOTIFY_HISTORY.pop(k, None)
+
+    key = (int(chat_id), int(msg_id), str(stage or 'default'))
+    ts = AUTO_CAPTCHA_NOTIFY_HISTORY.get(key)
+    return bool(ts and (now - ts) < ttl)
+
+
+def _mark_captcha_notify_sent(chat_id: int, msg_id: int, stage: str) -> None:
+    key = (int(chat_id), int(msg_id), str(stage or 'default'))
+    AUTO_CAPTCHA_NOTIFY_HISTORY[key] = time.time()
+
+
+async def _send_captcha_manual_notify(
+    event,
+    msg,
+    rules: dict,
+    *,
+    stage: str,
+    title: str,
+    lines: List[str],
+    ttl_seconds: int = AUTO_CAPTCHA_NOTIFY_DEFAULT_TTL_SECONDS,
+) -> None:
+    notify_targets = rules.get('notify_targets') or []
+    if not notify_targets:
+        return
+
+    chat_id = getattr(event, 'chat_id', None)
+    msg_id = getattr(msg, 'id', None)
+    if chat_id is None or msg_id is None:
+        return
+    if _captcha_notify_recently(chat_id, msg_id, stage, ttl_seconds=ttl_seconds):
+        return
+    _mark_captcha_notify_sent(chat_id, msg_id, stage)
+
+    chat_title = None
+    try:
+        chat_title = getattr(event.chat, 'title', None)
+    except Exception:
+        chat_title = None
+    msg_link = _build_message_link(event, msg)
+
+    message_lines = [title, f"群: {chat_title or chat_id}", f"消息ID: {msg_id}"]
+    for line in (lines or []):
+        if line:
+            message_lines.append(str(line))
+    if msg_link:
+        message_lines.append(f"链接: {msg_link}")
+    message_lines.append("建议: 看到口令后可手动回复补刀。")
+    payload = "\n".join(message_lines)
+
+    for target in notify_targets:
+        try:
+            await client.send_message(target, payload)
+        except Exception as e:
+            log_message(f"口令红包手动补刀通知失败: target={target} err={e}")
+
+
+def _message_has_image_media(msg) -> bool:
+    if getattr(msg, 'photo', None):
+        return True
+    media = getattr(msg, 'media', None)
+    if isinstance(media, MessageMediaDocument):
+        document = getattr(media, 'document', None)
+        mime_type = str(getattr(document, 'mime_type', '') or '').lower()
+        if mime_type.startswith('image/'):
+            return True
+    return False
+
+
+def _looks_like_redpacket_captcha_prompt(message_text: str, keywords: List[str]) -> bool:
+    if not message_text:
+        return False
+    text = str(message_text)
+    text_lower = text.lower()
+
+    if keywords:
+        if not any(match_keyword(keyword, text, text_lower) for keyword in keywords):
+            return False
+
+    has_reply_hint = ('回复' in text) or ('reply' in text_lower)
+    has_code_hint = ('验证码' in text) or ('口令' in text) or ('captcha' in text_lower)
+    return has_reply_hint and has_code_hint
+
+
+def _get_captcha_ocr_engine():
+    global _CAPTCHA_OCR_ENGINE, _CAPTCHA_OCR_INIT_DONE
+    if _CAPTCHA_OCR_ENGINE is not None:
+        return _CAPTCHA_OCR_ENGINE
+    if _CAPTCHA_OCR_INIT_DONE:
+        return None
+
+    with _CAPTCHA_OCR_LOCK:
+        if _CAPTCHA_OCR_ENGINE is not None:
+            return _CAPTCHA_OCR_ENGINE
+        if _CAPTCHA_OCR_INIT_DONE:
+            return None
+        _CAPTCHA_OCR_INIT_DONE = True
+        try:
+            import ddddocr  # type: ignore
+
+            _CAPTCHA_OCR_ENGINE = ddddocr.DdddOcr(show_ad=False)
+            try:
+                _CAPTCHA_OCR_ENGINE.set_ranges(''.join(_CAPTCHA_OCR_CHARSET))
+            except Exception:
+                pass
+            log_message("口令红包 OCR 引擎已启用。")
+        except Exception as e:
+            _CAPTCHA_OCR_ENGINE = None
+            log_message(f"口令红包 OCR 引擎不可用（请安装 ddddocr）：{e}", level="WARNING")
+
+    return _CAPTCHA_OCR_ENGINE
+
+
+def _get_captcha_ocr_old_engine():
+    global _CAPTCHA_OCR_OLD_ENGINE, _CAPTCHA_OCR_OLD_INIT_DONE
+    if _CAPTCHA_OCR_OLD_ENGINE is not None:
+        return _CAPTCHA_OCR_OLD_ENGINE
+    if _CAPTCHA_OCR_OLD_INIT_DONE:
+        return None
+
+    with _CAPTCHA_OCR_LOCK:
+        if _CAPTCHA_OCR_OLD_ENGINE is not None:
+            return _CAPTCHA_OCR_OLD_ENGINE
+        if _CAPTCHA_OCR_OLD_INIT_DONE:
+            return None
+        _CAPTCHA_OCR_OLD_INIT_DONE = True
+        try:
+            import ddddocr  # type: ignore
+
+            _CAPTCHA_OCR_OLD_ENGINE = ddddocr.DdddOcr(show_ad=False, old=True)
+            try:
+                _CAPTCHA_OCR_OLD_ENGINE.set_ranges(''.join(_CAPTCHA_OCR_CHARSET))
+            except Exception:
+                pass
+            log_message("口令红包 OCR old 模型已启用。")
+        except Exception as e:
+            _CAPTCHA_OCR_OLD_ENGINE = None
+            debug_log(f" 口令红包 OCR old 模型初始化失败: {e}")
+
+    return _CAPTCHA_OCR_OLD_ENGINE
+
+
+def _get_captcha_ocr_det_engine():
+    global _CAPTCHA_OCR_DET_ENGINE, _CAPTCHA_OCR_DET_INIT_DONE
+    if _CAPTCHA_OCR_DET_ENGINE is not None:
+        return _CAPTCHA_OCR_DET_ENGINE
+    if _CAPTCHA_OCR_DET_INIT_DONE:
+        return None
+
+    with _CAPTCHA_OCR_LOCK:
+        if _CAPTCHA_OCR_DET_ENGINE is not None:
+            return _CAPTCHA_OCR_DET_ENGINE
+        if _CAPTCHA_OCR_DET_INIT_DONE:
+            return None
+        _CAPTCHA_OCR_DET_INIT_DONE = True
+        try:
+            import ddddocr  # type: ignore
+
+            _CAPTCHA_OCR_DET_ENGINE = ddddocr.DdddOcr(det=True, show_ad=False)
+            log_message("口令红包 OCR det 模型已启用。")
+        except Exception as e:
+            _CAPTCHA_OCR_DET_ENGINE = None
+            debug_log(f" 口令红包 OCR det 模型初始化失败: {e}")
+
+    return _CAPTCHA_OCR_DET_ENGINE
+
+
+def _get_captcha_ocr_engines() -> List[Tuple[str, object]]:
+    engines: List[Tuple[str, object]] = []
+    primary = _get_captcha_ocr_engine()
+    if primary is not None:
+        engines.append(("main", primary))
+
+    # old 模型在噪声图上有时更稳，作为降级兜底
+    old_engine = _get_captcha_ocr_old_engine()
+    if old_engine is not None:
+        engines.append(("old", old_engine))
+    return engines
+
+
+def _normalize_captcha_code(raw_text: str) -> str:
+    text = str(raw_text or '').strip()
+    if not text:
+        return ''
+
+    compact = re.sub(r'\s+', '', text)
+    alnum_tokens = re.findall(r'[A-Za-z0-9]{3,20}', compact)
+    if alnum_tokens:
+        return max(alnum_tokens, key=len)
+
+    cleaned = re.sub(r'[^A-Za-z0-9]', '', compact)
+    if 3 <= len(cleaned) <= 20:
+        return cleaned
+    return ''
+
+
+def _build_captcha_image_variants(image_bytes: bytes) -> List[Tuple[str, bytes]]:
+    variants: List[Tuple[str, bytes]] = [("raw", image_bytes)]
+
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+    except Exception as e:
+        debug_log(f" 验证码图像预处理不可用(cv2/numpy): {e}")
+        return variants
+
+    try:
+        data = np.frombuffer(image_bytes, dtype=np.uint8)
+        img = cv2.imdecode(data, cv2.IMREAD_COLOR)
+        if img is None:
+            return variants
+
+        h, w = img.shape[:2]
+
+        # 先尝试目标检测裁剪，减少背景干扰
+        det_engine = _get_captcha_ocr_det_engine()
+        if det_engine is not None:
+            try:
+                with _CAPTCHA_OCR_INFER_LOCK:
+                    det_boxes = det_engine.detection(image_bytes) or []
+            except Exception as e:
+                det_boxes = []
+                debug_log(f" 验证码 det 检测失败: {e}")
+
+            norm_boxes: List[Tuple[int, int, int, int]] = []
+            for box in det_boxes:
+                if not isinstance(box, (list, tuple)) or len(box) < 4:
+                    continue
+                if len(box) >= 8:
+                    xs = [int(v) for i, v in enumerate(box) if i % 2 == 0]
+                    ys = [int(v) for i, v in enumerate(box) if i % 2 == 1]
+                    x1, y1, x2, y2 = min(xs), min(ys), max(xs), max(ys)
+                else:
+                    x1, y1, x2, y2 = [int(v) for v in box[:4]]
+                x1 = max(0, min(w - 1, x1))
+                x2 = max(0, min(w - 1, x2))
+                y1 = max(0, min(h - 1, y1))
+                y2 = max(0, min(h - 1, y2))
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                norm_boxes.append((x1, y1, x2, y2))
+
+            if norm_boxes:
+                norm_boxes.sort(key=lambda b: (b[2] - b[0]) * (b[3] - b[1]), reverse=True)
+                union_x1 = min(b[0] for b in norm_boxes)
+                union_y1 = min(b[1] for b in norm_boxes)
+                union_x2 = max(b[2] for b in norm_boxes)
+                union_y2 = max(b[3] for b in norm_boxes)
+                pad = 6
+                union_x1 = max(0, union_x1 - pad)
+                union_y1 = max(0, union_y1 - pad)
+                union_x2 = min(w - 1, union_x2 + pad)
+                union_y2 = min(h - 1, union_y2 + pad)
+                crop_union = img[union_y1:union_y2, union_x1:union_x2]
+                if crop_union.size > 0:
+                    ok, encoded = cv2.imencode('.png', crop_union)
+                    if ok and encoded is not None:
+                        variants.append(("det_union", encoded.tobytes()))
+
+                for idx, (x1, y1, x2, y2) in enumerate(norm_boxes[:3]):
+                    pad = 4
+                    x1 = max(0, x1 - pad)
+                    y1 = max(0, y1 - pad)
+                    x2 = min(w - 1, x2 + pad)
+                    y2 = min(h - 1, y2 + pad)
+                    crop = img[y1:y2, x1:x2]
+                    if crop.size <= 0:
+                        continue
+                    ok, encoded = cv2.imencode('.png', crop)
+                    if ok and encoded is not None:
+                        variants.append((f"det_box{idx}", encoded.tobytes()))
+
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        proc_images = [("gray", gray)]
+
+        for scale in (2.0, 2.6):
+            resized = cv2.resize(gray, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            proc_images.append((f"gray_x{scale:.1f}", resized))
+
+            blur = cv2.GaussianBlur(resized, (3, 3), 0)
+            proc_images.append((f"blur_x{scale:.1f}", blur))
+
+            _, otsu_bin = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            proc_images.append((f"otsu_x{scale:.1f}", otsu_bin))
+            proc_images.append((f"otsu_inv_x{scale:.1f}", 255 - otsu_bin))
+
+            adaptive = cv2.adaptiveThreshold(
+                blur,
+                255,
+                cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                cv2.THRESH_BINARY,
+                31,
+                8,
+            )
+            proc_images.append((f"adaptive_x{scale:.1f}", adaptive))
+            proc_images.append((f"adaptive_inv_x{scale:.1f}", 255 - adaptive))
+
+        seen = {hashlib.md5(image_bytes).hexdigest()}
+        for name, mat in proc_images:
+            ok, encoded = cv2.imencode('.png', mat)
+            if not ok or encoded is None:
+                continue
+            payload = encoded.tobytes()
+            digest = hashlib.md5(payload).hexdigest()
+            if digest in seen:
+                continue
+            seen.add(digest)
+            variants.append((name, payload))
+    except Exception as e:
+        debug_log(f" 验证码图像预处理失败: {e}")
+
+    # 限制尝试次数，避免极端情况下过慢
+    return variants[:12]
+
+
+def _run_captcha_ocr_once(engine, image_bytes: bytes, *, png_fix: bool) -> str:
+    with _CAPTCHA_OCR_INFER_LOCK:
+        try:
+            ocr_engine = getattr(engine, 'ocr_engine', None)
+            charset_range = ''.join(_CAPTCHA_OCR_CHARSET)
+            if ocr_engine is not None and hasattr(ocr_engine, 'predict'):
+                raw_result = ocr_engine.predict(image_bytes, png_fix=png_fix, charset_range=charset_range)
+            else:
+                try:
+                    raw_result = engine.classification(image_bytes, png_fix=png_fix)
+                except TypeError:
+                    raw_result = engine.classification(image_bytes)
+        except Exception as e:
+            debug_log(f" 验证码 OCR 识别异常: {e}")
+            return ''
+    return str(raw_result or '').strip()
+
+
+def _run_captcha_ocr_probability_once(engine, image_bytes: bytes, *, png_fix: bool):
+    with _CAPTCHA_OCR_INFER_LOCK:
+        try:
+            ocr_engine = getattr(engine, 'ocr_engine', None)
+            charset_range = ''.join(_CAPTCHA_OCR_CHARSET)
+            if ocr_engine is not None and hasattr(ocr_engine, 'predict'):
+                result = ocr_engine.predict(
+                    image_bytes,
+                    png_fix=png_fix,
+                    probability=True,
+                    charset_range=charset_range,
+                )
+            else:
+                try:
+                    result = engine.classification(image_bytes, png_fix=png_fix, probability=True)
+                except TypeError:
+                    result = engine.classification(image_bytes, png_fix=png_fix)
+        except Exception as e:
+            debug_log(f" 验证码 OCR 概率识别异常: {e}")
+            return None
+    return result if isinstance(result, dict) else None
+
+
+def _ctc_decode_indices(indices: List[int]) -> List[int]:
+    out: List[int] = []
+    prev = None
+    for idx in indices:
+        idx = int(idx)
+        if idx == prev:
+            continue
+        prev = idx
+        if idx == 0:
+            continue
+        out.append(idx)
+    return out
+
+
+def _extract_probability_candidates(prob_result, *, top_n: int = 4) -> List[Tuple[str, float]]:
+    if not isinstance(prob_result, dict):
+        return []
+    probs = prob_result.get('probabilities')
+    charset = prob_result.get('charset')
+    if not isinstance(probs, list) or not probs or not isinstance(charset, list) or not charset:
+        return []
+
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        return []
+
+    arr = np.asarray(probs, dtype=float)
+    if arr.ndim == 3:
+        if arr.shape[1] == 1:
+            arr = arr[:, 0, :]
+        elif arr.shape[0] == 1:
+            arr = arr[0, :, :]
+        else:
+            arr = arr[0, :, :]
+    if arr.ndim != 2:
+        return []
+
+    time_steps, class_count = arr.shape
+    if class_count <= 1:
+        return []
+
+    allowed = set(_CAPTCHA_OCR_CHARSET)
+    index_pool = [0]
+    for idx, ch in enumerate(charset):
+        if idx == 0:
+            continue
+        if ch in allowed:
+            index_pool.append(idx)
+    index_pool = sorted(set(i for i in index_pool if 0 <= i < class_count))
+    if len(index_pool) <= 1:
+        return []
+
+    beam_width = 16
+    step_topk = 5
+    beams: Dict[Tuple[int, ...], float] = {tuple(): 0.0}
+
+    for t in range(time_steps):
+        row = arr[t]
+        candidates = sorted(
+            ((idx, float(row[idx])) for idx in index_pool),
+            key=lambda it: it[1],
+            reverse=True,
+        )[:step_topk]
+        if not candidates:
+            continue
+        next_beams: Dict[Tuple[int, ...], float] = {}
+        for seq, score in beams.items():
+            for idx, prob in candidates:
+                p = max(prob, 1e-12)
+                new_seq = seq + (idx,)
+                new_score = score + float(np.log(p))
+                prev_score = next_beams.get(new_seq)
+                if prev_score is None or new_score > prev_score:
+                    next_beams[new_seq] = new_score
+        if not next_beams:
+            continue
+        sorted_beams = sorted(next_beams.items(), key=lambda it: it[1], reverse=True)[:beam_width]
+        beams = {seq: score for seq, score in sorted_beams}
+
+    candidate_scores: Dict[str, float] = {}
+    for seq, score in beams.items():
+        decoded = _ctc_decode_indices(list(seq))
+        chars: List[str] = []
+        for idx in decoded:
+            if 0 <= idx < len(charset):
+                ch = str(charset[idx] or '')
+                if ch in allowed:
+                    chars.append(ch)
+        text = ''.join(chars)
+        code = _normalize_captcha_code(text)
+        if not code:
+            continue
+        # 偏好 3~6 位口令
+        len_penalty = abs(len(code) - 4) * 0.25
+        final_score = score - len_penalty
+        if code not in candidate_scores or final_score > candidate_scores[code]:
+            candidate_scores[code] = final_score
+
+    ranked = sorted(candidate_scores.items(), key=lambda it: it[1], reverse=True)
+    return ranked[:max(1, int(top_n))]
+
+
+def _extract_captcha_codes_from_image(image_bytes: bytes, *, max_candidates: int = 4) -> Tuple[List[str], str]:
+    engines = _get_captcha_ocr_engines()
+    if not engines or not image_bytes:
+        return [], 'engine_unavailable'
+
+    variants = _build_captcha_image_variants(image_bytes)
+    votes: Counter = Counter()
+    weights: Counter = Counter()
+    raw_hints: List[str] = []
+    prob_hints: List[str] = []
+
+    probability_variant_names = {'raw', 'gray', 'det_union', 'otsu_x2.0', 'adaptive_x2.0'}
+
+    for engine_name, engine in engines:
+        for variant_name, variant_bytes in variants:
+            for png_fix in (True, False):
+                raw_text = _run_captcha_ocr_once(engine, variant_bytes, png_fix=png_fix)
+                if raw_text:
+                    raw_hints.append(f"{engine_name}/{variant_name}:{raw_text[:16]}")
+                code = _normalize_captcha_code(raw_text)
+                if not code:
+                    continue
+
+                votes[code] += 1
+                weight = 1
+                if engine_name == "main":
+                    weight += 1
+                if variant_name in ("raw", "gray"):
+                    weight += 1
+                if png_fix:
+                    weight += 1
+                weights[code] += weight
+
+            if variant_name in probability_variant_names:
+                prob_result = _run_captcha_ocr_probability_once(engine, variant_bytes, png_fix=True)
+                for rank, (code, score) in enumerate(_extract_probability_candidates(prob_result, top_n=3), start=1):
+                    votes[code] += 1
+                    weight = max(1, 4 - rank)
+                    if engine_name == "main":
+                        weight += 1
+                    if variant_name in ("raw", "gray", "det_union"):
+                        weight += 1
+                    weights[code] += weight
+                    prob_hints.append(f"{engine_name}/{variant_name}:{code}@{score:.2f}")
+
+    if not votes:
+        summary = 'no_candidate'
+        if raw_hints:
+            summary = f"no_candidate raw_hints={'; '.join(raw_hints[:5])}"
+        if prob_hints:
+            summary = f"{summary} prob_hints={'; '.join(prob_hints[:4])}"
+        return [], summary
+
+    ranked_codes = sorted(votes.keys(), key=lambda c: (votes[c], weights[c], -abs(len(c) - 4), len(c)), reverse=True)
+    top_codes = ranked_codes[:max(1, int(max_candidates))]
+    best_code = top_codes[0]
+    top_desc = ','.join(f"{c}:{votes[c]}/{weights[c]}" for c in top_codes[:3])
+    summary = (
+        f"picked={best_code} votes={votes[best_code]} weight={weights[best_code]} "
+        f"top={top_desc} variants={len(variants)} engines={len(engines)}"
+    )
+    if prob_hints:
+        summary += f" prob={'; '.join(prob_hints[:4])}"
+    return top_codes, summary
+
+
+def _expand_captcha_confusion_candidates(codes: List[str], *, max_extra: int = 8) -> List[str]:
+    if not codes:
+        return []
+
+    ordered: List[str] = []
+    seen: set = set()
+    for code in codes:
+        norm = _normalize_captcha_code(code)
+        if not norm:
+            continue
+        if norm in seen:
+            continue
+        seen.add(norm)
+        ordered.append(norm)
+
+    if not ordered:
+        return []
+
+    base = ordered[0]
+    extras: List[str] = []
+    if not base:
+        return ordered
+
+    replacement_map: Dict[str, List[str]] = {}
+    for ch, reps in _CAPTCHA_CHAR_CONFUSION_MAP.items():
+        unique_reps: List[str] = []
+        for rep in reps:
+            if rep == ch or rep in unique_reps:
+                continue
+            unique_reps.append(rep)
+        replacement_map[ch] = unique_reps
+
+    # 0) 优先尝试双字符主替换（例如 HS8 -> NY8）
+    for i in range(len(base)):
+        rep_i = replacement_map.get(base[i], [])
+        if not rep_i:
+            continue
+        for j in range(i + 1, len(base)):
+            rep_j = replacement_map.get(base[j], [])
+            if not rep_j:
+                continue
+            chars = list(base)
+            chars[i] = rep_i[0]
+            chars[j] = rep_j[0]
+            norm = _normalize_captcha_code(''.join(chars))
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            extras.append(norm)
+            if len(extras) >= max_extra:
+                return ordered + extras
+
+    # 1) 单字符替换
+    for idx, ch in enumerate(base):
+        candidates = replacement_map.get(ch, [])
+        for rep in candidates:
+            new_code = base[:idx] + rep + base[idx + 1:]
+            norm = _normalize_captcha_code(new_code)
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            extras.append(norm)
+            if len(extras) >= max_extra:
+                return ordered + extras
+
+    # 2) 双字符替换（仅在还不够时）
+    for i in range(len(base)):
+        rep_i = replacement_map.get(base[i], [])
+        if not rep_i:
+            continue
+        for j in range(i + 1, len(base)):
+            rep_j = replacement_map.get(base[j], [])
+            if not rep_j:
+                continue
+            for a in rep_i[:2]:
+                for b in rep_j[:2]:
+                    chars = list(base)
+                    chars[i] = a
+                    chars[j] = b
+                    norm = _normalize_captcha_code(''.join(chars))
+                    if not norm or norm in seen:
+                        continue
+                    seen.add(norm)
+                    extras.append(norm)
+                    if len(extras) >= max_extra:
+                        return ordered + extras
+
+    return ordered + extras
+
+
+def _extract_captcha_code_from_image(image_bytes: bytes) -> Tuple[str, str]:
+    codes, summary = _extract_captcha_codes_from_image(image_bytes, max_candidates=4)
+    if not codes:
+        return '', summary
+    best_code = codes[0]
+    return best_code, summary
+
+
+def _contains_keyword(text: str, keywords: List[str]) -> bool:
+    if not text or not keywords:
+        return False
+    compact = str(text)
+    lower = compact.lower()
+    for kw in keywords:
+        if not kw:
+            continue
+        k = str(kw)
+        if k in compact or k.lower() in lower:
+            return True
+    return False
+
+
+def _classify_captcha_reply_feedback(text: str) -> str:
+    if not text:
+        return 'unknown'
+    raw_text = str(text).strip()
+    reject_keywords = [
+        '验证码错误', '口令错误', '验证码无效', '口令无效', '验证码不正确', '请输入正确验证码', '重新输入',
+        '口令不对', '验证码不对', '口令有误', '验证码有误', '口令不正确',
+    ]
+    closed_keywords = [
+        '已抢完', '已全部领取', '全部领取完', '没有剩余', '已结束', '已过期',
+    ]
+    success_keywords = [
+        '领取成功', '抢到了',
+    ]
+    success_patterns = [
+        r'(^|[\s:：])[^ \n]{1,40}\s*抢到(?:了)?\s*[-+]?\d+\s*积?分',
+        r'恭喜.*?(?:领取成功|抢到(?:了)?\s*[-+]?\d+\s*积?分)',
+    ]
+
+    if _contains_keyword(raw_text, reject_keywords):
+        return 'rejected'
+    if _contains_keyword(raw_text, closed_keywords):
+        return 'closed'
+    if _contains_keyword(raw_text, success_keywords):
+        return 'accepted'
+    for pattern in success_patterns:
+        if re.search(pattern, raw_text, flags=re.IGNORECASE):
+            return 'accepted'
+    return 'unknown'
+
+
+def _extract_captcha_code_from_text(text: str) -> str:
+    raw = str(text or '').strip()
+    if not raw:
+        return ''
+    # 优先提取连续英文数字段
+    tokens = re.findall(r'[A-Za-z0-9]{3,12}', raw)
+    compact = re.sub(r'\s+', '', raw)
+    if compact != raw:
+        compact_tokens = re.findall(r'[A-Za-z0-9]{3,12}', compact)
+        if compact_tokens:
+            seen_tokens = set(tokens)
+            for token in compact_tokens:
+                if token in seen_tokens:
+                    continue
+                seen_tokens.add(token)
+                tokens.append(token)
+    if tokens:
+        mixed_tokens = [t for t in tokens if (re.search(r'[A-Za-z]', t) and re.search(r'[0-9]', t))]
+        preferred_tokens = mixed_tokens or [t for t in tokens if 4 <= len(t) <= 8] or tokens
+        return sorted(preferred_tokens, key=lambda t: (abs(len(t) - 5), -len(t), t))[0]
+    cleaned = re.sub(r'[^A-Za-z0-9]', '', compact)
+    if 3 <= len(cleaned) <= 12:
+        return cleaned
+    return ''
+
+
+def _normalize_captcha_name_token(name: str) -> str:
+    raw = str(name or '').strip()
+    if not raw:
+        return ''
+    compact = re.sub(r'[\u200b\u200c\u200d\ufeff]', '', raw)
+    compact = re.sub(r'\s+', '', compact)
+    compact = compact.lower()
+    compact = re.sub(r'[^0-9a-z\u4e00-\u9fff]+', '', compact)
+    return compact[:40]
+
+
+def _extract_redpacket_winner_name_tokens(message_text: str) -> Set[str]:
+    if not message_text:
+        return set()
+
+    winner_tokens: Set[str] = set()
+    in_record_section = False
+
+    for line in str(message_text).splitlines():
+        row = str(line or '').strip()
+        if not row:
+            continue
+
+        if ('领取记录' in row) or ('中奖记录' in row) or ('手气榜' in row):
+            in_record_section = True
+            continue
+
+        if not in_record_section:
+            continue
+
+        if ('剩余' in row) or row.startswith('🎁') or row.startswith('📣'):
+            break
+
+        match = re.match(r'^[\-\u2022\u00b7]?\s*([^:：]{1,48})\s*[:：]\s*[-+]?\d+', row)
+        if not match:
+            if winner_tokens and ('积分' not in row):
+                break
+            continue
+
+        token = _normalize_captcha_name_token(match.group(1))
+        if token:
+            winner_tokens.add(token)
+
+    return winner_tokens
+
+
+def _extract_inline_redpacket_success_name_tokens(message_text: str) -> Set[str]:
+    if not message_text:
+        return set()
+
+    text = str(message_text)
+    tokens: Set[str] = set()
+    patterns = [
+        r'([^\s:：]{1,40})\s*抢到(?:了)?\s*[-+]?\d+\s*积?分',
+        r'([^\s:：]{1,40})\s*领取(?:了)?\s*[-+]?\d+\s*积?分',
+    ]
+
+    for pattern in patterns:
+        for match in re.finditer(pattern, text):
+            token = _normalize_captcha_name_token(match.group(1))
+            if token:
+                tokens.add(token)
+
+    return tokens
+
+
+def _collect_message_sender_name_tokens(msg) -> Set[str]:
+    sender_tokens: Set[str] = set()
+    candidates: List[str] = []
+
+    for attr_name in ('post_author', 'sender_name'):
+        value = getattr(msg, attr_name, None)
+        if value:
+            candidates.append(str(value))
+
+    sender = getattr(msg, 'sender', None)
+    if sender is not None:
+        first_name = str(getattr(sender, 'first_name', '') or '').strip()
+        last_name = str(getattr(sender, 'last_name', '') or '').strip()
+        username = str(getattr(sender, 'username', '') or '').strip()
+        title = str(getattr(sender, 'title', '') or '').strip()
+
+        if first_name:
+            candidates.append(first_name)
+        if last_name:
+            candidates.append(last_name)
+        if first_name or last_name:
+            candidates.append(f"{first_name}{last_name}".strip())
+            candidates.append(f"{first_name} {last_name}".strip())
+        if username:
+            candidates.append(username)
+        if title:
+            candidates.append(title)
+
+    for raw in candidates:
+        token = _normalize_captcha_name_token(raw)
+        if token:
+            sender_tokens.add(token)
+
+    return sender_tokens
+
+
+async def _extract_reply_based_captcha_candidates(
+    chat_id: int,
+    reply_to_msg_id: int,
+    *,
+    parent_message_text: str = '',
+    success_only: bool = False,
+    max_messages: int = 600,
+    max_candidates: int = 8,
+) -> Tuple[List[str], Dict[str, object]]:
+    detail: Dict[str, object] = {
+        'reply_total': 0,
+        'reply_code_total': 0,
+        'success_code_total': 0,
+        'accepted_code_total': 0,
+        'winner_code_total': 0,
+        'rejected_code_total': 0,
+        'success_only': bool(success_only),
+        'success_gate_applied': False,
+        'fallback_non_rejected': False,
+    }
+    if chat_id is None or reply_to_msg_id is None:
+        return [], detail
+
+    try:
+        recent = await client.get_messages(chat_id, limit=max_messages)
+    except Exception as e:
+        debug_log(f" 获取验证码回帖候选失败: ch={chat_id} msg={reply_to_msg_id} err={e}")
+        return [], detail
+
+    winner_name_tokens = _extract_redpacket_winner_name_tokens(parent_message_text)
+    reply_items: List[Dict[str, object]] = []
+    all_counter: Counter = Counter()
+    reply_code_by_msg_id: Dict[int, str] = {}
+    for m in recent or []:
+        try:
+            if getattr(m, 'out', False):
+                # 排除自己已经发出去的尝试码
+                continue
+        except Exception:
+            pass
+        rt = getattr(m, 'reply_to', None)
+        rid = None
+        if rt is not None:
+            rid = getattr(rt, 'reply_to_msg_id', None) or getattr(rt, 'reply_to_top_id', None)
+        try:
+            rid = int(rid or 0)
+        except Exception:
+            rid = 0
+        if rid != int(reply_to_msg_id):
+            continue
+        code = _normalize_captcha_code(_extract_captcha_code_from_text(getattr(m, 'message', '') or ''))
+        if not code:
+            continue
+
+        msg_id = int(getattr(m, 'id', 0) or 0)
+        sender_tokens = _collect_message_sender_name_tokens(m)
+        reply_items.append(
+            {
+                'msg_id': msg_id,
+                'code': code,
+                'sender_tokens': sender_tokens,
+            }
+        )
+        all_counter[code] += 1
+        if msg_id > 0:
+            reply_code_by_msg_id[msg_id] = code
+
+    detail['reply_total'] = len(reply_items)
+    detail['reply_code_total'] = len(all_counter)
+    if not reply_items:
+        return [], detail
+
+    accepted_codes: Set[str] = set()
+    rejected_codes: Set[str] = set()
+    latest_code_by_sender_token: Dict[str, str] = {}
+    for item in sorted(reply_items, key=lambda v: int(v.get('msg_id', 0) or 0), reverse=True):
+        code = str(item.get('code') or '')
+        if not code:
+            continue
+        sender_tokens = item.get('sender_tokens') or set()
+        if not isinstance(sender_tokens, set):
+            continue
+        for tk in sender_tokens:
+            if not tk:
+                continue
+            if tk not in latest_code_by_sender_token:
+                latest_code_by_sender_token[tk] = code
+
+    for m in recent or []:
+        text = str(getattr(m, 'message', '') or '').strip()
+        if not text:
+            continue
+        verdict = _classify_captcha_reply_feedback(text)
+        if verdict == 'unknown':
+            continue
+
+        rt = getattr(m, 'reply_to', None)
+        rid = None
+        if rt is not None:
+            rid = getattr(rt, 'reply_to_msg_id', None) or getattr(rt, 'reply_to_top_id', None)
+        try:
+            rid = int(rid or 0)
+        except Exception:
+            rid = 0
+
+        if rid > 0:
+            replied_code = reply_code_by_msg_id.get(rid)
+            if replied_code:
+                if verdict == 'accepted':
+                    accepted_codes.add(replied_code)
+                elif verdict == 'rejected':
+                    rejected_codes.add(replied_code)
+                continue
+
+        # 兼容群内广播文案，例如: "🎉 Mark 抢到了 2 积分!"
+        if verdict == 'accepted':
+            inline_name_tokens = _extract_inline_redpacket_success_name_tokens(text)
+            for tk in inline_name_tokens:
+                code = latest_code_by_sender_token.get(tk)
+                if code:
+                    accepted_codes.add(code)
+
+    winner_codes: Set[str] = set()
+    if winner_name_tokens:
+        for item in reply_items:
+            sender_tokens = item.get('sender_tokens') or set()
+            if not isinstance(sender_tokens, set):
+                continue
+            if winner_name_tokens.intersection(sender_tokens):
+                code = str(item.get('code') or '')
+                if code:
+                    winner_codes.add(code)
+
+    success_codes = set(accepted_codes).union(winner_codes)
+    detail['accepted_code_total'] = len(accepted_codes)
+    detail['winner_code_total'] = len(winner_codes)
+    detail['rejected_code_total'] = len(rejected_codes)
+    detail['success_code_total'] = len(success_codes)
+    success_gate_applied = bool(success_only and success_codes)
+    detail['success_gate_applied'] = success_gate_applied
+    detail['fallback_non_rejected'] = bool(success_only and not success_codes)
+
+    ranked_counter: Counter = Counter()
+    for item in reply_items:
+        code = str(item.get('code') or '')
+        if not code:
+            continue
+        if success_gate_applied and code not in success_codes:
+            continue
+        if code in rejected_codes and code not in success_codes:
+            continue
+        ranked_counter[code] += 1
+
+    if not ranked_counter:
+        return [], detail
+
+    ranked = sorted(
+        ranked_counter.keys(),
+        key=lambda c: (ranked_counter[c], all_counter[c], -abs(len(c) - 5), len(c)),
+        reverse=True,
+    )
+    limited = ranked[:max(1, int(max_candidates))]
+    return limited, detail
+
+
+async def _wait_reply_based_captcha_candidates(
+    chat_id: int,
+    reply_to_msg_id: int,
+    *,
+    parent_message_text: str = '',
+    success_only: bool = False,
+    max_messages: int = 800,
+    max_candidates: int = 8,
+    timeout_seconds: float = AUTO_CAPTCHA_REPLY_CANDIDATE_WAIT_SECONDS,
+    poll_seconds: float = AUTO_CAPTCHA_REPLY_CANDIDATE_POLL_SECONDS,
+) -> Tuple[List[str], Dict[str, object]]:
+    deadline = time.time() + max(0.0, float(timeout_seconds or 0))
+    last_detail: Dict[str, object] = {}
+
+    while True:
+        candidates, detail = await _extract_reply_based_captcha_candidates(
+            chat_id,
+            reply_to_msg_id,
+            parent_message_text=parent_message_text,
+            success_only=success_only,
+            max_messages=max_messages,
+            max_candidates=max_candidates,
+        )
+        last_detail = detail
+        if candidates:
+            waited = max(0.0, float(timeout_seconds or 0) - max(0.0, deadline - time.time()))
+            detail['waited_seconds'] = round(waited, 2)
+            return candidates, detail
+
+        if time.time() >= deadline:
+            last_detail['waited_seconds'] = round(max(0.0, float(timeout_seconds or 0)), 2)
+            return [], last_detail
+
+        await asyncio.sleep(max(0.05, float(poll_seconds or 0.35)))
+
+
+async def _wait_captcha_reply_feedback(
+    chat_id: int,
+    *,
+    source_sender_id: Optional[int],
+    after_msg_id: Optional[int],
+    timeout_seconds: float = 2.2,
+) -> Tuple[str, str]:
+    if chat_id is None:
+        return 'unknown', ''
+
+    deadline = time.time() + max(0.5, float(timeout_seconds))
+    seen_high_id = int(after_msg_id or 0)
+    latest_text = ''
+    while time.time() < deadline:
+        try:
+            recent = await client.get_messages(chat_id, limit=14)
+        except Exception as e:
+            debug_log(f" 验证码反馈检测失败: ch={chat_id} err={e}")
+            await asyncio.sleep(0.4)
+            continue
+        for m in reversed(list(recent or [])):
+            mid = int(getattr(m, 'id', 0) or 0)
+            if mid <= seen_high_id:
+                continue
+            if source_sender_id is not None:
+                try:
+                    if int(getattr(m, 'sender_id', 0) or 0) != int(source_sender_id):
+                        continue
+                except Exception:
+                    continue
+            text = str(getattr(m, 'message', '') or '').strip()
+            latest_text = text or latest_text
+            verdict = _classify_captcha_reply_feedback(text)
+            if verdict in ('rejected', 'accepted', 'closed'):
+                return verdict, text
+            seen_high_id = max(seen_high_id, mid)
+        await asyncio.sleep(0.45)
+    return 'unknown', latest_text
+
+
+async def _maybe_auto_reply_redpacket_captcha(
+    event,
+    msg,
+    restricted_entry: dict,
+    message_text_for_filter: str,
+    *,
+    source: str = 'new_message',
+) -> bool:
+    rules = _get_auto_click_rules(restricted_entry)
+    if not bool(rules.get('captcha_reply_enabled')):
+        return False
+    if getattr(event, 'out', False):
+        return False
+
+    chat_id = getattr(event, 'chat_id', None)
+    msg_id = getattr(msg, 'id', None)
+    if chat_id is None or msg_id is None:
+        return False
+    if _auto_captcha_replied_recently(chat_id, msg_id):
+        return False
+    if not _try_acquire_auto_captcha_reply_slot(chat_id, msg_id):
+        debug_log(f" 口令红包验证码任务进行中，跳过重复触发: ch={chat_id} msg={msg_id} source={source}")
+        return False
+
+    try:
+        if _auto_captcha_replied_recently(chat_id, msg_id):
+            return False
+        if not _message_has_image_media(msg):
+            return False
+
+        message_text = message_text_for_filter or getattr(msg, 'message', '') or ''
+        captcha_keywords = rules.get('captcha_keywords') or []
+        if not _looks_like_redpacket_captcha_prompt(message_text, captcha_keywords):
+            return False
+
+        success_only = bool(rules.get('captcha_reply_from_success_only', True))
+        reply_codes, reply_detail = await _extract_reply_based_captcha_candidates(
+            chat_id,
+            msg_id,
+            parent_message_text=message_text,
+            success_only=success_only,
+            max_messages=800,
+            max_candidates=8,
+        )
+        ocr_summary = 'skipped_success_only' if success_only else ''
+        ocr_codes: List[str] = []
+
+        if not success_only:
+            try:
+                image_bytes = await client.download_media(msg, file=bytes)
+            except Exception as e:
+                debug_log(f" 口令红包图片下载失败: ch={chat_id} msg={msg_id} err={e}")
+                return False
+            if isinstance(image_bytes, memoryview):
+                image_bytes = image_bytes.tobytes()
+            if not isinstance(image_bytes, bytes) or not image_bytes:
+                debug_log(f" 口令红包图片下载为空: ch={chat_id} msg={msg_id}")
+                return False
+
+            ocr_codes, ocr_summary = _extract_captcha_codes_from_image(image_bytes, max_candidates=4)
+            ocr_codes = _expand_captcha_confusion_candidates(ocr_codes, max_extra=16)
+
+        captcha_codes: List[str] = []
+        seen = set()
+        for code in (reply_codes + ocr_codes):
+            norm = _normalize_captcha_code(code)
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            captcha_codes.append(norm)
+
+        if not captcha_codes:
+            if success_only:
+                debug_log(
+                    f" 口令红包等待成功回帖口令: ch={chat_id} msg={msg_id} "
+                    f"reply_detail={reply_detail}"
+                )
+                await _send_captcha_manual_notify(
+                    event,
+                    msg,
+                    rules,
+                    stage='wait_success',
+                    title='口令红包等待成功口令',
+                    lines=[
+                        f"来源: {source}",
+                        f"状态: 尚未提取到成功口令（reply_detail={reply_detail}）",
+                    ],
+                    ttl_seconds=90,
+                )
+            else:
+                log_message(f"口令红包验证码识别失败: ch={chat_id} msg={msg_id} detail={ocr_summary}")
+                await _send_captcha_manual_notify(
+                    event,
+                    msg,
+                    rules,
+                    stage='ocr_failed',
+                    title='口令红包识别失败，需要手动补刀',
+                    lines=[
+                        f"来源: {source}",
+                        f"OCR: {ocr_summary}",
+                    ],
+                )
+            return False
+        debug_log(
+            f" 口令红包验证码候选: ch={chat_id} msg={msg_id} candidates={captcha_codes[:8]} "
+            f"reply_candidates={reply_codes[:5]} reply_detail={reply_detail} detail={ocr_summary}"
+        )
+
+        source_sender_id = None
+        try:
+            source_sender_id = int(getattr(msg, 'sender_id', 0) or 0) or None
+        except Exception:
+            source_sender_id = None
+
+        final_code = ''
+        final_feedback = 'unknown'
+        final_feedback_text = ''
+        attempt_count = 0
+
+        try:
+            max_attempts = min(len(captcha_codes), 6)
+            if max_attempts > 0:
+                # 发送前先标记，避免并发事件在短时间内重复刷屏
+                _mark_auto_captcha_replied(chat_id, msg_id)
+            for idx, captcha_code in enumerate(captcha_codes[:max_attempts], start=1):
+                attempt_count += 1
+                sent = await client.send_message(chat_id, captcha_code, reply_to=msg_id)
+                sent_id = getattr(sent, 'id', None)
+                feedback, feedback_text = await _wait_captcha_reply_feedback(
+                    chat_id,
+                    source_sender_id=source_sender_id,
+                    after_msg_id=sent_id,
+                    timeout_seconds=2.2,
+                )
+                final_code = captcha_code
+                final_feedback = feedback
+                final_feedback_text = feedback_text
+                if feedback == 'rejected':
+                    log_message(
+                        f"口令红包验证码候选被拒绝: ch={chat_id} msg={msg_id} attempt={idx}/{max_attempts} code={captcha_code}"
+                    )
+                    continue
+                if feedback == 'closed':
+                    log_message(
+                        f"口令红包已抢完/结束，停止尝试: ch={chat_id} msg={msg_id} attempt={idx}/{max_attempts}"
+                    )
+                    break
+                break
+
+            if final_feedback == 'rejected':
+                log_message(
+                    f"口令红包验证码全部候选被拒绝: ch={chat_id} msg={msg_id} attempts={attempt_count} detail={ocr_summary}"
+                )
+                await _send_captcha_manual_notify(
+                    event,
+                    msg,
+                    rules,
+                    stage='all_rejected',
+                    title='口令红包候选全被拒绝',
+                    lines=[
+                        f"来源: {source}",
+                        f"尝试次数: {attempt_count}",
+                        f"候选: {', '.join(captcha_codes[:5])}",
+                    ],
+                    ttl_seconds=180,
+                )
+                return False
+            if final_feedback == 'closed':
+                await _send_captcha_manual_notify(
+                    event,
+                    msg,
+                    rules,
+                    stage='closed',
+                    title='口令红包已抢完或结束',
+                    lines=[
+                        f"来源: {source}",
+                        f"反馈: {final_feedback_text[:100] if final_feedback_text else 'closed'}",
+                    ],
+                    ttl_seconds=180,
+                )
+                return False
+            if final_feedback != 'accepted':
+                log_message(
+                    f"口令红包验证码已发送但未确认成功: ch={chat_id} msg={msg_id} attempts={attempt_count} "
+                    f"feedback={final_feedback}"
+                )
+                await _send_captcha_manual_notify(
+                    event,
+                    msg,
+                    rules,
+                    stage='unconfirmed',
+                    title='口令红包未确认成功，可手动补刀',
+                    lines=[
+                        f"来源: {source}",
+                        f"尝试次数: {attempt_count}",
+                        f"反馈: {final_feedback or 'unknown'}",
+                        f"候选: {', '.join(captcha_codes[:5])}",
+                    ],
+                )
+                return False
+
+            log_message(
+                f"已自动回复口令红包验证码: ch={chat_id} msg={msg_id} code_len={len(final_code)} "
+                f"source={source} attempts={attempt_count} feedback={final_feedback} detail={ocr_summary}"
+            )
+            notify_targets = rules.get('notify_targets') or []
+            if notify_targets:
+                chat_title = None
+                try:
+                    chat_title = getattr(event.chat, 'title', None)
+                except Exception:
+                    chat_title = None
+                msg_link = _build_message_link(event, msg)
+                base_text = (
+                    f"已自动回复口令红包验证码\n群: {chat_title or chat_id}\n消息ID: {msg_id}\n来源: {source}"
+                    f"\n候选尝试: {attempt_count}\n反馈: {final_feedback}"
+                )
+                if final_feedback_text:
+                    base_text += f"\n反馈内容: {final_feedback_text[:80]}"
+                if msg_link:
+                    base_text += f"\n链接: {msg_link}"
+                for target in notify_targets:
+                    try:
+                        await client.send_message(target, base_text)
+                    except Exception as e:
+                        log_message(f"验证码自动回复通知失败: target={target} err={e}")
+            return True
+        except Exception as e:
+            log_message(f"自动回复口令红包验证码失败: ch={chat_id} msg={msg_id} err={e}")
+        return False
+    finally:
+        _release_auto_captcha_reply_slot(chat_id, msg_id)
+
+
+async def _maybe_probe_redpacket_captcha_from_reply(event, msg, restricted_entry: dict) -> bool:
+    rules = _get_auto_click_rules(restricted_entry)
+    if not bool(rules.get('captcha_reply_enabled')):
+        return False
+    if getattr(event, 'out', False):
+        return False
+
+    chat_id = getattr(event, 'chat_id', None)
+    if chat_id is None:
+        return False
+
+    rt = getattr(msg, 'reply_to', None)
+    parent_msg_id = None
+    if rt is not None:
+        parent_msg_id = getattr(rt, 'reply_to_msg_id', None) or getattr(rt, 'reply_to_top_id', None)
+    try:
+        parent_msg_id = int(parent_msg_id or 0)
+    except Exception:
+        parent_msg_id = 0
+    if parent_msg_id <= 0:
+        return False
+    if _auto_captcha_replied_recently(chat_id, parent_msg_id):
+        return False
+
+    try:
+        parent_msg = await client.get_messages(chat_id, ids=parent_msg_id)
+    except Exception as e:
+        debug_log(f" 回帖触发拉取口令红包父消息失败: ch={chat_id} msg={parent_msg_id} err={e}")
+        return False
+    if isinstance(parent_msg, (list, tuple)):
+        parent_msg = parent_msg[0] if parent_msg else None
+    if not parent_msg:
+        return False
+    if not _message_has_image_media(parent_msg):
+        return False
+
+    parent_text = await _extract_message_text_for_filter(parent_msg, chat_id)
+    captcha_keywords = rules.get('captcha_keywords') or []
+    if not _looks_like_redpacket_captcha_prompt(parent_text, captcha_keywords):
+        return False
+
+    try:
+        return await _maybe_auto_reply_redpacket_captcha(
+            event,
+            parent_msg,
+            restricted_entry,
+            parent_text,
+            source='reply_success_probe',
+        )
+    except Exception as e:
+        debug_log(f" 回帖触发口令红包验证码自动回复异常: {e}")
+    return False
+
+
+async def _probe_redpacket_captcha_after_click(event, msg, restricted_entry: dict) -> None:
+    rules = _get_auto_click_rules(restricted_entry)
+    if not bool(rules.get('captcha_reply_enabled')):
+        return
+
+    chat_id = getattr(event, 'chat_id', None)
+    msg_id = getattr(msg, 'id', None)
+    if chat_id is None or msg_id is None:
+        return
+
+    started_at = time.time()
+    for probe_offset in AUTO_CAPTCHA_POST_CLICK_PROBE_OFFSETS:
+        try:
+            wait_seconds = max(0.0, float(probe_offset) - (time.time() - started_at))
+            if wait_seconds > 0:
+                await asyncio.sleep(wait_seconds)
+        except Exception:
+            return
+        try:
+            latest_msg = await client.get_messages(chat_id, ids=msg_id)
+        except Exception as e:
+            debug_log(f" 点击后拉取口令红包消息失败: ch={chat_id} msg={msg_id} err={e}")
+            continue
+        if isinstance(latest_msg, (list, tuple)):
+            latest_msg = latest_msg[0] if latest_msg else None
+        if not latest_msg:
+            continue
+        latest_text = getattr(latest_msg, 'message', '') or ''
+        try:
+            replied = await _maybe_auto_reply_redpacket_captcha(
+                event,
+                latest_msg,
+                restricted_entry,
+                latest_text,
+                source='post_click_probe',
+            )
+        except Exception as e:
+            debug_log(f" 点击后验证码自动回复异常: ch={chat_id} msg={msg_id} err={e}")
+            replied = False
+        if replied:
+            return
 
 
 def _iter_message_buttons(msg):
@@ -3689,6 +5165,11 @@ async def _maybe_auto_click_buttons(
         _mark_auto_clicked(chat_id, msg_id)
         log_message(f"已自动点击按钮: ch={chat_id} msg={msg_id} btn='{btn_text}'")
 
+        try:
+            asyncio.create_task(_probe_redpacket_captcha_after_click(event, msg, restricted_entry))
+        except Exception as e:
+            debug_log(f" 启动口令红包补探测任务失败: ch={chat_id} msg={msg_id} err={e}")
+
         notify_targets = rules.get('notify_targets') or []
         if notify_targets:
             chat_title = None
@@ -3783,6 +5264,16 @@ async def new_message_handler(event, *, backfill: bool = False):
                 except Exception as e:
                     debug_log(f" 自动点击(极速)处理异常: {e}")
                 if auto_click_clicked and auto_click_fast_skip:
+                    try:
+                        await _maybe_auto_reply_redpacket_captcha(
+                            event,
+                            msg,
+                            restricted_entry,
+                            message_text_for_filter,
+                            source='fast_click_skip',
+                        )
+                    except Exception as e:
+                        debug_log(f" 口令红包验证码自动回复异常: {e}")
                     return
 
             if not message_text_for_filter and msg.grouped_id:
@@ -3810,6 +5301,24 @@ async def new_message_handler(event, *, backfill: bool = False):
                     await _maybe_auto_click_buttons(event, msg, restricted_entry, message_text_for_filter)
                 except Exception as e:
                     debug_log(f" 自动点击处理异常: {e}")
+
+            if not backfill:
+                try:
+                    await _maybe_auto_reply_redpacket_captcha(
+                        event,
+                        msg,
+                        restricted_entry,
+                        message_text_for_filter,
+                        source='new_message',
+                    )
+                except Exception as e:
+                    debug_log(f" 口令红包验证码自动回复异常: {e}")
+
+            if not backfill:
+                try:
+                    await _maybe_probe_redpacket_captcha_from_reply(event, msg, restricted_entry)
+                except Exception as e:
+                    debug_log(f" 回帖触发口令红包验证码自动回复异常: {e}")
 
             if not force_forward_all:
                 use_tv_filters = bool(restricted_entry.get('use_tvchannel_filters'))

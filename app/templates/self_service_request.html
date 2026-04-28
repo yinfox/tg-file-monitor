@@ -282,26 +282,14 @@
                             普通模式会自动挑选并尝试入库；高级模式会返回候选资源列表，等待你手动选择转存。
                         </div>
 
-                        <div id="selfServiceResultBox" class="ss-result-box alert alert-secondary small" style="display: none;">
-                            <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
-                                <div class="fw-semibold" id="selfServiceResultTitle">处理中</div>
-                                <button type="button" class="btn btn-outline-secondary btn-sm" id="selfServiceClearBtn">清除搜索记录</button>
-                            </div>
-                            <div class="text-muted mb-2" id="selfServiceResultTime"></div>
-                            <pre class="mb-0 border rounded p-3" id="selfServiceResultDetail" style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.95); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;"></pre>
-                            <div id="selfServiceResourceBox" class="mt-3" style="display: none;">
-                                <div class="fw-semibold mb-2">候选资源</div>
-                                <div class="text-muted mb-2" id="selfServiceResourceHint"></div>
-                                <div id="selfServiceResourceList" class="d-grid gap-2"></div>
-                            </div>
-                        </div>
-
                         <div class="mb-3">
                             <div class="small text-muted">结果将发送到：</div>
                             <div class="fw-semibold">{{ target_display }}</div>
                         </div>
 
                         <button type="submit" class="btn btn-primary btn-lg w-100">提交申请</button>
+                        <button type="button" class="btn btn-outline-primary btn-sm w-100 mt-2" id="selfServiceOpenResultBtn" style="display: none;">查看申请结果</button>
+                        <button type="button" class="btn btn-outline-secondary btn-sm w-100 mt-2 d-md-none" data-self-service-clear>清除搜索记录</button>
                     </form>
                 </div>
             </div>
@@ -374,7 +362,11 @@
                             </details>
                             {% endif %}
                             <div class="d-flex align-items-center gap-2">
-                                <a class="btn btn-outline-primary btn-sm" href="{{ url_for('self_service_request', rid=item.request_id) }}">查看</a>
+                                <button
+                                    type="button"
+                                    class="btn btn-outline-primary btn-sm"
+                                    data-self-service-open-rid="{{ item.request_id }}"
+                                >查看</button>
                                 <span class="text-muted" style="font-size: 0.7rem;">RID: {{ item.request_id }}</span>
                             </div>
                         </div>
@@ -383,6 +375,31 @@
                     {% else %}
                     <div class="text-muted small">暂无记录</div>
                     {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div class="modal fade" id="selfServiceResultModal" tabindex="-1" aria-labelledby="selfServiceResultModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable modal-fullscreen-sm-down modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="selfServiceResultModalLabel"><i class="bi bi-check2-circle me-2"></i>申请结果</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <div id="selfServiceResultBox" class="ss-result-box alert alert-secondary small mb-0" style="display: none;">
+                    <div class="d-flex justify-content-between align-items-start gap-2 mb-1">
+                        <div class="fw-semibold" id="selfServiceResultTitle">处理中</div>
+                        <button type="button" class="btn btn-outline-secondary btn-sm" id="selfServiceClearBtn" data-self-service-clear>清除搜索记录</button>
+                    </div>
+                    <div class="text-muted mb-2" id="selfServiceResultTime"></div>
+                    <pre class="mb-0 border rounded p-3" id="selfServiceResultDetail" style="white-space: pre-wrap; background: rgba(248, 250, 252, 0.95); color: #1f2937; border-color: rgba(148, 163, 184, 0.35) !important;"></pre>
+                    <div id="selfServiceResourceBox" class="mt-3" style="display: none;">
+                        <div class="fw-semibold mb-2">候选资源</div>
+                        <div class="text-muted mb-2" id="selfServiceResourceHint"></div>
+                        <div id="selfServiceResourceList" class="d-grid gap-2"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -401,9 +418,13 @@ const resultDetail = document.getElementById('selfServiceResultDetail');
 const resultResourceBox = document.getElementById('selfServiceResourceBox');
 const resultResourceHint = document.getElementById('selfServiceResourceHint');
 const resultResourceList = document.getElementById('selfServiceResourceList');
-const clearResultBtn = document.getElementById('selfServiceClearBtn');
+const clearResultBtns = document.querySelectorAll('[data-self-service-clear]');
+const openResultBtn = document.getElementById('selfServiceOpenResultBtn');
+const resultModalEl = document.getElementById('selfServiceResultModal');
 let pollTimer = null;
 let pollCount = 0;
+let resultModalInstance = null;
+let hasAutoOpenedResultModal = false;
 
 function formatTime(ts) {
     if (!ts) return '';
@@ -420,6 +441,29 @@ function setBoxClass(status) {
     else if (status === 'processing') resultBox.classList.add('alert-info');
     else if (status === 'interactive') resultBox.classList.add('alert-primary');
     else resultBox.classList.add('alert-secondary');
+}
+
+function getResultModalInstance() {
+    if (!resultModalEl || !window.bootstrap || !window.bootstrap.Modal) return null;
+    if (!resultModalInstance) {
+        resultModalInstance = new window.bootstrap.Modal(resultModalEl);
+    }
+    return resultModalInstance;
+}
+
+function showResultModal(forceOpen = false) {
+    if (!resultModalEl) return;
+    if (!forceOpen && hasAutoOpenedResultModal) return;
+    const modal = getResultModalInstance();
+    if (!modal) return;
+    modal.show();
+    hasAutoOpenedResultModal = true;
+}
+
+function hideResultModal() {
+    const modal = getResultModalInstance();
+    if (!modal) return;
+    modal.hide();
 }
 
 function escapeHtml(value) {
@@ -516,7 +560,8 @@ function renderResources(data) {
         else if (actionStatus === 'partial') actionBadge = '<span class="badge bg-warning text-dark">已解析未入库</span>';
         else if (actionStatus === 'error') actionBadge = '<span class="badge bg-danger">最近失败</span>';
         const buttonDisabled = (!item.slug || !manualSupported) ? 'disabled' : '';
-        const buttonLabel = manualSupported ? '手动转存到115' : '当前配置不支持手动转存';
+        const buttonLabel = manualSupported ? '一键入库' : '当前配置不支持手动转存';
+        const buttonClass = manualSupported ? 'btn-success' : 'btn-outline-secondary';
         const noteHtml = renderNoteContent(item.note_text);
         const actionNote = item.last_action_note
             ? `<div class="small text-muted mt-1">${escapeHtml(item.last_action_note)}</div>`
@@ -551,7 +596,7 @@ function renderResources(data) {
                         </div>
                         <div class="d-flex flex-column align-items-stretch align-items-md-end gap-2" style="min-width: 132px;">
                             ${actionBadge ? `<div class="text-md-end">${actionBadge}</div>` : ''}
-                            <button type="button" class="btn btn-outline-primary btn-sm w-100" data-self-service-transfer data-slug="${escapeHtml(item.slug || '')}" ${buttonDisabled}>${buttonLabel}</button>
+                            <button type="button" class="btn ${buttonClass} btn-sm w-100" data-self-service-transfer data-slug="${escapeHtml(item.slug || '')}" ${buttonDisabled}>${buttonLabel}</button>
                             ${actionNote ? `<div class="small text-muted text-md-end">${escapeHtml(item.last_action_note)}</div>` : ''}
                         </div>
                     </div>
@@ -619,6 +664,10 @@ function renderResult(data) {
         resultDetail.textContent = '';
     }
     renderResources(data);
+    if (openResultBtn) {
+        openResultBtn.style.display = '';
+    }
+    showResultModal();
 }
 
 function stripResultQueryFromUrl() {
@@ -645,6 +694,11 @@ function clearCurrentResult() {
     resultResourceHint.textContent = '';
     resultResourceList.innerHTML = '';
     resultResourceBox.style.display = 'none';
+    hideResultModal();
+    hasAutoOpenedResultModal = false;
+    if (openResultBtn) {
+        openResultBtn.style.display = 'none';
+    }
     stripResultQueryFromUrl();
 }
 
@@ -668,16 +722,59 @@ function pollResult() {
     }
 }
 
-if (initialResult) {
-    renderResult(initialResult);
-    stripResultQueryFromUrl();
-}
-if (requestId) {
+function startPollingCurrentResult() {
+    if (!requestId) return;
+    if (pollTimer) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+    }
+    pollCount = 0;
     pollResult();
     pollTimer = setInterval(pollResult, 3000);
 }
-if (clearResultBtn) {
-    clearResultBtn.addEventListener('click', clearCurrentResult);
+
+function openResultFromRecord(rid) {
+    const targetRid = String(rid || '').trim();
+    if (!targetRid) return;
+    requestId = targetRid;
+    hasAutoOpenedResultModal = false;
+    if (openResultBtn) {
+        openResultBtn.style.display = '';
+    }
+    resultBox.style.display = '';
+    setBoxClass('processing');
+    resultTitle.textContent = '正在加载申请结果...';
+    resultTime.textContent = '';
+    resultDetail.style.display = 'none';
+    resultDetail.textContent = '';
+    resultResourceHint.textContent = '';
+    resultResourceList.innerHTML = '';
+    resultResourceBox.style.display = 'none';
+    showResultModal(true);
+    startPollingCurrentResult();
+}
+
+if (initialResult) {
+    renderResult(initialResult);
+    stripResultQueryFromUrl();
+} else if (requestId && openResultBtn) {
+    openResultBtn.style.display = '';
+}
+if (requestId) {
+    startPollingCurrentResult();
+}
+if (openResultBtn) {
+    openResultBtn.addEventListener('click', () => showResultModal(true));
+}
+document.addEventListener('click', (event) => {
+    const btn = event.target.closest('[data-self-service-open-rid]');
+    if (!btn) return;
+    openResultFromRecord(btn.getAttribute('data-self-service-open-rid') || '');
+});
+if (clearResultBtns && clearResultBtns.length) {
+    clearResultBtns.forEach((btn) => {
+        btn.addEventListener('click', clearCurrentResult);
+    });
 }
 </script>
 {% endblock %}

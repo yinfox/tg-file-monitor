@@ -1384,7 +1384,7 @@ async def main():
             return
 
         # Ignore auto-click notifications to avoid triggering downloader
-        if text.startswith("已自动点击红包按钮"):
+        if text.startswith(("已自动点击红包按钮", "已自动回复口令红包验证码")):
             return
 
         sender_id = event.sender_id

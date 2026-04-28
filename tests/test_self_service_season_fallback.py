@@ -10,6 +10,10 @@ class SelfServiceSeasonFallbackTestCase(unittest.TestCase):
             app_module._HDHIVE_OPEN_API_RATE_LIMIT_CACHE.clear()
         except Exception:
             pass
+        try:
+            app_module._SELF_SERVICE_OPEN_API_SEARCH_CACHE.clear()
+        except Exception:
+            pass
 
     def test_extract_season_candidates_supports_s_prefixed_range(self):
         result = app_module._extract_season_candidates("Slow Horses S01-S04 完结季")
@@ -255,6 +259,46 @@ class SelfServiceSeasonFallbackTestCase(unittest.TestCase):
         self.assertEqual(status, "success")
         self.assertIn("资源已入库", message)
         self.assertIn("来源: Open API 搜索", detail)
+
+    def test_run_self_service_open_api_no_site_fallback_stops_without_site_retry(self):
+        payload = {
+            "request_id": "rid-open-api-only",
+            "query": "示例片名",
+            "title": "示例片名",
+            "notify_targets": ["@tester"],
+            "max_results": 5,
+            "hdhive_cookie": "",
+            "base_url": "https://hdhive.com",
+            "type": "电影",
+            "year": "",
+            "note": "",
+            "hdhive_url": "",
+            "use_open_api": True,
+            "hdhive_open_api_key": "api-key",
+            "tmdb_id": "12345",
+            "unlock_threshold": 0,
+            "open_api_direct_unlock": False,
+            "open_api_no_site_fallback": True,
+            "storage_mode": "115",
+            "dolby_preference": "any",
+            "season": "",
+            "resolution": "",
+            "advanced_mode": False,
+        }
+
+        with patch("app.app._append_self_service_log"), \
+             patch("app.app._hdhive_open_api_resources", return_value={"success": True, "data": []}), \
+             patch("app.app._search_hdhive_resource_urls") as site_search, \
+             patch("app.app._set_self_service_result") as set_result, \
+             patch("app.app._self_service_notify_result"):
+            app_module._run_self_service_request(payload)
+
+        site_search.assert_not_called()
+        set_result.assert_called()
+        rid, status, _message, detail = set_result.call_args[0][:4]
+        self.assertEqual(rid, "rid-open-api-only")
+        self.assertEqual(status, "error")
+        self.assertIn("已禁用站点回退", detail)
 
 
 if __name__ == "__main__":

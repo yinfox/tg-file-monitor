@@ -25,6 +25,8 @@
   "self_service_search_max_results": 5,
   "self_service_cookie_check_mode": "warn",
   "self_service_use_open_api": false,
+  "self_service_open_api_rate_limit_per_minute": 12,
+  "self_service_open_api_no_site_fallback": true,
   "self_service_storage_mode": "any",
   "self_service_public_enabled": false,
   "self_service_public_access_key": "",

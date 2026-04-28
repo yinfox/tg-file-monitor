@@ -1607,6 +1607,21 @@
                                                                                             </label>
                                                                                         </div>
                                                                                     </div>
+                                                                                    <div class="col-md-12 mb-2">
+                                                                                        <div class="form-check pt-1">
+                                                                                            <input type="checkbox" class="form-check-input"
+                                                                                                id="auto_click_captcha_reply" name="auto_click_captcha_reply">
+                                                                                            <label class="form-check-label small" for="auto_click_captcha_reply">
+                                                                                                口令/验证码红包自动回复
+                                                                                            </label>
+                                                                                        </div>
+                                                                                    </div>
+                                                                                    <div class="col-md-12 mb-2">
+                                                                                        <label for="auto_click_captcha_keywords" class="form-label small">验证码提示关键词</label>
+                                                                                        <input type="text" class="form-control form-control-sm"
+                                                                                            id="auto_click_captcha_keywords" name="auto_click_captcha_keywords"
+                                                                                            placeholder="回复本消息,验证码,口令红包 (逗号分隔)">
+                                                                                    </div>
                                                                                 </div>
                                                                             </div>
                                                                         </div>
@@ -2070,6 +2085,24 @@
                                                 </div>
                                             </div>
 
+                                            <div class="row g-2 mb-2">
+                                                <div class="col-md-6">
+                                                    <label for="self_service_open_api_rate_limit_per_minute" class="form-label small">Open API 本地限速(次/分钟):</label>
+                                                    <input type="number" class="form-control form-control-sm" id="self_service_open_api_rate_limit_per_minute"
+                                                        name="self_service_open_api_rate_limit_per_minute" min="1" max="120" step="1"
+                                                        value="{{ config.get('self_service_open_api_rate_limit_per_minute', 12) }}">
+                                                    <div class="form-text">仅限制本服务的本地请求速率，默认 12，越小越稳但速度更慢。</div>
+                                                </div>
+                                                <div class="col-md-6">
+                                                    <div class="form-check form-switch mt-4">
+                                                        <input class="form-check-input" type="checkbox" id="self_service_open_api_no_site_fallback"
+                                                            name="self_service_open_api_no_site_fallback" {% if config.get('self_service_open_api_no_site_fallback', True) %}checked{% endif %}>
+                                                        <label class="form-check-label small" for="self_service_open_api_no_site_fallback">仅走 Open API（禁用站点回退）</label>
+                                                    </div>
+                                                    <div class="form-text">开启后不会回退网页抓取，速度更快，但某些资源命中率可能下降。</div>
+                                                </div>
+                                            </div>
+
                                             <div id="selfServicePublicRateLimitFields" class="row g-2 mb-2">
                                                 <div class="col-md-6">
                                                     <label for="self_service_public_rate_limit_window_seconds" class="form-label small">防刷窗口(秒):</label>
@@ -2364,6 +2397,8 @@
 
         const redpacketEl = document.getElementById('auto_click_redpacket');
         const autoClickKeywordsEl = document.getElementById('auto_click_keywords');
+        const autoClickCaptchaReplyEl = document.getElementById('auto_click_captcha_reply');
+        const autoClickCaptchaKeywordsEl = document.getElementById('auto_click_captcha_keywords');
         const downloadDirEl = document.getElementById('download_directory');
         const keepVideoEl = document.getElementById('keep_video_message');
         const forceForwardEl = document.getElementById('force_forward_all');
@@ -2374,7 +2409,9 @@
         const monitorTextEl = document.getElementById('monitor_text');
 
         const autoClickEnabled = (redpacketEl && redpacketEl.checked)
-            || (autoClickKeywordsEl && autoClickKeywordsEl.value.trim().length > 0);
+            || (autoClickKeywordsEl && autoClickKeywordsEl.value.trim().length > 0)
+            || (autoClickCaptchaReplyEl && autoClickCaptchaReplyEl.checked)
+            || (autoClickCaptchaKeywordsEl && autoClickCaptchaKeywordsEl.value.trim().length > 0);
         const hasDownloadDir = downloadDirEl && downloadDirEl.value.trim().length > 0;
         const keepVideo = (keepVideoEl && keepVideoEl.checked) || (forceForwardEl && forceForwardEl.checked);
 
@@ -2446,6 +2483,8 @@
         safeSetValue('auto_click_notify_targets', (data.auto_click_notify_targets || []).join(', '));
         safeSetChecked('auto_click_fast', data.auto_click_fast);
         safeSetChecked('auto_click_fast_skip_processing', data.auto_click_fast_skip_processing);
+        safeSetChecked('auto_click_captcha_reply', data.auto_click_captcha_reply);
+        safeSetValue('auto_click_captcha_keywords', (data.auto_click_captcha_keywords || []).join(', '));
         safeSetValue('target_user_ids_restricted', (data.target_user_ids || []).join(', '));
         safeSetChecked('use_tvchannel_filters', data.use_tvchannel_filters);
 
@@ -2568,6 +2607,8 @@
         safeReset('auto_click_notify_targets');
         safeReset('auto_click_fast');
         safeReset('auto_click_fast_skip_processing');
+        safeReset('auto_click_captcha_reply');
+        safeReset('auto_click_captcha_keywords');
         safeReset('target_user_ids_restricted');
         safeReset('use_tvchannel_filters');
         safeReset('download_video');
@@ -2830,6 +2871,8 @@
         const hintInputs = [
             'auto_click_redpacket',
             'auto_click_keywords',
+            'auto_click_captcha_reply',
+            'auto_click_captcha_keywords',
             'download_directory',
             'keep_video_message',
             'force_forward_all',
