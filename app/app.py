@@ -58,7 +58,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.82"
+VERSION = "0.5.83"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -11763,18 +11763,28 @@ def manage_config():
             whitelist_keywords = [k.strip() for k in request.form.get('whitelist_keywords', '').split(',') if k.strip()]
             use_tvchannel_filters = request.form.get('use_tvchannel_filters') == 'on'
             auto_click_redpacket = request.form.get('auto_click_redpacket') == 'on'
-            auto_click_keywords = [k.strip() for k in request.form.get('auto_click_keywords', '').split(',') if k.strip()]
-            auto_click_button_texts = [k.strip() for k in request.form.get('auto_click_button_texts', '').split(',') if k.strip()]
             auto_click_notify_targets = [k.strip() for k in request.form.get('auto_click_notify_targets', '').split(',') if k.strip()]
-            auto_click_fast = request.form.get('auto_click_fast') == 'on'
-            auto_click_fast_skip_processing = request.form.get('auto_click_fast_skip_processing') == 'on'
-            auto_click_captcha_reply = request.form.get('auto_click_captcha_reply') == 'on'
-            auto_click_captcha_keywords = [k.strip() for k in request.form.get('auto_click_captcha_keywords', '').split(',') if k.strip()]
             try:
                 auto_click_delay_seconds = float((request.form.get('auto_click_delay_seconds') or '0').strip() or 0)
             except (TypeError, ValueError):
                 auto_click_delay_seconds = 0.0
             auto_click_delay_seconds = max(0.0, min(auto_click_delay_seconds, 60.0))
+            auto_click_risk_control_enabled = request.form.get('auto_click_risk_control_enabled') == 'on'
+            try:
+                auto_click_min_interval_seconds = float((request.form.get('auto_click_min_interval_seconds') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                auto_click_min_interval_seconds = 0.0
+            auto_click_min_interval_seconds = max(0.0, min(auto_click_min_interval_seconds, 3600.0))
+            try:
+                auto_click_hourly_limit = int((request.form.get('auto_click_hourly_limit') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                auto_click_hourly_limit = 0
+            auto_click_hourly_limit = max(0, min(auto_click_hourly_limit, 200))
+            try:
+                auto_click_random_delay_seconds = float((request.form.get('auto_click_random_delay_seconds') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                auto_click_random_delay_seconds = 0.0
+            auto_click_random_delay_seconds = max(0.0, min(auto_click_random_delay_seconds, 60.0))
             monitor_types = request.form.getlist('monitor_types')
             forward_only = False
             forward_enabled = keep_video_message or force_forward_all
@@ -11794,21 +11804,16 @@ def manage_config():
                 channel_id_int = int(channel_id)
                 target_user_ids_list = [uid.strip() for uid in target_user_ids_restricted.split(',') if uid.strip()]
 
-                auto_click_enabled = (
-                    auto_click_redpacket
-                    or bool(auto_click_keywords)
-                    or auto_click_captcha_reply
-                    or bool(auto_click_captcha_keywords)
-                )
+                auto_click_enabled = auto_click_redpacket
 
                 # 如果不是转发模式，检查下载目录必须存在
                 if not forward_enabled and (not download_directory or not os.path.isdir(download_directory)):
                     # 如果 monitor_types 只包含 'text'，则不需要下载目录
                     if monitor_types != ['text']:
-                        # 仅做红包/自动点击且未配置下载目录时，自动降级为文本监控
+                        # 仅做诗词红包自动答题且未配置下载目录时，自动降级为文本监控
                         if auto_click_enabled and monitor_types == ['video']:
                             monitor_types = ['text']
-                            flash("未指定下载目录，已自动切换为文本监控（用于红包自动点击）。", "info")
+                            flash("未指定下载目录，已自动切换为文本监控（用于诗词红包自动答题）。", "info")
                         else:
                             flash("下载模式必须指定有效的下载目录。", "error")
                             return redirect(url_for('manage_config'))
@@ -11839,14 +11844,22 @@ def manage_config():
                             entry['whitelist_keywords'] = whitelist_keywords
                             entry['use_tvchannel_filters'] = use_tvchannel_filters
                             entry['auto_click_redpacket'] = auto_click_redpacket
-                            entry['auto_click_keywords'] = auto_click_keywords
-                            entry['auto_click_button_texts'] = auto_click_button_texts
                             entry['auto_click_notify_targets'] = auto_click_notify_targets
-                            entry['auto_click_fast'] = auto_click_fast
-                            entry['auto_click_fast_skip_processing'] = auto_click_fast_skip_processing
-                            entry['auto_click_captcha_reply'] = auto_click_captcha_reply
-                            entry['auto_click_captcha_keywords'] = auto_click_captcha_keywords
                             entry['auto_click_delay_seconds'] = auto_click_delay_seconds
+                            entry['auto_click_risk_control_enabled'] = auto_click_risk_control_enabled
+                            entry['auto_click_min_interval_seconds'] = auto_click_min_interval_seconds
+                            entry['auto_click_hourly_limit'] = auto_click_hourly_limit
+                            entry['auto_click_random_delay_seconds'] = auto_click_random_delay_seconds
+                            for obsolete_key in (
+                                'auto_click_keywords',
+                                'auto_click_button_texts',
+                                'auto_click_fast',
+                                'auto_click_fast_skip_processing',
+                                'auto_click_captcha_reply',
+                                'auto_click_captcha_keywords',
+                                'auto_click_captcha_reply_from_success_only',
+                            ):
+                                entry.pop(obsolete_key, None)
                             entry['monitor_types'] = monitor_types
                             entry['forward_only'] = forward_only
                             found = True
@@ -11882,14 +11895,12 @@ def manage_config():
                         "whitelist_keywords": whitelist_keywords,
                         "use_tvchannel_filters": use_tvchannel_filters,
                         "auto_click_redpacket": auto_click_redpacket,
-                        "auto_click_keywords": auto_click_keywords,
-                        "auto_click_button_texts": auto_click_button_texts,
                         "auto_click_notify_targets": auto_click_notify_targets,
-                        "auto_click_fast": auto_click_fast,
-                        "auto_click_fast_skip_processing": auto_click_fast_skip_processing,
-                        "auto_click_captcha_reply": auto_click_captcha_reply,
-                        "auto_click_captcha_keywords": auto_click_captcha_keywords,
                         "auto_click_delay_seconds": auto_click_delay_seconds,
+                        "auto_click_risk_control_enabled": auto_click_risk_control_enabled,
+                        "auto_click_min_interval_seconds": auto_click_min_interval_seconds,
+                        "auto_click_hourly_limit": auto_click_hourly_limit,
+                        "auto_click_random_delay_seconds": auto_click_random_delay_seconds,
                         "monitor_types": monitor_types,
                         "forward_only": forward_only
                     })

@@ -44,9 +44,14 @@ class _DummyButton:
 class _DummyClient:
     def __init__(self, messages):
         self._messages = messages
+        self.sent_messages = []
 
     async def get_messages(self, chat_id, limit=100):
         return self._messages
+
+    async def send_message(self, target, message, **kwargs):
+        self.sent_messages.append((target, message, kwargs))
+        return True
 
 
 class _DummyEvent:
@@ -69,28 +74,60 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         self.assertFalse(telegram_monitor._looks_like_redpacket_captcha_prompt("发送验证码即可", keywords))
         self.assertFalse(telegram_monitor._looks_like_redpacket_captcha_prompt("回复本消息就行", keywords))
 
-    def test_auto_click_rules_with_redpacket_defaults(self):
-        rules = telegram_monitor._get_auto_click_rules({"auto_click_redpacket": True})
-        self.assertTrue(rules.get("captcha_reply_enabled"))
-        self.assertTrue(rules.get("captcha_reply_from_success_only"))
-        self.assertIn("验证码", rules.get("captcha_keywords") or [])
-
-    def test_auto_click_rules_normalize_delay(self):
-        rules = telegram_monitor._get_auto_click_rules(
-            {"auto_click_keywords": ["发了一个红包"], "auto_click_delay_seconds": "1.5"}
-        )
-        self.assertEqual(rules.get("delay_seconds"), 1.5)
-
-    def test_auto_click_rules_allow_explicit_disable(self):
+    def test_auto_click_rules_are_poetry_only(self):
         rules = telegram_monitor._get_auto_click_rules(
             {
                 "auto_click_redpacket": True,
-                "auto_click_captcha_reply": False,
+                "auto_click_keywords": ["发了一个红包"],
+                "auto_click_button_texts": ["抢红包"],
+                "auto_click_captcha_reply": True,
+                "auto_click_captcha_keywords": ["回复本消息", "验证码"],
+                "auto_click_notify_targets": ["123456"],
+            }
+        )
+        self.assertEqual(rules.get("keywords"), [])
+        self.assertEqual(rules.get("button_texts"), [])
+        self.assertFalse(rules.get("captcha_reply_enabled"))
+        self.assertTrue(rules.get("captcha_reply_from_success_only"))
+        self.assertEqual(rules.get("captcha_keywords"), [])
+        self.assertEqual(rules.get("notify_targets"), ["123456"])
+
+    def test_auto_click_rules_normalize_risk_settings(self):
+        rules = telegram_monitor._get_auto_click_rules(
+            {
+                "auto_click_redpacket": True,
+                "auto_click_risk_control_enabled": True,
+                "auto_click_min_interval_seconds": "30",
+                "auto_click_hourly_limit": "5",
+                "auto_click_random_delay_seconds": "1.5",
+            }
+        )
+        self.assertEqual(
+            rules.get("risk"),
+            {
+                "enabled": True,
+                "min_interval_seconds": 30.0,
+                "hourly_limit": 5,
+                "random_delay_seconds": 1.5,
+            },
+        )
+
+    def test_auto_click_rules_normalize_delay(self):
+        rules = telegram_monitor._get_auto_click_rules(
+            {"auto_click_redpacket": True, "auto_click_delay_seconds": "1.5"}
+        )
+        self.assertEqual(rules.get("delay_seconds"), 1.5)
+
+    def test_auto_click_rules_ignore_legacy_captcha_settings(self):
+        rules = telegram_monitor._get_auto_click_rules(
+            {
+                "auto_click_redpacket": True,
+                "auto_click_captcha_reply": True,
                 "auto_click_captcha_keywords": ["回复本消息", "验证码"],
             }
         )
         self.assertFalse(rules.get("captcha_reply_enabled"))
-        self.assertEqual(rules.get("captcha_keywords"), ["回复本消息", "验证码"])
+        self.assertEqual(rules.get("captcha_keywords"), [])
 
     def test_solve_poetry_redpacket_answer_from_new_quiz(self):
         text = "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。"
@@ -118,18 +155,19 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         self.assertEqual(options["夜"], (0, 1, "B. 夜"))
 
     def test_auto_click_buttons_waits_before_click(self):
-        msg = _DummyMsg(100, "发了一个红包")
-        msg.buttons = [[_DummyButton("抢红包")]]
+        msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
         sleeps = []
 
         async def fake_sleep(seconds):
             sleeps.append(seconds)
 
         entry = {
-            "auto_click_keywords": ["发了一个红包"],
-            "auto_click_button_texts": ["抢红包"],
+            "auto_click_redpacket": True,
             "auto_click_delay_seconds": "0.5",
-            "auto_click_captcha_reply": False,
         }
         telegram_monitor.AUTO_CLICK_HISTORY.clear()
         with patch.object(telegram_monitor.asyncio, "sleep", side_effect=fake_sleep):
@@ -145,6 +183,149 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         self.assertTrue(clicked)
         self.assertEqual(sleeps, [0.5])
         self.assertEqual(len(msg.clicked), 1)
+
+    def test_auto_click_risk_random_delay_is_added(self):
+        msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        sleeps = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_delay_seconds": "0.5",
+            "auto_click_risk_control_enabled": True,
+            "auto_click_random_delay_seconds": "0.4",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+        with patch.object(telegram_monitor.random, "uniform", return_value=0.25), \
+             patch.object(telegram_monitor.asyncio, "sleep", side_effect=fake_sleep):
+            clicked = asyncio.run(
+                telegram_monitor._maybe_auto_click_buttons(
+                    _DummyEvent(),
+                    msg,
+                    entry,
+                    msg.message,
+                )
+            )
+
+        self.assertTrue(clicked)
+        self.assertEqual(sleeps, [0.75])
+        self.assertEqual(len(msg.clicked), 1)
+
+    def test_auto_click_risk_min_interval_blocks_second_click(self):
+        msg1 = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg2 = _DummyMsg(101, msg1.message)
+        buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        msg1.buttons = buttons
+        msg2.buttons = buttons
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_risk_control_enabled": True,
+            "auto_click_min_interval_seconds": "60",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+
+        first = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(_DummyEvent(), msg1, entry, msg1.message)
+        )
+        second = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(_DummyEvent(), msg2, entry, msg2.message)
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(msg1.clicked), 1)
+        self.assertEqual(len(msg2.clicked), 0)
+
+    def test_auto_click_risk_hourly_limit_blocks_second_click(self):
+        msg1 = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg2 = _DummyMsg(101, msg1.message)
+        buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        msg1.buttons = buttons
+        msg2.buttons = buttons
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_risk_control_enabled": True,
+            "auto_click_hourly_limit": "1",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+
+        first = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(_DummyEvent(), msg1, entry, msg1.message)
+        )
+        second = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(_DummyEvent(), msg2, entry, msg2.message)
+        )
+
+        self.assertTrue(first)
+        self.assertFalse(second)
+        self.assertEqual(len(msg1.clicked), 1)
+        self.assertEqual(len(msg2.clicked), 0)
+
+    def test_legacy_keyword_auto_click_is_ignored(self):
+        msg = _DummyMsg(100, "发了一个红包")
+        msg.buttons = [[_DummyButton("抢红包")]]
+        dummy_client = _DummyClient([])
+        entry = {
+            "auto_click_keywords": ["发了一个红包"],
+            "auto_click_button_texts": ["抢红包"],
+            "auto_click_notify_targets": ["123456"],
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        with patch.object(telegram_monitor, "client", dummy_client):
+            clicked = asyncio.run(
+                telegram_monitor._maybe_auto_click_buttons(
+                    _DummyEvent(),
+                    msg,
+                    entry,
+                    msg.message,
+                )
+            )
+
+        self.assertFalse(clicked)
+        self.assertEqual(dummy_client.sent_messages, [])
+
+    def test_poetry_auto_click_sends_notify(self):
+        msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        dummy_client = _DummyClient([])
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_notify_targets": ["123456"],
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        with patch.object(telegram_monitor, "client", dummy_client):
+            clicked = asyncio.run(
+                telegram_monitor._maybe_auto_click_buttons(
+                    _DummyEvent(),
+                    msg,
+                    entry,
+                    msg.message,
+                )
+            )
+
+        self.assertTrue(clicked)
+        self.assertEqual(len(dummy_client.sent_messages), 1)
+        target, payload, _ = dummy_client.sent_messages[0]
+        self.assertEqual(target, "123456")
+        self.assertIn("已自动点击诗词红包答案: 夜", payload)
 
     def test_extract_captcha_code_uses_vote(self):
         variants = [("raw", b"a"), ("gray", b"b")]
@@ -371,7 +552,7 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         self.assertEqual(len(calls), 2)
         self.assertEqual(detail.get("reply_total"), 2)
 
-    def test_auto_reply_success_only_does_not_block_waiting_for_candidates(self):
+    def test_legacy_auto_reply_config_is_ignored(self):
         msg = _DummyMsg(100, "回复本消息并发送图中完整验证码即可抢红包")
         msg.photo = object()
         rules = {
@@ -397,9 +578,9 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
             )
 
         self.assertFalse(replied)
-        self.assertEqual(extract_mock.call_count, 1)
+        extract_mock.assert_not_called()
         wait_mock.assert_not_called()
-        notify_mock.assert_called_once()
+        notify_mock.assert_not_called()
 
 
 if __name__ == "__main__":

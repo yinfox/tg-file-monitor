@@ -10,6 +10,7 @@ import re
 import codecs
 import shutil
 import hashlib
+import random
 from functools import lru_cache
 from collections import deque, Counter
 from dataclasses import dataclass
@@ -3431,6 +3432,9 @@ def match_keyword(pattern, text, text_lower: Optional[str] = None):
 
 AUTO_CLICK_HISTORY: Dict[Tuple[int, int], float] = {}
 AUTO_CLICK_HISTORY_TTL_SECONDS = 30
+AUTO_CLICK_RISK_HISTORY: Dict[int, deque] = {}
+AUTO_CLICK_RISK_LOCK = threading.Lock()
+AUTO_CLICK_RISK_WINDOW_SECONDS = 3600
 AUTO_CAPTCHA_REPLY_HISTORY: Dict[Tuple[int, int], float] = {}
 AUTO_CAPTCHA_REPLY_HISTORY_TTL_SECONDS = 180
 AUTO_CAPTCHA_REPLY_INFLIGHT: Dict[Tuple[int, int], float] = {}
@@ -3500,40 +3504,57 @@ def _normalize_auto_click_delay_seconds(value) -> float:
     return min(delay, 60.0)
 
 
+def _normalize_auto_click_risk_seconds(value, *, max_seconds: float) -> float:
+    try:
+        seconds = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if seconds < 0:
+        return 0.0
+    return min(seconds, float(max_seconds))
+
+
+def _normalize_auto_click_risk_limit(value) -> int:
+    try:
+        limit = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(limit, 200))
+
+
+def _normalize_auto_click_risk_settings(restricted_entry: dict) -> Dict[str, object]:
+    return {
+        "enabled": bool(restricted_entry.get('auto_click_risk_control_enabled')),
+        "min_interval_seconds": _normalize_auto_click_risk_seconds(
+            restricted_entry.get('auto_click_min_interval_seconds'),
+            max_seconds=3600,
+        ),
+        "hourly_limit": _normalize_auto_click_risk_limit(
+            restricted_entry.get('auto_click_hourly_limit')
+        ),
+        "random_delay_seconds": _normalize_auto_click_risk_seconds(
+            restricted_entry.get('auto_click_random_delay_seconds'),
+            max_seconds=60,
+        ),
+    }
+
+
 def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
-    keywords = _normalize_keyword_list(restricted_entry.get('auto_click_keywords'))
-    button_texts = _normalize_keyword_list(restricted_entry.get('auto_click_button_texts'))
     notify_targets = _normalize_keyword_list(restricted_entry.get('auto_click_notify_targets'))
-    captcha_keywords = _normalize_keyword_list(restricted_entry.get('auto_click_captcha_keywords'))
     delay_seconds = _normalize_auto_click_delay_seconds(
         restricted_entry.get('auto_click_delay_seconds')
     )
-
-    if restricted_entry.get('auto_click_captcha_reply') is None:
-        captcha_reply_enabled = bool(restricted_entry.get('auto_click_redpacket'))
-    else:
-        captcha_reply_enabled = bool(restricted_entry.get('auto_click_captcha_reply'))
-    if restricted_entry.get('auto_click_captcha_reply_from_success_only') is None:
-        captcha_reply_from_success_only = True
-    else:
-        captcha_reply_from_success_only = bool(
-            restricted_entry.get('auto_click_captcha_reply_from_success_only')
-        )
-
-    # Backward-compatible quick toggle: auto_click_redpacket=true uses default keyword
-    if restricted_entry.get('auto_click_redpacket') and not keywords:
-        keywords = ['发了一个红包']
-    if restricted_entry.get('auto_click_redpacket') and not captcha_keywords:
-        captcha_keywords = ['回复本消息', '验证码', '口令红包']
+    risk_settings = _normalize_auto_click_risk_settings(restricted_entry)
 
     return {
-        "keywords": keywords,
-        "button_texts": button_texts,
+        "keywords": [],
+        "button_texts": [],
         "notify_targets": notify_targets,
-        "captcha_reply_enabled": captcha_reply_enabled,
-        "captcha_reply_from_success_only": captcha_reply_from_success_only,
-        "captcha_keywords": captcha_keywords,
+        "captcha_reply_enabled": False,
+        "captcha_reply_from_success_only": True,
+        "captcha_keywords": [],
         "delay_seconds": delay_seconds,
+        "risk": risk_settings,
     }
 
 
@@ -3635,6 +3656,36 @@ def _auto_click_recently(chat_id: int, msg_id: int) -> bool:
 
 def _mark_auto_clicked(chat_id: int, msg_id: int) -> None:
     AUTO_CLICK_HISTORY[(chat_id, msg_id)] = time.time()
+
+
+def _reserve_auto_click_risk_slot(chat_id: int, rules: dict) -> Tuple[bool, str]:
+    risk = rules.get('risk') or {}
+    if not bool(risk.get('enabled')):
+        return True, ''
+
+    now = time.time()
+    min_interval = float(risk.get('min_interval_seconds') or 0)
+    hourly_limit = int(risk.get('hourly_limit') or 0)
+    with AUTO_CLICK_RISK_LOCK:
+        history = AUTO_CLICK_RISK_HISTORY.setdefault(int(chat_id), deque())
+        cutoff = now - AUTO_CLICK_RISK_WINDOW_SECONDS
+        while history and history[0] < cutoff:
+            history.popleft()
+
+        if min_interval > 0 and history:
+            elapsed = now - history[-1]
+            if elapsed < min_interval:
+                wait_left = max(0.0, min_interval - elapsed)
+                return False, f"距离上次点击仅 {elapsed:.1f}s，需再等待 {wait_left:.1f}s"
+
+        if hourly_limit > 0 and len(history) >= hourly_limit:
+            oldest = history[0] if history else now
+            wait_left = max(0.0, AUTO_CLICK_RISK_WINDOW_SECONDS - (now - oldest))
+            return False, f"最近 1 小时已点击 {len(history)}/{hourly_limit} 次，需再等待 {wait_left / 60:.1f} 分钟"
+
+        history.append(now)
+
+    return True, ''
 
 
 def _auto_captcha_replied_recently(chat_id: int, msg_id: int) -> bool:
@@ -5092,6 +5143,28 @@ def _build_message_link(event, msg) -> str:
     return ''
 
 
+async def _send_auto_click_notify(event, msg, notify_targets: List[str], btn_text: str, *, title: str = "已自动点击诗词红包答案") -> None:
+    if not notify_targets:
+        return
+
+    chat_id = getattr(event, 'chat_id', None)
+    msg_id = getattr(msg, 'id', None)
+    chat_title = None
+    try:
+        chat_title = getattr(event.chat, 'title', None)
+    except Exception:
+        chat_title = None
+    msg_link = _build_message_link(event, msg)
+    base_text = f"{title}\n群: {chat_title or chat_id}\n消息ID: {msg_id}\n按钮: {btn_text or '-'}"
+    if msg_link:
+        base_text += f"\n链接: {msg_link}"
+    for target in notify_targets:
+        try:
+            await client.send_message(target, base_text)
+        except Exception as e:
+            log_message(f"自动点击通知失败: target={target} err={e}")
+
+
 POETRY_REDPACKET_KNOWN_BLANKS: Dict[str, str] = {
     "来风雨声，花落知多少": "夜",
     "春眠不觉晓，处处闻啼鸟": "晓",
@@ -5296,14 +5369,28 @@ async def _maybe_auto_click_poetry_redpacket_quiz(
 
     r_idx, c_idx, btn_text = options[answer]
     try:
-        delay_seconds = _normalize_auto_click_delay_seconds(
-            restricted_entry.get('auto_click_delay_seconds')
-        )
+        rules = _get_auto_click_rules(restricted_entry)
+        allowed, risk_reason = _reserve_auto_click_risk_slot(chat_id, rules)
+        if not allowed:
+            log_message(
+                f"诗词红包风控跳过点击: ch={chat_id} msg={msg_id} "
+                f"answer='{answer}' reason={risk_reason}",
+                level="WARNING",
+            )
+            return False
+
+        delay_seconds = float(rules.get('delay_seconds') or 0.0)
+        risk = rules.get('risk') or {}
+        random_delay_seconds = 0.0
+        if bool(risk.get('enabled')) and float(risk.get('random_delay_seconds') or 0) > 0:
+            random_delay_seconds = random.uniform(0, float(risk.get('random_delay_seconds') or 0))
+            delay_seconds += random_delay_seconds
         if delay_seconds > 0:
             _mark_auto_clicked(chat_id, msg_id)
             log_message(
                 f"诗词红包答案匹配，延时点击: ch={chat_id} msg={msg_id} "
-                f"delay={delay_seconds:g}s answer='{answer}' btn='{btn_text}'"
+                f"delay={delay_seconds:g}s random_delay={random_delay_seconds:g}s "
+                f"answer='{answer}' btn='{btn_text}'"
             )
             await asyncio.sleep(delay_seconds)
         try:
@@ -5316,6 +5403,13 @@ async def _maybe_auto_click_poetry_redpacket_quiz(
         if delay_seconds <= 0:
             _mark_auto_clicked(chat_id, msg_id)
         log_message(f"已自动点击诗词红包答案: ch={chat_id} msg={msg_id} answer='{answer}' btn='{btn_text}'")
+        await _send_auto_click_notify(
+            event,
+            msg,
+            rules.get('notify_targets') or [],
+            btn_text,
+            title=f"已自动点击诗词红包答案: {answer}",
+        )
         return True
     except Exception as e:
         log_message(f"自动点击诗词红包答案失败: ch={chat_id} msg={msg_id} answer='{answer}' err={e}")
@@ -5330,13 +5424,6 @@ async def _maybe_auto_click_buttons(
     *,
     fast_mode: bool = False,
 ) -> bool:
-    rules = _get_auto_click_rules(restricted_entry)
-    keywords = rules.get('keywords') or []
-    button_texts = rules.get('button_texts') or []
-    if not keywords and not button_texts:
-        return False
-
-    # Only handle incoming messages
     if getattr(event, 'out', False):
         return False
 
@@ -5347,108 +5434,6 @@ async def _maybe_auto_click_buttons(
 
     if await _maybe_auto_click_poetry_redpacket_quiz(event, msg, restricted_entry, message_text_for_filter):
         return True
-
-    if not fast_mode:
-        if not message_text_for_filter:
-            return False
-
-        matched = False
-        message_text_lower = message_text_for_filter.lower()
-        for keyword in keywords:
-            if match_keyword(keyword, message_text_for_filter, message_text_lower):
-                matched = True
-                break
-        if not matched:
-            return False
-
-    if _auto_click_recently(chat_id, msg_id):
-        debug_log(f" 自动点击已触发过，跳过: ch={chat_id} msg={msg_id}")
-        return False
-
-    candidate = None
-
-    if fast_mode:
-        message_text_lower = (message_text_for_filter or '').lower()
-        if button_texts:
-            for r_idx, c_idx, btn in _iter_message_buttons(msg):
-                btn_text = getattr(btn, 'text', None) or ''
-                for bt in button_texts:
-                    if match_keyword(bt, btn_text):
-                        candidate = (r_idx, c_idx, btn_text)
-                        break
-                if candidate:
-                    break
-
-        if not candidate and keywords and message_text_for_filter:
-            for keyword in keywords:
-                if match_keyword(keyword, message_text_for_filter, message_text_lower):
-                    for r_idx, c_idx, btn in _iter_message_buttons(msg):
-                        btn_text = getattr(btn, 'text', None) or ''
-                        candidate = (r_idx, c_idx, btn_text)
-                        break
-                    break
-    else:
-        for r_idx, c_idx, btn in _iter_message_buttons(msg):
-            btn_text = getattr(btn, 'text', None) or ''
-            if button_texts:
-                for bt in button_texts:
-                    if match_keyword(bt, btn_text):
-                        candidate = (r_idx, c_idx, btn_text)
-                        break
-            else:
-                candidate = (r_idx, c_idx, btn_text)
-            if candidate:
-                break
-
-    if not candidate:
-        debug_log(f" 自动点击未找到按钮: ch={chat_id} msg={msg_id}")
-        return False
-
-    try:
-        r_idx, c_idx, btn_text = candidate
-        delay_seconds = _normalize_auto_click_delay_seconds(rules.get('delay_seconds'))
-        if delay_seconds > 0:
-            _mark_auto_clicked(chat_id, msg_id)
-            log_message(
-                f"红包按钮匹配，延时点击: ch={chat_id} msg={msg_id} "
-                f"delay={delay_seconds:g}s btn='{btn_text}'"
-            )
-            await asyncio.sleep(delay_seconds)
-        try:
-            await msg.click(i=r_idx, j=c_idx)
-        except TypeError:
-            try:
-                await msg.click(row=r_idx, column=c_idx)
-            except TypeError:
-                await msg.click(r_idx, c_idx)
-        if delay_seconds <= 0:
-            _mark_auto_clicked(chat_id, msg_id)
-        log_message(f"已自动点击按钮: ch={chat_id} msg={msg_id} btn='{btn_text}'")
-
-        try:
-            asyncio.create_task(_probe_redpacket_captcha_after_click(event, msg, restricted_entry))
-        except Exception as e:
-            debug_log(f" 启动口令红包补探测任务失败: ch={chat_id} msg={msg_id} err={e}")
-
-        notify_targets = rules.get('notify_targets') or []
-        if notify_targets:
-            chat_title = None
-            try:
-                chat_title = getattr(event.chat, 'title', None)
-            except Exception:
-                chat_title = None
-            msg_link = _build_message_link(event, msg)
-            base_text = f"已自动点击红包按钮\n群: {chat_title or chat_id}\n消息ID: {msg_id}\n按钮: {btn_text or '-'}"
-            if msg_link:
-                base_text += f"\n链接: {msg_link}"
-            for target in notify_targets:
-                try:
-                    await client.send_message(target, base_text)
-                except Exception as e:
-                    log_message(f"自动点击通知失败: target={target} err={e}")
-        return True
-    except Exception as e:
-        log_message(f"自动点击失败: ch={chat_id} msg={msg_id} err={e}")
     return False
 
 # --- Message Handler ---
@@ -5509,33 +5494,6 @@ async def new_message_handler(event, *, backfill: bool = False):
             media_trace = _build_media_trace(msg)
 
             message_text_for_filter = msg.message or ""
-            auto_click_fast = bool(restricted_entry.get('auto_click_fast', False))
-            auto_click_fast_skip = bool(restricted_entry.get('auto_click_fast_skip_processing', False))
-            auto_click_clicked = False
-            if auto_click_fast and not backfill:
-                try:
-                    auto_click_clicked = await _maybe_auto_click_buttons(
-                        event,
-                        msg,
-                        restricted_entry,
-                        message_text_for_filter,
-                        fast_mode=True,
-                    )
-                except Exception as e:
-                    debug_log(f" 自动点击(极速)处理异常: {e}")
-                if auto_click_clicked and auto_click_fast_skip:
-                    try:
-                        await _maybe_auto_reply_redpacket_captcha(
-                            event,
-                            msg,
-                            restricted_entry,
-                            message_text_for_filter,
-                            source='fast_click_skip',
-                        )
-                    except Exception as e:
-                        debug_log(f" 口令红包验证码自动回复异常: {e}")
-                    return
-
             if not message_text_for_filter and msg.grouped_id:
                 try:
                     nearby_msgs = await client.get_messages(
@@ -5561,24 +5519,6 @@ async def new_message_handler(event, *, backfill: bool = False):
                     await _maybe_auto_click_buttons(event, msg, restricted_entry, message_text_for_filter)
                 except Exception as e:
                     debug_log(f" 自动点击处理异常: {e}")
-
-            if not backfill:
-                try:
-                    await _maybe_auto_reply_redpacket_captcha(
-                        event,
-                        msg,
-                        restricted_entry,
-                        message_text_for_filter,
-                        source='new_message',
-                    )
-                except Exception as e:
-                    debug_log(f" 口令红包验证码自动回复异常: {e}")
-
-            if not backfill:
-                try:
-                    await _maybe_probe_redpacket_captcha_from_reply(event, msg, restricted_entry)
-                except Exception as e:
-                    debug_log(f" 回帖触发口令红包验证码自动回复异常: {e}")
 
             if not force_forward_all:
                 use_tv_filters = bool(restricted_entry.get('use_tvchannel_filters'))

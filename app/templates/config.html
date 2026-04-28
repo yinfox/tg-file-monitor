@@ -1143,7 +1143,7 @@
     {% if entry.keep_video_message or entry.force_forward_all or entry.forward_only or ('all' in entry_types) %}
     {% set summary.forwarding_count = summary.forwarding_count + 1 %}
     {% endif %}
-    {% if entry.auto_click_redpacket or entry.auto_click_keywords %}
+    {% if entry.auto_click_redpacket %}
     {% set summary.auto_click_count = summary.auto_click_count + 1 %}
     {% endif %}
     {% if entry.use_tvchannel_filters %}
@@ -1202,9 +1202,9 @@
                         <div class="settings-metric-note">开启消息转发或全类型转发的频道任务数。</div>
                     </div>
                     <div class="settings-metric-card">
-                        <div class="settings-metric-label">自动点击</div>
+                        <div class="settings-metric-label">诗词红包</div>
                         <div class="settings-metric-value">{{ summary.auto_click_count }}</div>
-                        <div class="settings-metric-note">红包和关键词自动点击相关规则的启用数。</div>
+                        <div class="settings-metric-note">启用诗词红包自动答题的频道任务数。</div>
                     </div>
                 </div>
             </div>
@@ -1335,9 +1335,9 @@
                                                         <i class="bi bi-check-circle"></i>白名单 {{ entry.whitelist_keywords | length }}
                                                     </span>
                                                     {% endif %}
-                                                    {% if entry.auto_click_redpacket or entry.auto_click_keywords %}
+                                                    {% if entry.auto_click_redpacket %}
                                                     <span class="channel-item-chip {% if entry.auto_click_redpacket %}is-alert{% endif %}">
-                                                        <i class="bi bi-lightning-charge"></i>自动点击
+                                                        <i class="bi bi-lightning-charge"></i>诗词红包
                                                     </span>
                                                     {% endif %}
                                                     {% if entry.keep_video_message or entry.force_forward_all %}
@@ -1553,7 +1553,7 @@
                                                                             <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse"
                                                                                 data-bs-target="#redPacketCollapse" aria-expanded="false"
                                                                                 aria-controls="redPacketCollapse">
-                                                                                <i class="bi bi-cash-coin me-1"></i>🧧 红包相关设置
+                                                                                <i class="bi bi-cash-coin me-1"></i>🧧 诗词红包设置
                                                                             </button>
                                                                         </h2>
                                                                         <div id="redPacketCollapse" class="accordion-collapse collapse"
@@ -1565,25 +1565,13 @@
                                                                                             <input type="checkbox" class="form-check-input"
                                                                                                 id="auto_click_redpacket" name="auto_click_redpacket">
                                                                                             <label class="form-check-label small" for="auto_click_redpacket">
-                                                                                                红包自动点击
+                                                                                                诗词红包自动答题
                                                                                             </label>
                                                                                         </div>
                                                                                         <div id="auto_click_download_hint"
                                                                                             class="alert alert-warning small py-1 mb-0 mt-1 d-none">
-                                                                                            未填写下载目录且启用红包/自动点击时，将自动切换为“文本”监控（不下载媒体）。
+                                                                                            未填写下载目录且启用诗词红包自动答题时，将自动切换为“文本”监控（不下载媒体）。
                                                                                         </div>
-                                                                                    </div>
-                                                                                    <div class="col-md-12 mb-2">
-                                                                                        <label for="auto_click_keywords" class="form-label small">自动点击关键词</label>
-                                                                                        <input type="text" class="form-control form-control-sm"
-                                                                                            id="auto_click_keywords" name="auto_click_keywords"
-                                                                                            placeholder="发了一个红包 (逗号分隔)">
-                                                                                    </div>
-                                                                                    <div class="col-md-12 mb-2">
-                                                                                        <label for="auto_click_button_texts" class="form-label small">按钮文本关键词</label>
-                                                                                        <input type="text" class="form-control form-control-sm"
-                                                                                            id="auto_click_button_texts" name="auto_click_button_texts"
-                                                                                            placeholder="领取红包,打开 (逗号分隔)">
                                                                                     </div>
                                                                                     <div class="col-md-12 mb-2">
                                                                                         <label for="auto_click_notify_targets" class="form-label small">点击后通知目标</label>
@@ -1600,33 +1588,29 @@
                                                                                     <div class="col-md-12 mb-2">
                                                                                         <div class="form-check pt-1">
                                                                                             <input type="checkbox" class="form-check-input"
-                                                                                                id="auto_click_fast" name="auto_click_fast">
-                                                                                            <label class="form-check-label small" for="auto_click_fast">
-                                                                                                极速点击
-                                                                                            </label>
-                                                                                        </div>
-                                                                                        <div class="form-check pt-1">
-                                                                                            <input type="checkbox" class="form-check-input"
-                                                                                                id="auto_click_fast_skip_processing" name="auto_click_fast_skip_processing">
-                                                                                            <label class="form-check-label small" for="auto_click_fast_skip_processing">
-                                                                                                点击后跳过后续处理
+                                                                                                id="auto_click_risk_control_enabled" name="auto_click_risk_control_enabled">
+                                                                                            <label class="form-check-label small" for="auto_click_risk_control_enabled">
+                                                                                                抢红包风控
                                                                                             </label>
                                                                                         </div>
                                                                                     </div>
-                                                                                    <div class="col-md-12 mb-2">
-                                                                                        <div class="form-check pt-1">
-                                                                                            <input type="checkbox" class="form-check-input"
-                                                                                                id="auto_click_captcha_reply" name="auto_click_captcha_reply">
-                                                                                            <label class="form-check-label small" for="auto_click_captcha_reply">
-                                                                                                口令/验证码红包自动回复
-                                                                                            </label>
-                                                                                        </div>
+                                                                                    <div class="col-md-4 mb-2">
+                                                                                        <label for="auto_click_min_interval_seconds" class="form-label small">最小间隔（秒）</label>
+                                                                                        <input type="number" class="form-control form-control-sm"
+                                                                                            id="auto_click_min_interval_seconds" name="auto_click_min_interval_seconds"
+                                                                                            min="0" max="3600" step="1" placeholder="0">
                                                                                     </div>
-                                                                                    <div class="col-md-12 mb-2">
-                                                                                        <label for="auto_click_captcha_keywords" class="form-label small">验证码提示关键词</label>
-                                                                                        <input type="text" class="form-control form-control-sm"
-                                                                                            id="auto_click_captcha_keywords" name="auto_click_captcha_keywords"
-                                                                                            placeholder="回复本消息,验证码,口令红包 (逗号分隔)">
+                                                                                    <div class="col-md-4 mb-2">
+                                                                                        <label for="auto_click_hourly_limit" class="form-label small">每小时上限</label>
+                                                                                        <input type="number" class="form-control form-control-sm"
+                                                                                            id="auto_click_hourly_limit" name="auto_click_hourly_limit"
+                                                                                            min="0" max="200" step="1" placeholder="0">
+                                                                                    </div>
+                                                                                    <div class="col-md-4 mb-2">
+                                                                                        <label for="auto_click_random_delay_seconds" class="form-label small">随机延时（秒）</label>
+                                                                                        <input type="number" class="form-control form-control-sm"
+                                                                                            id="auto_click_random_delay_seconds" name="auto_click_random_delay_seconds"
+                                                                                            min="0" max="60" step="0.1" placeholder="0">
                                                                                     </div>
                                                                                 </div>
                                                                             </div>
@@ -2402,9 +2386,6 @@
         if (!hintEl) return;
 
         const redpacketEl = document.getElementById('auto_click_redpacket');
-        const autoClickKeywordsEl = document.getElementById('auto_click_keywords');
-        const autoClickCaptchaReplyEl = document.getElementById('auto_click_captcha_reply');
-        const autoClickCaptchaKeywordsEl = document.getElementById('auto_click_captcha_keywords');
         const downloadDirEl = document.getElementById('download_directory');
         const keepVideoEl = document.getElementById('keep_video_message');
         const forceForwardEl = document.getElementById('force_forward_all');
@@ -2414,10 +2395,7 @@
         const monitorAudioEl = document.getElementById('monitor_audio');
         const monitorTextEl = document.getElementById('monitor_text');
 
-        const autoClickEnabled = (redpacketEl && redpacketEl.checked)
-            || (autoClickKeywordsEl && autoClickKeywordsEl.value.trim().length > 0)
-            || (autoClickCaptchaReplyEl && autoClickCaptchaReplyEl.checked)
-            || (autoClickCaptchaKeywordsEl && autoClickCaptchaKeywordsEl.value.trim().length > 0);
+        const autoClickEnabled = redpacketEl && redpacketEl.checked;
         const hasDownloadDir = downloadDirEl && downloadDirEl.value.trim().length > 0;
         const keepVideo = (keepVideoEl && keepVideoEl.checked) || (forceForwardEl && forceForwardEl.checked);
 
@@ -2484,14 +2462,12 @@
         safeSetValue('blacklist_keywords', (data.blacklist_keywords || []).join(', '));
         safeSetValue('whitelist_keywords', (data.whitelist_keywords || []).join(', '));
         safeSetChecked('auto_click_redpacket', data.auto_click_redpacket);
-        safeSetValue('auto_click_keywords', (data.auto_click_keywords || []).join(', '));
-        safeSetValue('auto_click_button_texts', (data.auto_click_button_texts || []).join(', '));
         safeSetValue('auto_click_notify_targets', (data.auto_click_notify_targets || []).join(', '));
         safeSetValue('auto_click_delay_seconds', data.auto_click_delay_seconds || '');
-        safeSetChecked('auto_click_fast', data.auto_click_fast);
-        safeSetChecked('auto_click_fast_skip_processing', data.auto_click_fast_skip_processing);
-        safeSetChecked('auto_click_captcha_reply', data.auto_click_captcha_reply);
-        safeSetValue('auto_click_captcha_keywords', (data.auto_click_captcha_keywords || []).join(', '));
+        safeSetChecked('auto_click_risk_control_enabled', data.auto_click_risk_control_enabled);
+        safeSetValue('auto_click_min_interval_seconds', data.auto_click_min_interval_seconds || '');
+        safeSetValue('auto_click_hourly_limit', data.auto_click_hourly_limit || '');
+        safeSetValue('auto_click_random_delay_seconds', data.auto_click_random_delay_seconds || '');
         safeSetValue('target_user_ids_restricted', (data.target_user_ids || []).join(', '));
         safeSetChecked('use_tvchannel_filters', data.use_tvchannel_filters);
 
@@ -2609,14 +2585,12 @@
         safeReset('blacklist_keywords');
         safeReset('whitelist_keywords');
         safeReset('auto_click_redpacket');
-        safeReset('auto_click_keywords');
-        safeReset('auto_click_button_texts');
         safeReset('auto_click_notify_targets');
         safeReset('auto_click_delay_seconds');
-        safeReset('auto_click_fast');
-        safeReset('auto_click_fast_skip_processing');
-        safeReset('auto_click_captcha_reply');
-        safeReset('auto_click_captcha_keywords');
+        safeReset('auto_click_risk_control_enabled');
+        safeReset('auto_click_min_interval_seconds');
+        safeReset('auto_click_hourly_limit');
+        safeReset('auto_click_random_delay_seconds');
         safeReset('target_user_ids_restricted');
         safeReset('use_tvchannel_filters');
         safeReset('download_video');
@@ -2878,10 +2852,7 @@
 
         const hintInputs = [
             'auto_click_redpacket',
-            'auto_click_keywords',
             'auto_click_delay_seconds',
-            'auto_click_captcha_reply',
-            'auto_click_captcha_keywords',
             'download_directory',
             'keep_video_message',
             'force_forward_all',
