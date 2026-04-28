@@ -100,6 +100,8 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
                 "auto_click_min_interval_seconds": "30",
                 "auto_click_hourly_limit": "5",
                 "auto_click_random_delay_seconds": "1.5",
+                "auto_click_min_points": "20",
+                "auto_click_min_count": "3",
             }
         )
         self.assertEqual(
@@ -111,6 +113,8 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
                 "random_delay_seconds": 1.5,
             },
         )
+        self.assertEqual(rules.get("min_points"), 20)
+        self.assertEqual(rules.get("min_count"), 3)
 
     def test_auto_click_rules_normalize_delay(self):
         rules = telegram_monitor._get_auto_click_rules(
@@ -154,6 +158,21 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         options = telegram_monitor._parse_poetry_quiz_button_options(msg)
         self.assertEqual(options["夜"], (0, 1, "B. 夜"))
 
+    def test_extract_poetry_redpacket_meta(self):
+        text = "📜 诗词填空：红包积分: 80，红包个数: 5\n《春晓》：__来风雨声，花落知多少。"
+        meta = telegram_monitor._extract_poetry_redpacket_meta(text)
+        self.assertEqual(meta, {"points": 80, "count": 5})
+
+    def test_poetry_redpacket_threshold_check_blocks_low_points(self):
+        text = "📜 诗词填空：红包积分: 8，红包个数: 5\n《春晓》：__来风雨声，花落知多少。"
+        rules = telegram_monitor._get_auto_click_rules(
+            {"auto_click_min_points": 10, "auto_click_min_count": 3}
+        )
+        ok, meta, reason = telegram_monitor._poetry_redpacket_threshold_check(text, rules)
+        self.assertFalse(ok)
+        self.assertEqual(meta, {"points": 8, "count": 5})
+        self.assertIn("红包积分 8 < 10", reason)
+
     def test_auto_click_buttons_waits_before_click(self):
         msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
         msg.buttons = [
@@ -183,6 +202,84 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         self.assertTrue(clicked)
         self.assertEqual(sleeps, [0.5])
         self.assertEqual(len(msg.clicked), 1)
+
+    def test_poetry_auto_click_thresholds_must_pass(self):
+        msg = _DummyMsg(100, "📜 诗词填空：红包积分: 20，红包个数: 3\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_min_points": "20",
+            "auto_click_min_count": "3",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+
+        clicked = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(
+                _DummyEvent(),
+                msg,
+                entry,
+                msg.message,
+            )
+        )
+
+        self.assertTrue(clicked)
+        self.assertEqual(len(msg.clicked), 1)
+
+    def test_poetry_auto_click_thresholds_block_low_count(self):
+        msg = _DummyMsg(100, "📜 诗词填空：红包积分: 20，红包个数: 2\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_min_points": "20",
+            "auto_click_min_count": "3",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+
+        clicked = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(
+                _DummyEvent(),
+                msg,
+                entry,
+                msg.message,
+            )
+        )
+
+        self.assertFalse(clicked)
+        self.assertEqual(len(msg.clicked), 0)
+
+    def test_poetry_auto_click_thresholds_block_missing_meta(self):
+        msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        entry = {
+            "auto_click_redpacket": True,
+            "auto_click_min_points": "20",
+            "auto_click_min_count": "3",
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        telegram_monitor.AUTO_CLICK_RISK_HISTORY.clear()
+
+        clicked = asyncio.run(
+            telegram_monitor._maybe_auto_click_buttons(
+                _DummyEvent(),
+                msg,
+                entry,
+                msg.message,
+            )
+        )
+
+        self.assertFalse(clicked)
+        self.assertEqual(len(msg.clicked), 0)
 
     def test_auto_click_risk_random_delay_is_added(self):
         msg = _DummyMsg(100, "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。")

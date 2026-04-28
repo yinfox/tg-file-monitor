@@ -58,7 +58,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.83"
+VERSION = "0.5.84"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -11785,6 +11785,16 @@ def manage_config():
             except (TypeError, ValueError):
                 auto_click_random_delay_seconds = 0.0
             auto_click_random_delay_seconds = max(0.0, min(auto_click_random_delay_seconds, 60.0))
+            try:
+                auto_click_min_points = int((request.form.get('auto_click_min_points') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                auto_click_min_points = 0
+            auto_click_min_points = max(0, min(auto_click_min_points, 1000000))
+            try:
+                auto_click_min_count = int((request.form.get('auto_click_min_count') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                auto_click_min_count = 0
+            auto_click_min_count = max(0, min(auto_click_min_count, 10000))
             monitor_types = request.form.getlist('monitor_types')
             forward_only = False
             forward_enabled = keep_video_message or force_forward_all
@@ -11850,6 +11860,8 @@ def manage_config():
                             entry['auto_click_min_interval_seconds'] = auto_click_min_interval_seconds
                             entry['auto_click_hourly_limit'] = auto_click_hourly_limit
                             entry['auto_click_random_delay_seconds'] = auto_click_random_delay_seconds
+                            entry['auto_click_min_points'] = auto_click_min_points
+                            entry['auto_click_min_count'] = auto_click_min_count
                             for obsolete_key in (
                                 'auto_click_keywords',
                                 'auto_click_button_texts',
@@ -11901,6 +11913,8 @@ def manage_config():
                         "auto_click_min_interval_seconds": auto_click_min_interval_seconds,
                         "auto_click_hourly_limit": auto_click_hourly_limit,
                         "auto_click_random_delay_seconds": auto_click_random_delay_seconds,
+                        "auto_click_min_points": auto_click_min_points,
+                        "auto_click_min_count": auto_click_min_count,
                         "monitor_types": monitor_types,
                         "forward_only": forward_only
                     })

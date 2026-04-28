@@ -3522,6 +3522,14 @@ def _normalize_auto_click_risk_limit(value) -> int:
     return max(0, min(limit, 200))
 
 
+def _normalize_auto_click_threshold(value, *, max_value: int) -> int:
+    try:
+        threshold = int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(threshold, int(max_value)))
+
+
 def _normalize_auto_click_risk_settings(restricted_entry: dict) -> Dict[str, object]:
     return {
         "enabled": bool(restricted_entry.get('auto_click_risk_control_enabled')),
@@ -3545,6 +3553,14 @@ def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
         restricted_entry.get('auto_click_delay_seconds')
     )
     risk_settings = _normalize_auto_click_risk_settings(restricted_entry)
+    min_points = _normalize_auto_click_threshold(
+        restricted_entry.get('auto_click_min_points'),
+        max_value=1_000_000,
+    )
+    min_count = _normalize_auto_click_threshold(
+        restricted_entry.get('auto_click_min_count'),
+        max_value=10_000,
+    )
 
     return {
         "keywords": [],
@@ -3555,6 +3571,8 @@ def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
         "captcha_keywords": [],
         "delay_seconds": delay_seconds,
         "risk": risk_settings,
+        "min_points": min_points,
+        "min_count": min_count,
     }
 
 
@@ -5344,6 +5362,65 @@ def _solve_poetry_redpacket_answer(message_text: str, option_values: List[str]) 
     return ''
 
 
+def _extract_first_int(patterns: List[str], text: str) -> Optional[int]:
+    compact = str(text or '').replace(',', '')
+    for pattern in patterns:
+        match = re.search(pattern, compact, flags=re.IGNORECASE)
+        if not match:
+            continue
+        try:
+            return int(match.group(1))
+        except Exception:
+            continue
+    return None
+
+
+def _extract_poetry_redpacket_meta(message_text: str) -> Dict[str, Optional[int]]:
+    text = str(message_text or '')
+    points = _extract_first_int(
+        [
+            r'(?:红包|总|总计|合计)?\s*积分\s*[：:\s]*([0-9]+)',
+            r'(?:红包|总|总计|合计)?\s*点数\s*[：:\s]*([0-9]+)',
+            r'([0-9]+)\s*(?:红包)?积分',
+            r'([0-9]+)\s*点',
+        ],
+        text,
+    )
+    count = _extract_first_int(
+        [
+            r'(?:红包)?(?:个数|数量|份数|个|份)\s*[：:\s]*([0-9]+)',
+            r'(?:共|合计|总计)\s*([0-9]+)\s*(?:个|份)',
+            r'([0-9]+)\s*(?:个|份)\s*(?:红包|诗词红包)?',
+            r'红包\s*[xX*×]\s*([0-9]+)',
+        ],
+        text,
+    )
+    return {"points": points, "count": count}
+
+
+def _poetry_redpacket_threshold_check(message_text: str, rules: dict) -> Tuple[bool, Dict[str, Optional[int]], str]:
+    min_points = int(rules.get('min_points') or 0)
+    min_count = int(rules.get('min_count') or 0)
+    if min_points <= 0 and min_count <= 0:
+        return True, {"points": None, "count": None}, ''
+
+    meta = _extract_poetry_redpacket_meta(message_text)
+    points = meta.get("points")
+    count = meta.get("count")
+    failures = []
+    if min_points > 0:
+        if points is None:
+            failures.append(f"未解析到红包积分(要求 >= {min_points})")
+        elif points < min_points:
+            failures.append(f"红包积分 {points} < {min_points}")
+    if min_count > 0:
+        if count is None:
+            failures.append(f"未解析到红包个数(要求 >= {min_count})")
+        elif count < min_count:
+            failures.append(f"红包个数 {count} < {min_count}")
+    return not failures, meta, "；".join(failures)
+
+
 async def _maybe_auto_click_poetry_redpacket_quiz(
     event,
     msg,
@@ -5362,14 +5439,25 @@ async def _maybe_auto_click_poetry_redpacket_quiz(
     if _auto_click_recently(chat_id, msg_id):
         return False
 
+    message_text = message_text_for_filter or getattr(msg, 'message', '') or ''
     options = _parse_poetry_quiz_button_options(msg)
-    answer = _solve_poetry_redpacket_answer(message_text_for_filter or getattr(msg, 'message', '') or '', list(options.keys()))
+    answer = _solve_poetry_redpacket_answer(message_text, list(options.keys()))
     if not answer or answer not in options:
         return False
 
     r_idx, c_idx, btn_text = options[answer]
     try:
         rules = _get_auto_click_rules(restricted_entry)
+        threshold_ok, redpacket_meta, threshold_reason = _poetry_redpacket_threshold_check(message_text, rules)
+        if not threshold_ok:
+            log_message(
+                f"诗词红包门槛跳过点击: ch={chat_id} msg={msg_id} "
+                f"answer='{answer}' points={redpacket_meta.get('points')} "
+                f"count={redpacket_meta.get('count')} reason={threshold_reason}",
+                level="WARNING",
+            )
+            return False
+
         allowed, risk_reason = _reserve_auto_click_risk_slot(chat_id, rules)
         if not allowed:
             log_message(
@@ -5403,12 +5491,18 @@ async def _maybe_auto_click_poetry_redpacket_quiz(
         if delay_seconds <= 0:
             _mark_auto_clicked(chat_id, msg_id)
         log_message(f"已自动点击诗词红包答案: ch={chat_id} msg={msg_id} answer='{answer}' btn='{btn_text}'")
+        notify_title = f"已自动点击诗词红包答案: {answer}"
+        if redpacket_meta.get('points') is not None or redpacket_meta.get('count') is not None:
+            notify_title += (
+                f"（积分: {redpacket_meta.get('points') if redpacket_meta.get('points') is not None else '-'}"
+                f"，个数: {redpacket_meta.get('count') if redpacket_meta.get('count') is not None else '-'}）"
+            )
         await _send_auto_click_notify(
             event,
             msg,
             rules.get('notify_targets') or [],
             btn_text,
-            title=f"已自动点击诗词红包答案: {answer}",
+            title=notify_title,
         )
         return True
     except Exception as e:

@@ -1585,6 +1585,18 @@
                                                                                             id="auto_click_delay_seconds" name="auto_click_delay_seconds"
                                                                                             min="0" max="60" step="0.1" placeholder="0">
                                                                                     </div>
+                                                                                    <div class="col-md-6 mb-2">
+                                                                                        <label for="auto_click_min_points" class="form-label small">积分下限</label>
+                                                                                        <input type="number" class="form-control form-control-sm"
+                                                                                            id="auto_click_min_points" name="auto_click_min_points"
+                                                                                            min="0" max="1000000" step="1" placeholder="0">
+                                                                                    </div>
+                                                                                    <div class="col-md-6 mb-2">
+                                                                                        <label for="auto_click_min_count" class="form-label small">个数下限</label>
+                                                                                        <input type="number" class="form-control form-control-sm"
+                                                                                            id="auto_click_min_count" name="auto_click_min_count"
+                                                                                            min="0" max="10000" step="1" placeholder="0">
+                                                                                    </div>
                                                                                     <div class="col-md-12 mb-2">
                                                                                         <div class="form-check pt-1">
                                                                                             <input type="checkbox" class="form-check-input"
@@ -2464,6 +2476,8 @@
         safeSetChecked('auto_click_redpacket', data.auto_click_redpacket);
         safeSetValue('auto_click_notify_targets', (data.auto_click_notify_targets || []).join(', '));
         safeSetValue('auto_click_delay_seconds', data.auto_click_delay_seconds || '');
+        safeSetValue('auto_click_min_points', data.auto_click_min_points || '');
+        safeSetValue('auto_click_min_count', data.auto_click_min_count || '');
         safeSetChecked('auto_click_risk_control_enabled', data.auto_click_risk_control_enabled);
         safeSetValue('auto_click_min_interval_seconds', data.auto_click_min_interval_seconds || '');
         safeSetValue('auto_click_hourly_limit', data.auto_click_hourly_limit || '');
@@ -2587,6 +2601,8 @@
         safeReset('auto_click_redpacket');
         safeReset('auto_click_notify_targets');
         safeReset('auto_click_delay_seconds');
+        safeReset('auto_click_min_points');
+        safeReset('auto_click_min_count');
         safeReset('auto_click_risk_control_enabled');
         safeReset('auto_click_min_interval_seconds');
         safeReset('auto_click_hourly_limit');
