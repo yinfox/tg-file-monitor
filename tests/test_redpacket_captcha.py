@@ -28,6 +28,17 @@ class _DummyMsg:
         self.sender = sender
         self.post_author = None
         self.sender_name = None
+        self.buttons = None
+        self.clicked = []
+
+    async def click(self, *args, **kwargs):
+        self.clicked.append((args, kwargs))
+        return True
+
+
+class _DummyButton:
+    def __init__(self, text):
+        self.text = text
 
 
 class _DummyClient:
@@ -64,6 +75,12 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         self.assertTrue(rules.get("captcha_reply_from_success_only"))
         self.assertIn("验证码", rules.get("captcha_keywords") or [])
 
+    def test_auto_click_rules_normalize_delay(self):
+        rules = telegram_monitor._get_auto_click_rules(
+            {"auto_click_keywords": ["发了一个红包"], "auto_click_delay_seconds": "1.5"}
+        )
+        self.assertEqual(rules.get("delay_seconds"), 1.5)
+
     def test_auto_click_rules_allow_explicit_disable(self):
         rules = telegram_monitor._get_auto_click_rules(
             {
@@ -74,6 +91,60 @@ class RedPacketCaptchaTestCase(unittest.TestCase):
         )
         self.assertFalse(rules.get("captcha_reply_enabled"))
         self.assertEqual(rules.get("captcha_keywords"), ["回复本消息", "验证码"])
+
+    def test_solve_poetry_redpacket_answer_from_new_quiz(self):
+        text = "📜 诗词填空：\n《春晓》唐·孟浩然：__来风雨声，花落知多少。"
+        answer = telegram_monitor._solve_poetry_redpacket_answer(text, ["巷", "夜", "江", "九"])
+        self.assertEqual(answer, "夜")
+
+    def test_solve_poetry_redpacket_answer_uses_question_bank(self):
+        text = "📜 诗词填空：欲穷千里目，更上一层__。"
+
+        def fake_phrase_exists(phrase):
+            return phrase == "更上一层楼"
+
+        with patch.object(telegram_monitor, "_poetry_phrase_exists", side_effect=fake_phrase_exists):
+            answer = telegram_monitor._solve_poetry_redpacket_answer(text, ["天", "台", "楼", "云"])
+
+        self.assertEqual(answer, "楼")
+
+    def test_parse_poetry_quiz_button_options(self):
+        msg = _DummyMsg(100, "诗词填空")
+        msg.buttons = [
+            [_DummyButton("A. 巷"), _DummyButton("B. 夜")],
+            [_DummyButton("C. 江"), _DummyButton("D. 九")],
+        ]
+        options = telegram_monitor._parse_poetry_quiz_button_options(msg)
+        self.assertEqual(options["夜"], (0, 1, "B. 夜"))
+
+    def test_auto_click_buttons_waits_before_click(self):
+        msg = _DummyMsg(100, "发了一个红包")
+        msg.buttons = [[_DummyButton("抢红包")]]
+        sleeps = []
+
+        async def fake_sleep(seconds):
+            sleeps.append(seconds)
+
+        entry = {
+            "auto_click_keywords": ["发了一个红包"],
+            "auto_click_button_texts": ["抢红包"],
+            "auto_click_delay_seconds": "0.5",
+            "auto_click_captcha_reply": False,
+        }
+        telegram_monitor.AUTO_CLICK_HISTORY.clear()
+        with patch.object(telegram_monitor.asyncio, "sleep", side_effect=fake_sleep):
+            clicked = asyncio.run(
+                telegram_monitor._maybe_auto_click_buttons(
+                    _DummyEvent(),
+                    msg,
+                    entry,
+                    msg.message,
+                )
+            )
+
+        self.assertTrue(clicked)
+        self.assertEqual(sleeps, [0.5])
+        self.assertEqual(len(msg.clicked), 1)
 
     def test_extract_captcha_code_uses_vote(self):
         variants = [("raw", b"a"), ("gray", b"b")]

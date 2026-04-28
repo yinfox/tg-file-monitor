@@ -45,6 +45,7 @@ config/telegram_monitor.session*
 config/config.json
 config/config.local.json
 config/*.local.json
+config/*.bak_*
 config/cookies.txt
 config/.env
 .env
@@ -68,6 +69,7 @@ config/bot_monitor.lock
 app/download/
 app/downloads/
 downloads/
+app/data/*.sqlite
 
 # Cookies
 app/temp_cookies/

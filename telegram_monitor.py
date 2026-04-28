@@ -71,6 +71,10 @@ _HDHIVE_OPEN_API_RATE_LIMIT_MAX_REQUESTS = 3
 _HDHIVE_OPEN_API_DETAIL_ROUTE_LOCK = threading.Lock()
 _HDHIVE_OPEN_API_DETAIL_ROUTE_CACHE = {}
 _HDHIVE_OPEN_API_DETAIL_ROUTE_TTL_SECONDS = 6 * 60 * 60
+POETRY_QUESTION_BANK_FILE = os.path.join(APP_DIR, 'data', 'poetry_question_bank.sqlite')
+_POETRY_QUESTION_BANK_CONN = None
+_POETRY_QUESTION_BANK_LOCK = threading.Lock()
+_POETRY_QUESTION_BANK_MISSING_LOGGED = False
 
 
 def log_message(message: str, level: str = "INFO"):
@@ -3486,11 +3490,24 @@ def _normalize_keyword_list(value) -> List[str]:
     return [str(v).strip() for v in items if str(v).strip()]
 
 
+def _normalize_auto_click_delay_seconds(value) -> float:
+    try:
+        delay = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if delay < 0:
+        return 0.0
+    return min(delay, 60.0)
+
+
 def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
     keywords = _normalize_keyword_list(restricted_entry.get('auto_click_keywords'))
     button_texts = _normalize_keyword_list(restricted_entry.get('auto_click_button_texts'))
     notify_targets = _normalize_keyword_list(restricted_entry.get('auto_click_notify_targets'))
     captcha_keywords = _normalize_keyword_list(restricted_entry.get('auto_click_captcha_keywords'))
+    delay_seconds = _normalize_auto_click_delay_seconds(
+        restricted_entry.get('auto_click_delay_seconds')
+    )
 
     if restricted_entry.get('auto_click_captcha_reply') is None:
         captcha_reply_enabled = bool(restricted_entry.get('auto_click_redpacket'))
@@ -3516,6 +3533,7 @@ def _get_auto_click_rules(restricted_entry: dict) -> Dict[str, object]:
         "captcha_reply_enabled": captcha_reply_enabled,
         "captcha_reply_from_success_only": captcha_reply_from_success_only,
         "captcha_keywords": captcha_keywords,
+        "delay_seconds": delay_seconds,
     }
 
 
@@ -5074,6 +5092,236 @@ def _build_message_link(event, msg) -> str:
     return ''
 
 
+POETRY_REDPACKET_KNOWN_BLANKS: Dict[str, str] = {
+    "来风雨声，花落知多少": "夜",
+    "春眠不觉晓，处处闻啼鸟": "晓",
+    "床前明月光，疑是地上霜": "光",
+    "举头望明月，低头思故乡": "头",
+    "白日依山尽，黄河入海流": "日",
+    "欲穷千里目，更上一层楼": "楼",
+}
+
+
+def _normalize_poetry_lookup_phrase(text: str) -> str:
+    return ''.join(re.findall(r'[\u4e00-\u9fff]+', str(text or '')))
+
+
+def _get_poetry_question_bank_conn():
+    global _POETRY_QUESTION_BANK_CONN, _POETRY_QUESTION_BANK_MISSING_LOGGED
+    if _POETRY_QUESTION_BANK_CONN is not None:
+        return _POETRY_QUESTION_BANK_CONN
+    if not os.path.exists(POETRY_QUESTION_BANK_FILE):
+        if not _POETRY_QUESTION_BANK_MISSING_LOGGED:
+            _POETRY_QUESTION_BANK_MISSING_LOGGED = True
+            debug_log(f" 诗词题库文件不存在，使用内置小题库: {POETRY_QUESTION_BANK_FILE}")
+        return None
+    try:
+        uri = f"file:{POETRY_QUESTION_BANK_FILE}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        conn.execute('PRAGMA query_only=ON')
+        _POETRY_QUESTION_BANK_CONN = conn
+        return conn
+    except Exception as e:
+        log_message(f"诗词题库打开失败，使用内置小题库: {e}", level="WARNING")
+        return None
+
+
+@lru_cache(maxsize=8192)
+def _poetry_phrase_exists(phrase: str) -> bool:
+    normalized = _normalize_poetry_lookup_phrase(phrase)
+    if len(normalized) < 2:
+        return False
+    conn = _get_poetry_question_bank_conn()
+    if conn is None:
+        return False
+    try:
+        with _POETRY_QUESTION_BANK_LOCK:
+            row = conn.execute(
+                'SELECT 1 FROM phrases WHERE phrase = ? LIMIT 1',
+                (normalized,),
+            ).fetchone()
+        return bool(row)
+    except Exception as e:
+        debug_log(f" 诗词题库查询失败: phrase_len={len(normalized)} err={e}")
+        return False
+
+
+def _normalize_poetry_quiz_text(text: str) -> str:
+    compact = re.sub(r'\s+', '', str(text or ''))
+    compact = re.sub(r'[＿_]+', '_', compact)
+    return compact
+
+
+def _parse_poetry_quiz_button_options(msg) -> Dict[str, Tuple[int, int, str]]:
+    options: Dict[str, Tuple[int, int, str]] = {}
+    for r_idx, c_idx, btn in _iter_message_buttons(msg) or []:
+        btn_text = str(getattr(btn, 'text', None) or '').strip()
+        if not btn_text:
+            continue
+        match = re.match(r'^\s*([A-Da-d])\s*[\.\u3001:：]?\s*(.+?)\s*$', btn_text)
+        if not match:
+            continue
+        value = _normalize_poetry_lookup_phrase(match.group(2).strip())
+        if value:
+            options[value] = (r_idx, c_idx, btn_text)
+    return options
+
+
+def _last_index_of_any(text: str, chars: str) -> int:
+    return max((str(text or '').rfind(ch) for ch in chars), default=-1)
+
+
+def _first_index_of_any(text: str, chars: str) -> int:
+    indexes = [str(text or '').find(ch) for ch in chars]
+    indexes = [idx for idx in indexes if idx >= 0]
+    return min(indexes) if indexes else -1
+
+
+def _poetry_left_context_variants(left: str) -> List[str]:
+    raw = str(left or '')
+    variants = [raw]
+    for boundaries in ('：:；;。！？!?', '：:；;。！？!?，,、', '》」』）)]'):
+        idx = _last_index_of_any(raw, boundaries)
+        if idx >= 0:
+            variants.append(raw[idx + 1:])
+    result: List[str] = []
+    seen = set()
+    for value in variants:
+        normalized = _normalize_poetry_lookup_phrase(value)[-32:]
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    if not result:
+        result.append('')
+    return result
+
+
+def _poetry_right_context_variants(right: str) -> List[str]:
+    raw = str(right or '')
+    variants = [raw[:72]]
+    for boundaries in ('。！？!?', '。！？!?；;', '。！？!?；;，,、'):
+        idx = _first_index_of_any(raw, boundaries)
+        if idx >= 0:
+            variants.append(raw[:idx + 1])
+    result: List[str] = []
+    seen = set()
+    for value in variants:
+        normalized = _normalize_poetry_lookup_phrase(value)[:48]
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            result.append(normalized)
+    if not result:
+        result.append('')
+    return result
+
+
+def _extract_poetry_blank_contexts(message_text: str) -> List[Tuple[List[str], List[str]]]:
+    raw = str(message_text or '').replace('＿', '_')
+    contexts: List[Tuple[List[str], List[str]]] = []
+    for line in raw.splitlines():
+        if '_' not in line:
+            continue
+        for match in re.finditer(r'([^_\r\n]{0,48})_+([^_\r\n]{0,72})', line):
+            left_variants = _poetry_left_context_variants(match.group(1))
+            right_variants = _poetry_right_context_variants(match.group(2))
+            if left_variants or right_variants:
+                contexts.append((left_variants, right_variants))
+    return contexts
+
+
+def _solve_poetry_redpacket_answer(message_text: str, option_values: List[str]) -> str:
+    text = _normalize_poetry_quiz_text(message_text)
+    if not text or not option_values:
+        return ''
+    if not (('诗词填空' in text) or ('诗词红包' in text) or ('红包' in text and '填空' in text)):
+        return ''
+
+    normalized_options = []
+    seen_options = set()
+    for option in option_values:
+        normalized = _normalize_poetry_lookup_phrase(option)
+        if normalized and normalized not in seen_options:
+            seen_options.add(normalized)
+            normalized_options.append(normalized)
+
+    for left_variants, right_variants in _extract_poetry_blank_contexts(message_text):
+        for answer in normalized_options:
+            for left in left_variants:
+                for right in right_variants:
+                    candidate = f"{left}{answer}{right}"
+                    if _poetry_phrase_exists(candidate):
+                        return answer
+
+    for clue, answer in POETRY_REDPACKET_KNOWN_BLANKS.items():
+        if clue in text and answer in normalized_options:
+            return answer
+
+    blank_match = re.search(r'([，。！？、：:；;《》\u4e00-\u9fff]{0,16})_([，。！？、：:；;《》\u4e00-\u9fff]{0,16})', text)
+    if not blank_match:
+        return ''
+    prefix = re.sub(r'^[^\u4e00-\u9fff]+', '', blank_match.group(1) or '')
+    suffix = re.sub(r'[^\u4e00-\u9fff]+$', '', blank_match.group(2) or '')
+    for value in normalized_options:
+        if len(value) != 1:
+            continue
+        candidate = f"{prefix}{value}{suffix}"
+        for clue, answer in POETRY_REDPACKET_KNOWN_BLANKS.items():
+            if answer == value and candidate in clue:
+                return value
+    return ''
+
+
+async def _maybe_auto_click_poetry_redpacket_quiz(
+    event,
+    msg,
+    restricted_entry: dict,
+    message_text_for_filter: str,
+) -> bool:
+    if getattr(event, 'out', False):
+        return False
+    if not bool(restricted_entry.get('auto_click_redpacket')):
+        return False
+
+    chat_id = getattr(event, 'chat_id', None)
+    msg_id = getattr(msg, 'id', None)
+    if chat_id is None or msg_id is None:
+        return False
+    if _auto_click_recently(chat_id, msg_id):
+        return False
+
+    options = _parse_poetry_quiz_button_options(msg)
+    answer = _solve_poetry_redpacket_answer(message_text_for_filter or getattr(msg, 'message', '') or '', list(options.keys()))
+    if not answer or answer not in options:
+        return False
+
+    r_idx, c_idx, btn_text = options[answer]
+    try:
+        delay_seconds = _normalize_auto_click_delay_seconds(
+            restricted_entry.get('auto_click_delay_seconds')
+        )
+        if delay_seconds > 0:
+            _mark_auto_clicked(chat_id, msg_id)
+            log_message(
+                f"诗词红包答案匹配，延时点击: ch={chat_id} msg={msg_id} "
+                f"delay={delay_seconds:g}s answer='{answer}' btn='{btn_text}'"
+            )
+            await asyncio.sleep(delay_seconds)
+        try:
+            await msg.click(i=r_idx, j=c_idx)
+        except TypeError:
+            try:
+                await msg.click(row=r_idx, column=c_idx)
+            except TypeError:
+                await msg.click(r_idx, c_idx)
+        if delay_seconds <= 0:
+            _mark_auto_clicked(chat_id, msg_id)
+        log_message(f"已自动点击诗词红包答案: ch={chat_id} msg={msg_id} answer='{answer}' btn='{btn_text}'")
+        return True
+    except Exception as e:
+        log_message(f"自动点击诗词红包答案失败: ch={chat_id} msg={msg_id} answer='{answer}' err={e}")
+    return False
+
+
 async def _maybe_auto_click_buttons(
     event,
     msg,
@@ -5092,6 +5340,14 @@ async def _maybe_auto_click_buttons(
     if getattr(event, 'out', False):
         return False
 
+    chat_id = getattr(event, 'chat_id', None)
+    msg_id = getattr(msg, 'id', None)
+    if chat_id is None or msg_id is None:
+        return False
+
+    if await _maybe_auto_click_poetry_redpacket_quiz(event, msg, restricted_entry, message_text_for_filter):
+        return True
+
     if not fast_mode:
         if not message_text_for_filter:
             return False
@@ -5104,11 +5360,6 @@ async def _maybe_auto_click_buttons(
                 break
         if not matched:
             return False
-
-    chat_id = getattr(event, 'chat_id', None)
-    msg_id = getattr(msg, 'id', None)
-    if chat_id is None or msg_id is None:
-        return False
 
     if _auto_click_recently(chat_id, msg_id):
         debug_log(f" 自动点击已触发过，跳过: ch={chat_id} msg={msg_id}")
@@ -5155,6 +5406,14 @@ async def _maybe_auto_click_buttons(
 
     try:
         r_idx, c_idx, btn_text = candidate
+        delay_seconds = _normalize_auto_click_delay_seconds(rules.get('delay_seconds'))
+        if delay_seconds > 0:
+            _mark_auto_clicked(chat_id, msg_id)
+            log_message(
+                f"红包按钮匹配，延时点击: ch={chat_id} msg={msg_id} "
+                f"delay={delay_seconds:g}s btn='{btn_text}'"
+            )
+            await asyncio.sleep(delay_seconds)
         try:
             await msg.click(i=r_idx, j=c_idx)
         except TypeError:
@@ -5162,7 +5421,8 @@ async def _maybe_auto_click_buttons(
                 await msg.click(row=r_idx, column=c_idx)
             except TypeError:
                 await msg.click(r_idx, c_idx)
-        _mark_auto_clicked(chat_id, msg_id)
+        if delay_seconds <= 0:
+            _mark_auto_clicked(chat_id, msg_id)
         log_message(f"已自动点击按钮: ch={chat_id} msg={msg_id} btn='{btn_text}'")
 
         try:

@@ -1592,6 +1592,12 @@
                                                                                             placeholder="@your_bot, 123456 (逗号分隔)">
                                                                                     </div>
                                                                                     <div class="col-md-12 mb-2">
+                                                                                        <label for="auto_click_delay_seconds" class="form-label small">点击延时（秒）</label>
+                                                                                        <input type="number" class="form-control form-control-sm"
+                                                                                            id="auto_click_delay_seconds" name="auto_click_delay_seconds"
+                                                                                            min="0" max="60" step="0.1" placeholder="0">
+                                                                                    </div>
+                                                                                    <div class="col-md-12 mb-2">
                                                                                         <div class="form-check pt-1">
                                                                                             <input type="checkbox" class="form-check-input"
                                                                                                 id="auto_click_fast" name="auto_click_fast">
@@ -2481,6 +2487,7 @@
         safeSetValue('auto_click_keywords', (data.auto_click_keywords || []).join(', '));
         safeSetValue('auto_click_button_texts', (data.auto_click_button_texts || []).join(', '));
         safeSetValue('auto_click_notify_targets', (data.auto_click_notify_targets || []).join(', '));
+        safeSetValue('auto_click_delay_seconds', data.auto_click_delay_seconds || '');
         safeSetChecked('auto_click_fast', data.auto_click_fast);
         safeSetChecked('auto_click_fast_skip_processing', data.auto_click_fast_skip_processing);
         safeSetChecked('auto_click_captcha_reply', data.auto_click_captcha_reply);
@@ -2605,6 +2612,7 @@
         safeReset('auto_click_keywords');
         safeReset('auto_click_button_texts');
         safeReset('auto_click_notify_targets');
+        safeReset('auto_click_delay_seconds');
         safeReset('auto_click_fast');
         safeReset('auto_click_fast_skip_processing');
         safeReset('auto_click_captcha_reply');
@@ -2871,6 +2879,7 @@
         const hintInputs = [
             'auto_click_redpacket',
             'auto_click_keywords',
+            'auto_click_delay_seconds',
             'auto_click_captcha_reply',
             'auto_click_captcha_keywords',
             'download_directory',

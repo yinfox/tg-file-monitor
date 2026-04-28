@@ -58,7 +58,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.80"
+VERSION = "0.5.82"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -11770,6 +11770,11 @@ def manage_config():
             auto_click_fast_skip_processing = request.form.get('auto_click_fast_skip_processing') == 'on'
             auto_click_captcha_reply = request.form.get('auto_click_captcha_reply') == 'on'
             auto_click_captcha_keywords = [k.strip() for k in request.form.get('auto_click_captcha_keywords', '').split(',') if k.strip()]
+            try:
+                auto_click_delay_seconds = float((request.form.get('auto_click_delay_seconds') or '0').strip() or 0)
+            except (TypeError, ValueError):
+                auto_click_delay_seconds = 0.0
+            auto_click_delay_seconds = max(0.0, min(auto_click_delay_seconds, 60.0))
             monitor_types = request.form.getlist('monitor_types')
             forward_only = False
             forward_enabled = keep_video_message or force_forward_all
@@ -11841,6 +11846,7 @@ def manage_config():
                             entry['auto_click_fast_skip_processing'] = auto_click_fast_skip_processing
                             entry['auto_click_captcha_reply'] = auto_click_captcha_reply
                             entry['auto_click_captcha_keywords'] = auto_click_captcha_keywords
+                            entry['auto_click_delay_seconds'] = auto_click_delay_seconds
                             entry['monitor_types'] = monitor_types
                             entry['forward_only'] = forward_only
                             found = True
@@ -11883,6 +11889,7 @@ def manage_config():
                         "auto_click_fast_skip_processing": auto_click_fast_skip_processing,
                         "auto_click_captcha_reply": auto_click_captcha_reply,
                         "auto_click_captcha_keywords": auto_click_captcha_keywords,
+                        "auto_click_delay_seconds": auto_click_delay_seconds,
                         "monitor_types": monitor_types,
                         "forward_only": forward_only
                     })
