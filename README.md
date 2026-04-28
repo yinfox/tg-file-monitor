@@ -77,7 +77,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.80`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.82`
 
 升级示例：
 
@@ -89,7 +89,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.80
+y1nf0x/tg-file-monitor:0.5.82
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
