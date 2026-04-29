@@ -6,7 +6,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://www.python.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-0.5.71-orange.svg)](.)
+[![Version](https://img.shields.io/badge/Version-0.5.87-orange.svg)](.)
 
 </div>
 
@@ -18,6 +18,7 @@
 - 📥 **文件下载** - 自动下载频道文件和视频
 - 🤖 **机器人链接下载** - 给 Bot 发送视频平台链接，自动下载并回传上传到 TG
 - ☁️ **115 分享链接转存** - Bot 私聊接收 115 分享链接并转存到指定目录
+- 🖼️ **TG 表情转 GIF** - Bot 私聊支持贴纸/自定义表情自动转 GIF 并回传下载
 - 🎯 **关键词过滤** - 正则表达式内容过滤
 - 🛡️ **下载风控** - 频道限流、重复下载冷却、文件大小和磁盘空间保护
 - ⏱️ **动态下载超时** - 按文件大小动态计算超时（含上限/缓冲）并输出超时日志
@@ -77,7 +78,7 @@ python app/app.py
 docker compose up -d
 ```
 
-当前最新镜像：`y1nf0x/tg-file-monitor:0.5.85`
+当前最新镜像：`y1nf0x/tg-file-monitor:0.5.87`
 
 升级示例：
 
@@ -89,7 +90,7 @@ docker compose up -d
 如需固定版本，建议在 `docker-compose.yml` 中将 `image` 改为：
 
 ```
-y1nf0x/tg-file-monitor:0.5.85
+y1nf0x/tg-file-monitor:0.5.87
 ```
 
 ### ☁️ 115 分享链接转存（Bot）
@@ -210,6 +211,14 @@ docker compose up -d --build
 在 Telegram 中给 Bot 发送视频平台链接（如 YouTube 等）
 → Bot 自动解析并下载
 → 完成后回传到当前 TG 会话（并输出下载进度/超时日志）
+```
+
+### TG 表情转 GIF（Bot）
+
+```
+给 Bot 私聊发送贴纸或自定义 emoji
+→ Bot 自动下载并转换为 GIF
+→ 回传 GIF 文件，可直接下载
 ```
 
 ## 📁 项目结构
@@ -414,7 +423,12 @@ Web 界面 → 配置 → 代理配置
 （自动生成：`python scripts/update_version_history.py`）
 
 <!-- AUTO-GEN:VERSION_HISTORY:START -->
-### v0.5.85 (2026-04-28) - 当前版本
+### v0.5.87 (2026-04-29) - 当前版本
+- ✅ Bot 新增 TG 表情转 GIF：支持贴纸与自定义 emoji，自动转换并回传可下载 GIF
+- ✅ HDHive 自动签到兼容新版：扩大 `checkIn` action 提取范围，并按多个页面路径回退调用，降低 404 失败率
+- ✅ Docker / 依赖补齐表情转换环境：新增 `libcairo2` 与 `lottie` / `Pillow` / `cairosvg`
+
+### v0.5.85 (2026-04-28)
 - ✅ 诗词红包新增平均积分下限配置，按红包总积分 / 红包个数计算后决定是否点击
 - ✅ 平均积分门槛与积分/个数门槛联动校验，缺少必要字段时自动跳过
 - ✅ 点击通知补充平均积分信息，并新增平均积分拦截与通过回归测试

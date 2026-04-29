@@ -58,7 +58,7 @@ app.secret_key = "tg-file-monitor-v0.4.6-rapid-upload-key"
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 app.jinja_env.auto_reload = True
 
-VERSION = "0.5.85"
+VERSION = "0.5.87"
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
@@ -3370,18 +3370,34 @@ def _extract_hdhive_current_points_from_html(html_text: str) -> Optional[int]:
     return None
 
 
-def _extract_hdhive_checkin_action_id_from_js(js_text: str) -> str:
+def _extract_hdhive_checkin_action_ids_from_js(js_text: str) -> list[str]:
     if not js_text:
-        return ""
+        return []
     patterns = [
-        re.compile(r'createServerReference\("([0-9a-f]{40,})".{0,320}?"checkIn"'),
-        re.compile(r'createServerReference\)\("([0-9a-f]{40,})".{0,320}?"checkIn"'),
+        re.compile(
+            r'createServerReference(?:\)|)?\s*\(\s*["\']([0-9a-f]{40,})["\'][\s\S]{0,960}?["\']checkIn["\']',
+            re.IGNORECASE,
+        ),
+        re.compile(
+            r'createServerReference(?:\)|)?\s*\(\s*["\']([0-9a-f]{40,})["\'][\s\S]{0,960}?["\'](?:checkin|signIn|signin|dailySign|daySign)["\']',
+            re.IGNORECASE,
+        ),
     ]
+    found: list[str] = []
+    seen = set()
     for pattern in patterns:
-        match = pattern.search(js_text)
-        if match:
-            return match.group(1)
-    return ""
+        for match in pattern.finditer(js_text):
+            action_id = match.group(1)
+            if not action_id or action_id in seen:
+                continue
+            seen.add(action_id)
+            found.append(action_id)
+    return found
+
+
+def _extract_hdhive_checkin_action_id_from_js(js_text: str) -> str:
+    action_ids = _extract_hdhive_checkin_action_ids_from_js(js_text)
+    return action_ids[0] if action_ids else ""
 
 
 def _extract_hdhive_next_chunk_paths(html_text: str) -> list[str]:
@@ -3454,14 +3470,46 @@ def _refresh_hdhive_checkin_action_id_if_needed(base_url: str, cookie: str = "",
     ):
         return _HDHIVE_CHECKIN_ACTION_ID
 
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
     cookie_header = _normalize_hdhive_cookie(cookie)
     if cookie_header:
         headers["Cookie"] = cookie_header
     try:
-        html_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + "/", timeout=20, headers=headers, proxy_scope="service").content)
-        chunk_paths = _extract_hdhive_next_chunk_paths(html_text)
-        for path in chunk_paths[:80]:
+        candidate_pages = ["/", "/manager", "/manager/account"]
+        chunk_paths: list[str] = []
+        seen_chunk_paths = set()
+        inline_action_ids: list[str] = []
+        seen_inline_action_ids = set()
+
+        for page_path in candidate_pages:
+            try:
+                html_resp = _requests_get(
+                    base_url.rstrip("/") + page_path,
+                    timeout=20,
+                    headers=headers,
+                    proxy_scope="service",
+                )
+                html_text = _decode_hdhive_text(html_resp.content)
+            except Exception:
+                continue
+
+            for action_id in _extract_hdhive_checkin_action_ids_from_js(html_text):
+                if action_id in seen_inline_action_ids:
+                    continue
+                seen_inline_action_ids.add(action_id)
+                inline_action_ids.append(action_id)
+
+            for path in _extract_hdhive_next_chunk_paths(html_text):
+                if path in seen_chunk_paths:
+                    continue
+                seen_chunk_paths.add(path)
+                chunk_paths.append(path)
+
+        for path in chunk_paths[:200]:
             try:
                 js_headers = {
                     "User-Agent": "Mozilla/5.0",
@@ -3471,11 +3519,16 @@ def _refresh_hdhive_checkin_action_id_if_needed(base_url: str, cookie: str = "",
                 js_text = _decode_hdhive_text(_requests_get(base_url.rstrip("/") + path, timeout=15, headers=js_headers, proxy_scope="service").content)
             except Exception:
                 continue
-            action_id = _extract_hdhive_checkin_action_id_from_js(js_text)
-            if action_id:
-                _HDHIVE_CHECKIN_ACTION_ID = action_id
+            action_ids = _extract_hdhive_checkin_action_ids_from_js(js_text)
+            if action_ids:
+                _HDHIVE_CHECKIN_ACTION_ID = action_ids[0]
                 _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS = now
                 return _HDHIVE_CHECKIN_ACTION_ID
+
+        if inline_action_ids:
+            _HDHIVE_CHECKIN_ACTION_ID = inline_action_ids[0]
+            _HDHIVE_CHECKIN_ACTION_LAST_REFRESH_TS = now
+            return _HDHIVE_CHECKIN_ACTION_ID
     except Exception:
         pass
 
@@ -3730,6 +3783,7 @@ def _hdhive_do_checkin_via_server_action(base_url: str, cookie: str, mode: str) 
     parsed = None
     status_code = None
     raw_text = ""
+    page_paths = ["/", "/manager", "/manager/account"]
     for attempt in range(2):
         force_refresh = attempt > 0
         if force_refresh:
@@ -3740,15 +3794,23 @@ def _hdhive_do_checkin_via_server_action(base_url: str, cookie: str, mode: str) 
             raw_text = "未能定位签到动作"
             status_code = None
             break
-        parsed, status_code, raw_text = _hdhive_next_action_call_sync(
-            base_url=base_url,
-            cookie_header=cookie_header,
-            action_id=action_id,
-            page_path="/",
-            router_state_tree_json=router_state_tree_json,
-            action_args=[gamble],
-        )
-        if attempt == 0 and _hdhive_response_is_missing_endpoint(status_code=status_code, payload=parsed, text=raw_text):
+
+        missing_all_paths = True
+        for page_path in page_paths:
+            parsed, status_code, raw_text = _hdhive_next_action_call_sync(
+                base_url=base_url,
+                cookie_header=cookie_header,
+                action_id=action_id,
+                page_path=page_path,
+                router_state_tree_json=router_state_tree_json,
+                action_args=[gamble],
+            )
+            if _hdhive_response_is_missing_endpoint(status_code=status_code, payload=parsed, text=raw_text):
+                continue
+            missing_all_paths = False
+            break
+
+        if attempt == 0 and missing_all_paths:
             continue
         break
 
@@ -3860,9 +3922,9 @@ def _hdhive_do_checkin(base_url: str, cookie: str, mode: str, cfg: dict) -> Tupl
                     last_msg = msg or last_msg
                     if ok:
                         points = _extract_points_from_payload(data)
-                    if points is None:
-                        points = _hdhive_fetch_points(base_url, cookie)
-                    return True, msg or "签到成功", points
+                        if points is None:
+                            points = _hdhive_fetch_points(base_url, cookie)
+                        return True, msg or "签到成功", points
 
     return False, last_msg or "签到失败", _hdhive_fetch_points(base_url, cookie)
 

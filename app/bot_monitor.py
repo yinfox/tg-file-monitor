@@ -7,6 +7,8 @@ import time
 import fcntl
 import hashlib
 import importlib
+import shutil
+import subprocess
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 from telethon import TelegramClient, events, functions, types
@@ -65,6 +67,7 @@ CONFIG_FILE = os.path.join(CONFIG_DIR, 'config.json')
 TELEGRAM_SESSION_NAME = "bot_session"
 BOT_LOCK_FILE = os.path.join(CONFIG_DIR, 'bot_monitor.lock')
 MESSAGE_QUEUE_FILE = os.path.join(CONFIG_DIR, 'message_queue.json')
+BOT_EMOJI_GIF_DIR = os.path.join(CONFIG_DIR, 'bot_emoji_gifs')
 RECENT_URL_REQUESTS = {}
 RECENT_URL_REQUESTS_TTL_SECONDS = 15
 PENDING_115_SHARE = {}
@@ -441,6 +444,263 @@ def _format_size(size) -> str:
             return f"{num:.2f}{unit}"
         num /= 1024.0
     return f"{num:.2f}PB"
+
+
+def _get_ffmpeg_path() -> str:
+    ffmpeg_path = shutil.which('ffmpeg')
+    if ffmpeg_path:
+        return ffmpeg_path
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe() or ''
+    except Exception:
+        return ''
+
+
+def _is_sticker_or_custom_emoji_document(document) -> bool:
+    if not isinstance(document, types.Document):
+        return False
+    custom_attr_cls = getattr(types, 'DocumentAttributeCustomEmoji', None)
+    attr_types = (types.DocumentAttributeSticker,)
+    if custom_attr_cls is not None:
+        attr_types = attr_types + (custom_attr_cls,)
+    attrs = getattr(document, 'attributes', None) or []
+    if any(isinstance(attr, attr_types) for attr in attrs):
+        return True
+    mime_type = (getattr(document, 'mime_type', '') or '').lower()
+    return mime_type == 'application/x-tgsticker'
+
+
+def _extract_custom_emoji_document_ids(msg) -> List[int]:
+    custom_emoji_ent_cls = getattr(types, 'MessageEntityCustomEmoji', None)
+    if custom_emoji_ent_cls is None:
+        return []
+    ids: List[int] = []
+    for ent in (getattr(msg, 'entities', None) or []):
+        if isinstance(ent, custom_emoji_ent_cls):
+            document_id = getattr(ent, 'document_id', None)
+            if document_id:
+                try:
+                    ids.append(int(document_id))
+                except Exception:
+                    pass
+    return ids
+
+
+def _guess_emoji_source_extension(media) -> str:
+    document = None
+    if isinstance(media, types.Document):
+        document = media
+    else:
+        document = getattr(media, 'document', None)
+
+    mime_type = (getattr(document, 'mime_type', '') or '').lower()
+    if mime_type == 'application/x-tgsticker':
+        return '.tgs'
+    if mime_type == 'video/webm':
+        return '.webm'
+    if mime_type == 'image/webp':
+        return '.webp'
+    if mime_type == 'image/png':
+        return '.png'
+    if mime_type == 'image/jpeg':
+        return '.jpg'
+    return '.sticker'
+
+
+def _convert_static_image_to_gif(input_path: str, output_path: str) -> None:
+    _convert_media_with_ffmpeg(input_path, output_path)
+
+
+def _convert_media_with_ffmpeg(input_path: str, output_path: str) -> None:
+    ffmpeg_path = _get_ffmpeg_path()
+    if not ffmpeg_path:
+        raise RuntimeError("缺少 FFmpeg，无法转换视频/动态表情。")
+
+    palette_path = output_path + '.palette.png'
+    vf = 'fps=15,scale=512:-1:flags=lanczos'
+    try:
+        subprocess.run(
+            [ffmpeg_path, '-y', '-i', input_path, '-vf', f'{vf},palettegen=reserve_transparent=1', palette_path],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        subprocess.run(
+            [
+                ffmpeg_path, '-y',
+                '-i', input_path,
+                '-i', palette_path,
+                '-lavfi', f'{vf} [x]; [x][1:v] paletteuse=alpha_threshold=128',
+                '-loop', '0',
+                output_path,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+    except subprocess.CalledProcessError as e:
+        err_text = (e.stderr or e.stdout or '').strip()
+        tail = '\n'.join(err_text.splitlines()[-8:]) if err_text else str(e)
+        raise RuntimeError(f"FFmpeg 转换失败: {tail}") from e
+    finally:
+        try:
+            if os.path.exists(palette_path):
+                os.remove(palette_path)
+        except Exception:
+            pass
+
+
+def _convert_tgs_to_gif(input_path: str, output_path: str) -> None:
+    ffmpeg_error = ""
+    try:
+        _convert_media_with_ffmpeg(input_path, output_path)
+        if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+            return
+    except Exception as e:
+        ffmpeg_error = str(e)
+
+    converter = shutil.which('lottie_convert.py') or shutil.which('lottie_convert')
+    if not converter:
+        hint = "缺少 lottie 转换工具"
+        if ffmpeg_error:
+            hint = f"FFmpeg 也无法处理 .tgs（{ffmpeg_error}）"
+        raise RuntimeError(f"{hint}，无法转换 .tgs 动态表情。")
+
+    candidates = [
+        [converter, input_path, output_path],
+        [converter, '--gif', input_path, output_path],
+    ]
+    last_error = ''
+    for cmd in candidates:
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=60)
+            if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                return
+        except subprocess.CalledProcessError as e:
+            last_error = (e.stderr or e.stdout or str(e)).strip()
+        except Exception as e:
+            last_error = str(e)
+    tail = '\n'.join((last_error or '未知错误').splitlines()[-8:])
+    if ffmpeg_error:
+        raise RuntimeError(f"TGS 转换失败。FFmpeg: {ffmpeg_error}；Lottie: {tail}")
+    raise RuntimeError(f"Lottie 转换失败: {tail}")
+
+
+def _convert_telegram_emoji_to_gif(input_path: str, output_path: str) -> None:
+    ext = os.path.splitext(input_path)[1].lower()
+    if ext == '.tgs':
+        _convert_tgs_to_gif(input_path, output_path)
+    elif ext in ('.webm', '.mp4', '.mov', '.mkv'):
+        _convert_media_with_ffmpeg(input_path, output_path)
+    elif ext in ('.webp', '.png', '.jpg', '.jpeg'):
+        _convert_static_image_to_gif(input_path, output_path)
+    else:
+        _convert_media_with_ffmpeg(input_path, output_path)
+
+
+async def _collect_telegram_emoji_sources(client, msg) -> List[Tuple[str, object, str]]:
+    sources: List[Tuple[str, object, str]] = []
+    media = getattr(msg, 'media', None)
+    document = getattr(media, 'document', None)
+    if _is_sticker_or_custom_emoji_document(document):
+        alt = ''
+        for attr in (getattr(document, 'attributes', None) or []):
+            alt = getattr(attr, 'alt', '') or alt
+        sources.append((alt or 'sticker', media, _guess_emoji_source_extension(media)))
+
+    custom_emoji_ids = _extract_custom_emoji_document_ids(msg)
+    if custom_emoji_ids:
+        try:
+            docs = await client(functions.messages.GetCustomEmojiDocumentsRequest(document_id=custom_emoji_ids))
+            for idx, doc in enumerate(docs or [], start=1):
+                if _is_sticker_or_custom_emoji_document(doc):
+                    sources.append((f'custom_emoji_{idx}', doc, _guess_emoji_source_extension(doc)))
+        except Exception as e:
+            downloader.log(f"获取自定义 emoji 文档失败: {e}", "warning")
+    return sources
+
+
+async def _handle_emoji_to_gif_request(client, event) -> bool:
+    sources = await _collect_telegram_emoji_sources(client, event.message)
+    if not sources:
+        return False
+
+    dedup_sources: List[Tuple[str, object, str]] = []
+    seen_doc_ids: Set[int] = set()
+    for label, media, ext in sources:
+        doc = media if isinstance(media, types.Document) else getattr(media, 'document', None)
+        doc_id = int(getattr(doc, 'id', 0) or 0) if doc else 0
+        if doc_id and doc_id in seen_doc_ids:
+            continue
+        if doc_id:
+            seen_doc_ids.add(doc_id)
+        dedup_sources.append((label, media, ext))
+
+    if not dedup_sources:
+        return False
+
+    os.makedirs(BOT_EMOJI_GIF_DIR, exist_ok=True)
+    status_msg = await event.reply("检测到 TG 表情，正在生成 GIF...")
+    success_count = 0
+    failed: List[str] = []
+    total = len(dedup_sources)
+
+    for idx, (label, media, ext) in enumerate(dedup_sources, start=1):
+        ts = int(time.time() * 1000)
+        raw_path = os.path.join(BOT_EMOJI_GIF_DIR, f'emoji_{event.sender_id}_{ts}_{idx}{ext}')
+        gif_path = os.path.join(BOT_EMOJI_GIF_DIR, f'emoji_{event.sender_id}_{ts}_{idx}.gif')
+        try:
+            downloaded = await client.download_media(media, file=raw_path)
+            if downloaded and downloaded != raw_path:
+                raw_path = downloaded
+            if not raw_path or not os.path.exists(raw_path):
+                raise RuntimeError("下载表情文件失败")
+
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                downloader.executor,
+                _convert_telegram_emoji_to_gif,
+                raw_path,
+                gif_path,
+            )
+            if not os.path.exists(gif_path) or os.path.getsize(gif_path) <= 0:
+                raise RuntimeError("GIF 文件为空或未生成")
+
+            caption = f"emoji_{idx}_of_{total}.gif"
+            if label and label not in ('sticker', f'custom_emoji_{idx}'):
+                caption += f" | {label}"
+            await client.send_file(
+                event.chat_id,
+                gif_path,
+                caption=caption,
+                force_document=True,
+            )
+            success_count += 1
+        except Exception as e:
+            failed.append(f"{idx}:{label or 'emoji'}:{e}")
+            downloader.log(f"表情转 GIF 失败 idx={idx}, label={label}, err={e}", "warning")
+        finally:
+            for p in (raw_path, gif_path):
+                try:
+                    if p and os.path.exists(p):
+                        os.remove(p)
+                except Exception:
+                    pass
+
+    if success_count and not failed:
+        await status_msg.edit(f"✅ 已生成 {success_count} 个 GIF，可直接下载。")
+    elif success_count and failed:
+        first = failed[0]
+        await status_msg.edit(
+            f"⚠️ 已生成 {success_count} 个 GIF，另有 {len(failed)} 个失败。\n首个失败: `{first}`"
+        )
+    else:
+        first = failed[0] if failed else "未知错误"
+        await status_msg.edit(f"❌ 表情转 GIF 失败。\n原因: `{first}`")
+    return True
 
 
 def _format_115_items(items: list, max_items: int = 12) -> str:
@@ -1188,14 +1448,15 @@ async def main():
             "🛠 **帮助菜单**\n\n"
             "1. **发送链接**: 直接粘贴 URL。\n"
             "2. **更新 Cookies**: 点击菜单按钮后发送文件或文本。\n"
-            "3. **下载设置**: 发送 `/download_settings` 或点 `⚙️ 下载设置`\n"
-            "4. **检查 Cookies**: 发送 `/cookies_status`\n"
-            "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
-            "6. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
-            "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
-            "8. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
-            "9. **影巢签到**: 发送 `/hdhive_checkin`\n"
-            "10. **当前积分**: 发送 `/hdhive_points`\n"
+            "3. **TG 表情转 GIF**: 直接发送贴纸或自定义表情。\n"
+            "4. **下载设置**: 发送 `/download_settings` 或点 `⚙️ 下载设置`\n"
+            "5. **检查 Cookies**: 发送 `/cookies_status`\n"
+            "6. **深度检查 Cookies**: 发送 `/cookies_check`\n"
+            "7. **搜寻影视**: 发送 `/movie <剧名>` (例如: `/movie 金玉满堂`)\n"
+            "8. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
+            "9. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
+            "10. **影巢签到**: 发送 `/hdhive_checkin`\n"
+            "11. **当前积分**: 发送 `/hdhive_points`\n"
         )
         await event.respond(help_text)
 
@@ -1274,14 +1535,15 @@ async def main():
             "🛠 **帮助菜单**\n\n"
             "1. **发送链接**: 直接粘贴 URL。\n"
             "2. **更新 Cookies**: 输入 /start 点击按钮。\n"
-            "3. **下载设置**: 发送 `/download_settings`\n"
-            "4. **检查 Cookies**: 发送 `/cookies_status`\n"
-            "5. **深度检查 Cookies**: 发送 `/cookies_check`\n"
-            "6. **搜寻影视**: 发送 `/movie <剧名>`\n"
-            "7. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
-            "8. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
-            "9. **影巢签到**: 发送 `/hdhive_checkin`\n"
-            "10. **当前积分**: 发送 `/hdhive_points`\n"
+            "3. **TG 表情转 GIF**: 直接发送贴纸或自定义表情。\n"
+            "4. **下载设置**: 发送 `/download_settings`\n"
+            "5. **检查 Cookies**: 发送 `/cookies_status`\n"
+            "6. **深度检查 Cookies**: 发送 `/cookies_check`\n"
+            "7. **搜寻影视**: 发送 `/movie <剧名>`\n"
+            "8. **115 转存**: 发送 115 分享链接（可带 `cid=目标目录`）\n"
+            "9. **影巢转 115**: 发送影巢链接（可带 `cid=目标目录`）\n"
+            "10. **影巢签到**: 发送 `/hdhive_checkin`\n"
+            "11. **当前积分**: 发送 `/hdhive_points`\n"
         )
         await event.reply(help_text)
 
@@ -1563,6 +1825,9 @@ async def main():
                 )
             else:
                 await event.reply("❌ 保存失败，请稍后重试。")
+            return
+
+        if await _handle_emoji_to_gif_request(client, event):
             return
 
         # --- 3.5 115 Share Transfer Flow ---

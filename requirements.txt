@@ -8,6 +8,9 @@ requests
 PySocks
 croniter
 imageio-ffmpeg
+lottie>=0.7.2
+Pillow>=10.0.0
+cairosvg>=2.7.0
 p115client>=0.0.7
 p115cipher>=0.0.4
 p115oss>=0.0.9
